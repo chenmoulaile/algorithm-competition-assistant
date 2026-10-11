@@ -4,7 +4,7 @@ import os
 import sublime
 
 # Kept in sync with messages.json by tests/check_messages.py.
-VERSION = '2.4.7'
+VERSION = '2.4.8'
 
 
 def plugin_loaded():
@@ -35,6 +35,15 @@ def plugin_unloaded():
 
 
 def _init():
+    try:
+        # Record which build this host loaded so the doctor can name it: root
+        # level modules may not import each other under Package Control's
+        # rules, so VERSION reaches them through core.cph_state.
+        from .core.cph_state import set_plugin_version
+        set_plugin_version(VERSION)
+    except Exception:
+        pass
+
     try:
         from .core.cph_resources import clear_cache
         clear_cache()

@@ -68,7 +68,7 @@ copy-paste reference if you want to change one.
 | 中英文双语界面 | ❌ | ✅ |
 | 测试面板自适应宽度 | ❌ | ✅ 卡片放不下时自动加宽 |
 
-工程上还有：**Python 3.3 兼容**（Sublime 插件宿主）、四平台 CI（Linux 3.8/3.12 + Windows + macOS）、**491 项回归测试**。
+工程上还有：**Python 3.3 兼容**（Sublime 插件宿主）、四平台 CI（Linux 3.8/3.12 + Windows + macOS）、**520 项回归测试**。
 
 ---
 
@@ -144,7 +144,12 @@ copy-paste reference if you want to change one.
 - **错误位置可点击**：RE 的 `文件:行:号` 和编译器的每条诊断都会渲染成链接，点一下直接跳到源码那一行（已经打开的标签会被复用，不会新开一个）
 - **Debug / Release 一键切换**（`Ctrl+Alt+G`）：Debug 去掉优化并加 `-g -fsanitize=undefined -fsanitize-trap=undefined -D_GLIBCXX_ASSERTIONS`，有符号溢出、数组越界、除零都会变成非零退出码并判 RE，行号由 gdb 回放给出、可以点着跳过去；Release 保证 `-O2` 并去掉 sanitizer 与断言，计时与评测机可比。按文件记忆，**不写你的设置文件**；当前模式显示在运行面板状态栏
 - **并行运行**（`Ctrl+Alt+Shift+P`）：每个测试点一个独立进程、`parallel_workers`（默认 4）个 worker 同时跑。串行时 5 个点里有 2 个 TLE 要等 2×时限，并行约 1/4
-- **环境自检**：`Ctrl+Alt+D` 检查编译器是否在 PATH、端口占用、测试路径可写、资源可加载，并给出一段可粘贴到 issue 的 Markdown 报告
+- **环境自检**：`Ctrl+Alt+D` 检查编译器是否在 PATH、端口占用、测试路径可写、资源可加载，
+  并**真的执行一次工具链**（跑 `g++ --version`，再用你自己的 compile/run 命令编译并运行一个
+  小程序——缺运行库 DLL、32/64 位错配、WSL 桩、被杀软拦截这些"在 PATH 上但跑不起来"的情况
+  只查 PATH 是查不出来的），另外检查 gdb / clang-format / checker / interactor 文件是否到位，
+  `<bits/stdc++.h>` 缺失会单独说明。探测在报告已显示之后于后台线程进行，命令本身秒开，
+  并给出一段可粘贴到 issue 的 Markdown 报告（含插件版本号与实际安装目录名）
 - **纯键盘流**：`Ctrl+Alt+M` 选测试点 → 运行 / 详情 / 编辑 / 接受 / 拒绝 / 删除
 - **对拍反例入库**：对拍发现反例自动保存为正式测试点（可用 `stress_save_counterexample` 关闭）
 - **对拍收尾统计**：结束时报 `本轮统计: 共 N 轮, 实际比较 M 轮, 生成器超时 K 次`——`Passed: N rounds` 只说明跑了多少轮，不说明有多少轮真的比出结果
@@ -193,6 +198,15 @@ copy-paste reference if you want to change one.
 - **"还没粘贴样例"的时间不计时**：新建测试点后如果输入还是空的，程序虽然已经启动，
   但运行计时与 TLE 看门狗都在等你输入——从你粘贴/输入的第一个字符、或程序第一次输出开始才算。
   因此不会出现"样本还没粘完就已经 TLE"。
+- **计时只算你的程序**：表在进程创建成功的那一刻才起，在首次观测到进程退出的那一刻就停；
+  插件自己的开销（`Popen` 约 36 ms/次、输出抽干、stderr 读取、内存采样器关停）都不记到你头上
+  （实测 sleep 300 ms 的程序：判题看到的从 537 ms 变成 343 ms）。串行与并行用同一条规则，
+  不会再出现同一个二进制一边 TLE 一边 AC。**但插件绝不比评测机宽松**：时限仍严格比较，
+  喂 stdin 的时间仍算你的程序（评测机上那也是），多的 50 ms 只是"我们多久后动手杀"的观测余量。
+- **贴线会提醒**：通过但用了时限 90–99% 的运行，状态栏会提示"本机若比评测机快，OJ 上可能 TLE"。
+  只提醒，不改判题结果。
+- **机器校准显示在状态栏**：跑一次 `Calibrate machine`，运行面板状态栏就会出现
+  `本机 1.31× ≈ OJ 2620ms` 这样的等效时限；判题仍按你设置的原始时限。
 - **RE 优先于 TLE**：程序崩溃时看判定退出码（访问越界 / 除零 / 栈溢出 / `abort`）和错误输出里的
   崩溃特征（`terminate called after throwing`、`Traceback`、`AddressSanitizer` …），
   即使恰好超时被杀也判 RE；普通的 `cerr` 调试输出不会被误判。

@@ -19,7 +19,20 @@ state = {
 	'listener_running': False,
 	'listener_port': None,
 	'listener_view_id': None,
+	# 当前加载的构建号。版本号的唯一来源仍是 plugin_init.VERSION（发布检查
+	# 认它），这里只是把它公布给 doctor 等根级模块——根级模块之间不许互相
+	# import，不放进 core 就取不到。
+	'plugin_version': '',
 }
+
+
+def set_plugin_version(version):
+	state['plugin_version'] = version or ''
+
+
+def plugin_version():
+	"""The build this host actually loaded, or '' before it was recorded."""
+	return state.get('plugin_version') or ''
 
 
 def set_stress_running(running):

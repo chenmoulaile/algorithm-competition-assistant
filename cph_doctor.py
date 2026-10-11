@@ -20,8 +20,9 @@ import sublime_plugin
 
 from .core.cph_i18n import t
 from .core.cph_settings import (get_settings, get_tests_file_path,
-                                PACKAGE_NAME)
+                                PACKAGE_NAME, base_name)
 from .core.cph_resources import read_resource
+from .core.cph_state import plugin_version
 
 try:
 	from .core.cph_settings import is_run_supported_ext
@@ -30,8 +31,229 @@ except ImportError:  # pragma: no cover
 		return False
 
 
+#: {checker} / {interactor} and their directories are substituted by the
+#: checker and interactor runners (see core/cph_checker.py), so a command
+#: using them is not a typo. Listing only the core placeholders made doctor
+#: report every configured SPJ as having an unknown placeholder.
 KNOWN_PLACEHOLDERS = {'file', 'source_file', 'source_file_dir', 'file_name',
-                      'args', 'extra_sources', 'include_dirs'}
+                      'args', 'extra_sources', 'include_dirs',
+                      'checker', 'checker_dir', 'interactor', 'interactor_dir'}
+
+#: No leading word boundary: `go version go1.22.5 ...` glues the number to the
+#: tool name, and requiring one made it read the tail ("22.5") of the version.
+_VERSION_RE = re.compile(r'(\d+\.\d+(?:\.\d+)?)')
+
+#: How each toolchain actually prints its version. `go` takes a bare
+#: `go version`, `fpc` wants `-iV`, and the JDK spelled it `-version` before 9.
+#: Trying the wrong spelling and reporting FAIL would call a working compiler
+#: broken, so the shipped tools are listed; the generic `--version` / `-version`
+#: fallback still covers a user-supplied path.
+_VERSION_ARGS = {
+	'go': ('version',),
+	'fpc': ('-iV',),
+	'javac': ('-version',),
+	'java': ('-version',),
+}
+
+#: Trivial programs the build probe compiles and runs with the user's own
+#: commands. Only languages whose hello world needs no naming convention or
+#: extra files are probed - a probe template that is wrong for the toolchain
+#: would report a false FAIL, which is worse than not checking at all. Those
+#: still get the version probe. {cpp} also tests <bits/stdc++.h>, which is what
+#: competitive code actually writes and what a bare clang install lacks.
+_BUILD_PROBES = {
+	'cpp': ('main.cpp',
+			'#include <bits/stdc++.h>\nusing namespace std;\n'
+			'int main(){ios::sync_with_stdio(0);cin.tie(0);'
+			'cout<<"hi"<<endl;return 0;}\n', 'hi', 'iostream'),
+	'c': ('main.c',
+		  '#include <stdio.h>\nint main(void){puts("hi");return 0;}\n',
+		  'hi', 'stdio.h'),
+}
+
+
+def parse_compiler_version(banner):
+	"""Version number out of a compiler's own --version text, '' if unreadable."""
+	match = _VERSION_RE.search(banner or '')
+	return match.group(0) if match else ''
+
+
+def _startupinfo():
+	"""Keep the probe consoles from flashing on Windows."""
+	if sublime.platform() != 'windows':
+		return None
+	import subprocess
+	info = subprocess.STARTUPINFO()
+	info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+	return info
+
+
+def _run_capture(args, cwd=None, timeout=90):
+	"""Run one probe command. Returns (returncode, decoded output)."""
+	import subprocess
+	try:
+	 proc = subprocess.Popen(args, shell=True, stdout=subprocess.PIPE,
+							 stderr=subprocess.STDOUT, cwd=cwd,
+							 startupinfo=_startupinfo())
+	except Exception as e:
+		return None, '%s' % e
+	try:
+		out = proc.communicate(timeout=timeout)[0]
+	except subprocess.TimeoutExpired:
+		try:
+			proc.kill()
+		except Exception:
+			pass
+		return None, 'timed out after %ds' % timeout
+	if out is None:
+		return proc.returncode, ''
+	if not isinstance(out, str):
+		for enc in ('utf-8', 'gb18030'):
+			try:
+				out = out.decode(enc)
+				break
+			except Exception:
+				continue
+		else:
+			out = out.decode('utf-8', 'replace')
+	return proc.returncode, (out or '').replace('\r\n', '\n').replace('\r', '\n')
+
+
+def probe_compiler_version(exe):
+	"""(True, 'g++ 15.2.0') when the compiler actually runs.
+
+	Finding the file on PATH is not enough: a build whose runtime DLL is
+	missing, a 32/64-bit mismatch and a WSL stub all sit on PATH and refuse to
+	execute. Returns (None, reason) when there is nothing to run.
+	"""
+	if not exe:
+		return None, 'n/a'
+	if '{' in exe or exe.strip().startswith('-'):
+		return None, 'not probed'
+	name = os.path.basename(exe).lower()
+	for suffix in ('.exe', '.cmd', '.bat'):
+		if name.endswith(suffix):
+			name = name[:-len(suffix)]
+	attempts = []
+	if name in _VERSION_ARGS:
+		attempts.append([exe] + list(_VERSION_ARGS[name]))
+	attempts.append([exe, '--version'])
+	bare = [exe, '-version']
+	if bare not in attempts:
+		attempts.append(bare)
+	last = ''
+	for args in attempts:
+		rc, out = _run_capture(args)
+		if rc == 0:
+			version = parse_compiler_version(out)
+			return True, ('%s %s' % (exe, version)).strip()
+		last = last or out or ''
+	first = ''
+	for line in (last or '').splitlines():
+		if line.strip():
+			first = line.strip()
+			break
+	return False, first or 'refused to run'
+
+
+def probe_build(entry):
+	"""Compile and run a trivial program with this language's own commands.
+
+	Returns (ok, detail), or (None, reason) when the language is not probed.
+	"""
+	exts = [e for e in (entry.get('extensions') or []) if e in _BUILD_PROBES]
+	if not exts:
+		return None, 'not probed'
+	ext = exts[0]
+	file_name, source, expected, fallback_header = _BUILD_PROBES[ext]
+	compile_cmd = entry.get('compile_cmd')
+	run_cmd = entry.get('run_cmd')
+	if not compile_cmd or not run_cmd:
+		return None, 'no compile/run command'
+
+	import tempfile
+	workdir = tempfile.mkdtemp(prefix='cph-doctor-')
+	src = os.path.join(workdir, file_name)
+	try:
+		with open(src, 'w', encoding='utf-8') as handle:
+			handle.write(source)
+	except Exception as e:
+		_rmtree(workdir)
+		return False, 'cannot write probe: %s' % e
+
+	values = {
+		'file': file_name,
+		'source_file': src,
+		'source_file_dir': workdir,
+		'file_name': os.path.splitext(file_name)[0],
+		'args': '',
+		'extra_sources': '',
+		'include_dirs': '',
+	}
+	cmd = _expand_cmd(compile_cmd, values)
+	rc, out = _run_capture(cmd, cwd=workdir)
+	if rc != 0 and ext == 'cpp' and 'bits/stdc++.h' in source:
+		# The single header every CP template includes. Without it the user's
+		# own solutions will not build, but the toolchain itself is fine, so
+		# retry with the portable header and report that distinction instead
+		# of a plain FAIL.
+		_retry = source.replace('<bits/stdc++.h>', '<%s>' % fallback_header)
+		try:
+			with open(src, 'w', encoding='utf-8') as handle:
+				handle.write(_retry)
+		except Exception:
+			_rmtree(workdir)
+			return False, 'cannot write the retry probe'
+		rc, out = _run_capture(cmd, cwd=workdir)
+		if rc == 0:
+			_rmtree(workdir)
+			return False, '%s: <bits/stdc++.h> missing, your CP templates will not build' % entry.get('name', ext)
+	if rc != 0:
+		first = ''
+		for line in (out or '').splitlines():
+			if line.strip():
+				first = line.strip()
+				break
+		_rmtree(workdir)
+		return False, 'compile failed: %s' % (first or 'exit %s' % rc)
+
+	rc, out = _run_capture(_expand_cmd(run_cmd, values), cwd=workdir)
+	_rmtree(workdir)
+	if rc != 0:
+		return False, 'ran but exited %s' % rc
+	if (out or '').strip() != expected:
+		return False, 'ran, got %r' % ((out or '').strip()[:40],)
+	return True, 'compiles and runs'
+
+
+def _expand_cmd(cmd, values):
+	"""Substitute the known placeholders, drop the unknown ones.
+
+	Mirrors what ProcessManager does at run time (unknown names become ''), so
+	the probe exercises the command the plugin would really execute.
+	"""
+	out = cmd
+	for key, value in values.items():
+		out = out.replace('{%s}' % key, value)
+	return re.sub(r'\{[A-Za-z_][A-Za-z0-9_]*\}', '', out)
+
+
+def _rmtree(path):
+	import shutil
+	try:
+		shutil.rmtree(path, ignore_errors=True)
+	except Exception:
+		pass
+
+
+def _check_helper(exe, needed_for):
+	"""Presence of an optional tool a feature depends on."""
+	if not exe:
+		return None
+	import shutil
+	found = shutil.which(exe)
+	return (bool(found), '%s (%s)' % (exe, needed_for))
+
 
 
 def _unknown_placeholders(cmd):
@@ -130,6 +352,9 @@ class CphDoctorCommand(sublime_plugin.TextCommand):
 
 		settings = get_settings()
 		run_settings = settings.get('run_settings') or []
+		# Read early: the per-language checks below resolve helper file paths
+		# relative to the source file's directory.
+		file_name = self.view.file_name()
 		if not run_settings:
 			lines.append('[!] ' + t('doctor_no_run_settings'))
 		for entry in run_settings:
@@ -149,6 +374,11 @@ class CphDoctorCommand(sublime_plugin.TextCommand):
 				if unknown:
 					lines.append('         -> ' + t('doctor_placeholder_unknown',
 													names=', '.join(unknown)))
+			# A typo in `checker` / `interactor` used to disable the SPJ in
+			# silence: the run fell back to plain token comparison, and a
+			# correct-but-different answer became a WA with no explanation.
+			for key, detail_ok, detail_missing in self._helper_lines(entry, file_name):
+				lines.append('    %s %s: %s' % (detail_ok, key, detail_missing))
 			lines.append('')
 
 		port = settings.get('companion_port', 12345) or 12345
@@ -167,7 +397,6 @@ class CphDoctorCommand(sublime_plugin.TextCommand):
 			lines.append('         -> ' + t('doctor_port_busy'))
 		lines.append('')
 
-		file_name = self.view.file_name()
 		if file_name:
 			ok, detail = _check_tests_path(file_name)
 			lines.append('    %s %s: %s' % ('ok  ' if ok else 'FAIL',
@@ -184,6 +413,19 @@ class CphDoctorCommand(sublime_plugin.TextCommand):
 		lines.append('    %s %s' % ('ok  ' if res else 'FAIL', t('doctor_resources')))
 		lines.append('    %s settings: %s' % ('ok  ' if run_settings else 'FAIL',
 											  t('doctor_settings')))
+
+		# Optional tools a feature silently degrades without. gdb is what turns
+		# a libstdc++ abort into the user's own line; clang-format backs
+		# auto_format_on_save.
+		for exe, why in (('gdb', t('doctor_gdb')),
+						 ('clang-format', t('doctor_clang_format'))):
+			found = _check_helper(exe, why)
+			if found is None:
+				continue
+			lines.append('    %s %s: %s' % ('ok  ' if found[0] else 'WARN',
+											why, found[1]))
+			if not found[0]:
+				lines.append('         -> ' + t('doctor_helper_missing', exe=exe))
 		lines.append('')
 		lines.append(t('doctor_footer'))
 
@@ -196,6 +438,12 @@ class CphDoctorCommand(sublime_plugin.TextCommand):
 		lines.append('### %s doctor report' % PACKAGE_NAME)
 		lines.append('')
 		lines.append('- Sublime Text: build %s' % sublime.version())
+		# Which build this host really loaded, and where it lives: the two
+		# lines that settle most reports without a single follow-up question.
+		# Sublime does not hot reload .py files, so a verdict can easily come
+		# from an older install than the source the user is reading.
+		lines.append('- Plugin: %s' % (plugin_version() or 'unknown'))
+		lines.append('- Package folder: %s' % base_name)
 		lines.append('- Platform: %s (%s)' % (sublime.platform(), sys.platform))
 		lines.append('- Python: %s' % sys.version.split()[0])
 		lines.append('- companion_port: %s' % port)
@@ -222,6 +470,72 @@ class CphDoctorCommand(sublime_plugin.TextCommand):
 		view.run_command('cph_test_detail_view', {'text': report})
 		window.focus_view(view)
 		print(report)
+
+		# A probe really compiles and runs a program per language, which costs
+		# seconds on a cold toolchain. On the UI thread that is an editor
+		# freeze, so the report goes on screen first and the results stream in.
+		sublime.set_timeout_async(
+			lambda: self._probe_tools(view, run_settings), 0)
+
+	def _emit(self, view, lines):
+		"""Append probe output on the main thread, where views live."""
+		text = '\n'.join(lines)
+
+		def append():
+			if view.is_valid():
+				view.run_command('append', {'characters': text + '\n'})
+
+		sublime.set_timeout(append, 0)
+
+	def _helper_lines(self, entry, file_name):
+		"""Status of the optional files a language entry points at.
+
+		A typo in `checker` used to disable the SPJ silently: the run fell back
+		to plain token comparison and a correct-but-different answer became a WA
+		with nothing to explain it.
+		"""
+		out = []
+		base = os.path.dirname(file_name) if file_name else ''
+		for key in ('checker', 'interactor'):
+			configured = (entry.get(key) or '').strip()
+			if not configured:
+				continue
+			full = configured if os.path.isabs(configured) \
+				else os.path.join(base, configured)
+			exists = os.path.exists(full)
+			label = t('doctor_checker') if key == 'checker' else t('doctor_interactor')
+			out.append(('%s (%s)' % (key, label),
+						'ok  ' if exists else 'FAIL',
+						full if exists
+						else '%s (%s)' % (full, t('doctor_missing_file'))))
+		return out
+
+	def _probe_tools(self, view, run_settings):
+		"""Version and build probe for every configured language."""
+		out = ['', t('doctor_probe_title'), '-' * 46]
+		for entry in run_settings:
+			name = entry.get('name', '?')
+			exe = _first_token(entry.get('compile_cmd'))
+			if not exe:
+				exe = _first_token(entry.get('run_cmd'))
+			ok, detail = probe_compiler_version(exe)
+			if ok is None:
+				out.append('    --   %s: %s' % (name, detail))
+				continue
+			if not ok:
+				# On PATH but refuses to execute: the missing-DLL, wrong-bitness
+				# and blocked-by-antivirus class that which() cannot see.
+				out.append('    FAIL %s: %s %s' % (name, exe, detail))
+				continue
+			build_ok, build_detail = probe_build(entry)
+			if build_ok is None:
+				out.append('    ok   %s: %s (%s)' % (name, detail, build_detail))
+			elif build_ok:
+				out.append('    ok   %s: %s; %s' % (name, detail, build_detail))
+			else:
+				out.append('    FAIL %s: %s; %s' % (name, detail, build_detail))
+		out.append('')
+		self._emit(view, out)
 
 	def is_enabled(self):
 		return True

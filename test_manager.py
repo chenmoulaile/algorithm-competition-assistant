@@ -16,6 +16,7 @@ from .core.cph_target import visible as context_menu_visible
 from .core.cph_jump import (diagnostics as parse_diagnostics,
 							links_html, one_link, set_targets, handle_event as handle_jump_event)
 from .core.cph_build_mode import label as build_mode_label
+from .core.cph_calibrate import label as calibrate_label
 from .core.cph_parallel import run_batch as run_parallel_batch
 from .core.cph_checker import (config as checker_config,
 							   executable as checker_executable,
@@ -65,6 +66,35 @@ def post_to_ui(fn):
 	just defers by one loop iteration, which keeps FIFO ordering.
 	"""
 	sublime.set_timeout(fn, 0)
+
+
+#: How long past the limit the watchdog waits before killing. This only moves
+#: the moment we *notice*, never how long a program is allowed to run: the
+#: verdict is still made from the measured runtime against the plain limit, so
+#: a run that finishes over the limit is still TLE and nothing here is more
+#: generous than a judge. It saves the programs that would have finished inside
+#: a judge's own slack, and matches core/cph_parallel.py's _GRACE_SECONDS.
+_TLE_KILL_GRACE_S = 0.05
+
+
+def tle_advisory(runtime_ms, time_limit_ms):
+	"""Fraction of the time limit used, when a passing run came too close.
+
+	Returns None when there is nothing to say. A machine faster than the judge
+	turns 1.95 s against a 2 s limit into an AC here and a TLE there, and the
+	user cannot see that from a plain "AC 1950ms". This only warns - it never
+	changes a verdict, because a local result must not be more generous than
+	the judge's.
+	"""
+	if not runtime_ms or not time_limit_ms:
+		return None
+	try:
+		ratio = float(runtime_ms) / float(time_limit_ms)
+	except (TypeError, ValueError, ZeroDivisionError):
+		return None
+	if ratio >= 1.0 or ratio < 0.9:
+		return None
+	return ratio
 
 
 # --------------------------------------------------------------- compile cache
@@ -189,6 +219,12 @@ def run_view_status_label(run_file, time_limit_ms, memory_limit_mb):
 		mode = build_mode_label(run_file)
 		if mode:
 			parts.append(mode)
+		# The machine calibration was measured since v2.2 and never shown
+		# anywhere, so calibrating changed nothing the user could see. This is
+		# display only: the verdict keeps using the plain limit.
+		cal = calibrate_label(tl) if tl else ''
+		if cal:
+			parts.append(cal)
 		return ' · '.join(parts)
 	except Exception:
 		return ''
@@ -941,7 +977,17 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			# counts: while the plugin was still waiting for the sample to
 			# be pasted, the clock never started.
 			start_time = self._clock_start
-			runtime = int((time() - start_time) * 1000) if start_time else 0
+			# Stop at the exit the manager stamped, not here: the drain above
+			# and the memory-sampler teardown are our work, and a judge never
+			# bills them to the program. Without the stamp (a duck-typed
+			# manager) fall back to now.
+			end_time = getattr(proc, 'exit_time', None)
+			if start_time is None:
+				runtime = 0
+			elif end_time is not None and end_time >= start_time:
+				runtime = int((end_time - start_time) * 1000)
+			else:
+				runtime = int((time() - start_time) * 1000)
 			# Freeze the peak memory reading before the process disappears
 			try:
 				if type(proc) == ProcessManager:
@@ -960,7 +1006,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				if proc.is_stopped() is not None:
 					return
 				start_time = self._clock_start
-				if start_time is not None and time() - start_time >= limit_s:
+				if start_time is not None and time() - start_time >= limit_s + _TLE_KILL_GRACE_S:
 					self.tle_killed = True
 					try:
 						proc.terminate()
@@ -980,6 +1026,16 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					self.note_activity()
 				if call_on_insert:
 					self.on_insert(s)
+
+		def _spawn_moment(self):
+			"""When the current process came to life, as the manager saw it.
+
+			The manager owns that timestamp because it is the one calling Popen;
+			falling back to now() keeps a duck-typed process manager (the
+			interactive and parallel stand-ins) working unchanged.
+			"""
+			stamp = getattr(self.process_manager, 'spawn_time', None)
+			return stamp if stamp is not None else time()
 
 		def insert_test(self, id=None):
 			if id is None:
@@ -1005,10 +1061,14 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			# Ctrl+Enter / 'next test') starts with the clock paused: the
 			# user still has to paste the sample, and that wait must not
 			# count as runtime or trip the TLE watchdog.
-			self._clock_start = None if self.awaiting_input else time()
-
 			input_text = tests[id].test_string
 			self.process_manager.run()
+			# The program's clock starts when the process came to life, never
+			# before it: creating the child costs tens of milliseconds on
+			# Windows and none of that is the program's doing. Feeding the
+			# sample is included, because on a judge the program spends its
+			# own time reading stdin.
+			self._clock_start = None if self.awaiting_input else self._spawn_moment()
 			self.process_manager.write(input_text)
 			# The stored sample is the whole input, so the program must see
 			# EOF - exactly like on the judge. An EMPTY sample is the
@@ -1016,7 +1076,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			if input_text and input_text.strip():
 				self.process_manager.close_stdin()
 			if self._clock_start is None and input_text and input_text.strip():
-				self._clock_start = time()
+				self._clock_start = self._spawn_moment()
 			post_to_ui(lambda: self.on_insert(input_text))
 
 		def next_test(self, tie_pos, cb):
@@ -2518,6 +2578,16 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			self.tester.tests[test_id].set_memory(memory_used_mb)
 		self.tester.tests[test_id].set_verdict(verdict)
 		self.tester.tests[test_id].set_stdout(_outp)
+
+		# An AC that used 95 % of the limit is a trap: on a judge whose machine
+		# is slower the same code is a TLE. Warn in the status bar; the verdict
+		# itself is left exactly as computed.
+		if verdict['name'] in ('AC', 'PE'):
+			_risk = tle_advisory(runtime, time_limit_ms)
+			if _risk:
+				sublime.status_message('[Algorithm Competition Assistant] ' + t(
+					'near_tle_warn', pct=int(round(_risk * 100)),
+					runtime=int(runtime or 0), limit=int(time_limit_ms or 0)))
 
 		# Locate a runtime error instead of leaving a bare RE badge: a Python
 		# traceback / Java stack trace / sanitizer diagnostic in the program's

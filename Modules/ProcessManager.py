@@ -161,6 +161,11 @@ class ProcessManager(object):
 		self._mem_sampler = None
 		self.peak_memory_mb = None
 
+		# Run clock (see runtime_ms): spawned when, exited when. Both stay
+		# None until a process actually exists / is actually seen gone.
+		self.spawn_time = None
+		self.exit_time = None
+
 		self.pgid = None
 		self.stdin_closed = False
 		self.unknown_placeholders = set()
@@ -624,6 +629,12 @@ class ProcessManager(object):
 			creationflags=creationflags
 		)
 
+		# The program exists from this instant: everything before it (our own
+		# command formatting, Popen itself) is plugin overhead and is excluded
+		# from the runtime the verdict is judged on.
+		self.spawn_time = time.time()
+		self.exit_time = None
+
 		# Remember the process group now: once the direct child is reaped,
 		# os.getpgid(pid) raises ProcessLookupError and a backgrounded
 		# grandchild would survive the SIGKILL escalation.
@@ -717,7 +728,27 @@ class ProcessManager(object):
 		proc = getattr(self, 'process', None)
 		if proc is None:
 			return 0
-		return proc.poll()
+		rc = proc.poll()
+		# First observation that the child is gone is its stop timestamp: a
+		# judge bills the program up to its exit and nothing after it, so
+		# draining the pipe, reading stderr and stopping the memory sampler
+		# must not land in the runtime the verdict is made from.
+		if rc is not None and self.exit_time is None:
+			self.exit_time = time.time()
+		return rc
+
+	def runtime_ms(self):
+		"""Milliseconds the program itself was alive, or None while running.
+
+		Measured from just after the process was created to the first sight of
+		it having exited, so neither our spawn cost nor our own cleanup is
+		charged to the program. This is the single source of the number the TLE
+		rule compares against, so the serial and the parallel path cannot drift
+		apart any more.
+		"""
+		if self.spawn_time is None or self.exit_time is None:
+			return None
+		return int((self.exit_time - self.spawn_time) * 1000)
 
 	def _normalize_newlines(self, text, final=False):
 		"""Translate CRLF / lone CR into LF, like universal_newlines did.

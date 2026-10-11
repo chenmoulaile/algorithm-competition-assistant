@@ -233,6 +233,10 @@ STRINGS = {
         'zh': '已解决：{count}',
         'en': 'Solved: {count}',
     },
+    'stats_summary_verdicts': {
+        'zh': '判题分布：{list}',
+        'en': 'Verdicts: {list}',
+    },
     'stats_summary_per_day': {
         'zh': '按天：',
         'en': 'Per-day:',
@@ -723,6 +727,20 @@ STRINGS = {
         'zh': '输出过大，已截断显示',
         'en': 'output too large, truncated',
     },
+    'near_tle_warn': {
+        'zh': '本次用了时限的 {pct}%（{runtime}ms / {limit}ms），'
+              '本机若比评测机快，同样的代码在 OJ 上可能 TLE',
+        'en': 'this run used {pct}% of the limit ({runtime}ms / {limit}ms); '
+              'if your machine is faster than the judge, the same code can TLE there',
+    },
+    'lang_switched_zh': {
+        'zh': '已切换为中文界面',
+        'en': 'interface language switched to Chinese',
+    },
+    'lang_switched_en': {
+        'zh': '已切换为英文界面',
+        'en': 'interface language switched to English',
+    },
     'summary_passed': {
         'zh': '{passed}/{total} 通过',
         'en': '{passed}/{total} passed',
@@ -895,6 +913,34 @@ STRINGS = {
     'doctor_footer': {
         'zh': '提示：把结果贴到 issue 里可以更快定位问题。',
         'en': 'tip: paste this report into an issue to speed up diagnosis.',
+    },
+    'doctor_probe_title': {
+        'zh': '工具链实测（真的执行一次，稍后逐条出现）',
+        'en': 'toolchain probes (executed for real; lines appear as they finish)',
+    },
+    'doctor_checker': {
+        'zh': '自定义判定器',
+        'en': 'custom checker',
+    },
+    'doctor_interactor': {
+        'zh': '交互器',
+        'en': 'interactor',
+    },
+    'doctor_missing_file': {
+        'zh': '文件不存在，该功能会静默失效',
+        'en': 'file missing, the feature is silently disabled',
+    },
+    'doctor_gdb': {
+        'zh': '崩溃行定位 (gdb)',
+        'en': 'crash line lookup (gdb)',
+    },
+    'doctor_clang_format': {
+        'zh': '自动格式化 (clang-format)',
+        'en': 'auto format (clang-format)',
+    },
+    'doctor_helper_missing': {
+        'zh': '{exe} 不在 PATH 上，依赖它的功能会静默降级而不是报错',
+        'en': '{exe} is not on PATH; the feature that needs it degrades silently',
     },
 }
 

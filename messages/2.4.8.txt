@@ -1,0 +1,60 @@
+Algorithm Competition Assistant 2.4.8
+====================================
+
+The run clock now measures your program, and three things that had been
+recorded or measured for a long time finally show up somewhere.
+
+Changed - how a run is timed:
+
+* The runtime a verdict is made from starts when the process comes to life and
+  stops the moment it is seen to have exited. Both ends used to be wrong: the
+  clock was started before the process was created, so roughly 36 ms of plugin
+  overhead per test case was charged to your program, and in the serial path it
+  was stopped after the output had been drained, the stderr read and the memory
+  sampler shut down. Measured on a program that sleeps 300 ms, the verdict now
+  sees 343 ms instead of 537 ms - 194 ms of our own work taken off the number
+  that decides TLE.
+* The serial and the parallel runner use one rule now. They disagreed before,
+  so the same binary could be TLE in "run all tests" and AC in the panel.
+* Nothing was made more generous than a judge: the limit is still compared
+  strictly, and feeding the sample still counts as your program's time, because
+  on a judge it is. The only added slack is up to 50 ms before we forcibly kill
+  an over-limit process, which moves when we notice, never how long you may run.
+* Copying a sample into the panel by hand is still not timed at all: the clock
+  stays paused until there is input or output.
+
+New:
+
+* Near the limit, it says so. A passing run that used 90-99 % of the time limit
+  now leaves a status-bar note, because 1.95 s against 2 s is an AC on your
+  machine and a TLE on a slower judge. It warns; it does not change verdicts.
+* The machine calibration is visible. `Calibrate machine` has been computing a
+  factor since v2.2 and nothing anywhere displayed it, so running it changed
+  what you could see. The run panel's status line now shows the factor and the
+  equivalent judge limit, e.g. "TL 2000ms · local 1.31x ~ OJ 2620ms".
+* Doctor now executes your toolchain. It used to look up the compiler on PATH
+  and report PASS, which is misinformation: a build missing a runtime DLL, a
+  32/64-bit mismatch, a WSL stub and a compiler blocked by antivirus all sit
+  happily on PATH. The report now also runs `g++ --version` and compiles and
+  runs a trivial program with your own commands, separately reporting a missing
+  `<bits/stdc++.h>` (your templates will not build, the toolchain is fine) and
+  checking gdb, clang-format and the checker/interactor files you configured.
+  The probes run after the report is on screen, so doctor still opens instantly.
+* The practice report shows the verdict distribution. WA/RE/TLE/AC counts have
+  been recorded per problem the whole time and displayed nowhere, and "needs
+  work" counted attempts from the capped history log, so a problem you had
+  beaten 40 times read as 1 attempt once the older rows scrolled out. Both now
+  come from the permanent ledger.
+* The language switch answers in the language you switched to. The confirmation
+  was a hardcoded lowercase English literal shown even in a Chinese interface.
+
+Fixed:
+
+* `{checker}`, `{interactor}` and their directories were unknown to the
+  placeholder check, so doctor reported every configured SPJ as containing a
+  typo that would be substituted with an empty string.
+* Startup is down again: ~221 ms to ~158 ms, 51 fewer modules loaded on every
+  Sublime start, because the compiler probes and the diagnostics no longer pull
+  subprocess, shutil or socket in at import time.
+
+Regression tests: 492 -> 520 checks, 0 failures, still Python 3.3 compatible.

@@ -1,8 +1,46 @@
 # Algorithm Competition Assistant — Package Control Submission Notes
 
-Package version: v2.4.7
+Package version: v2.4.8
 Repository: https://github.com/chenmoulaile/cph-by-chenkx
 Channel entry file: `repository/a.json` (see snippet at the bottom)
+
+## v2.4.8 notes
+
+Timing correctness plus three features that had been recording or measuring
+data nobody could see. 520 regression checks, 0 failures, still Python 3.3.
+
+The runtime a verdict is made from now starts when the process is created and
+stops when it is first observed to have exited. Both ends were wrong before:
+the clock started before `Popen`, charging ~36 ms of plugin work per test case
+to the user's program, and the serial path stopped it after draining the pipe,
+reading stderr and stopping the memory sampler. Measured on a program that
+sleeps 300 ms, the number the TLE rule sees went from 537 ms to 343 ms. The
+serial and parallel runners share one rule now, so the same binary can no
+longer be TLE in one and AC in the other. Nothing became more generous than a
+judge: the limit is still compared strictly, feeding stdin still counts as
+program time, and the only slack added (50 ms) moves when we notice an overrun,
+not how long a program may run.
+
+New: a passing run that used 90-99 % of the limit says so, because that is an
+AC locally and a TLE on a slower judge; the machine calibration, computed since
+v2.2 and displayed nowhere, now shows its factor and the equivalent judge limit
+in the run panel; `doctor` executes the toolchain instead of only looking it up
+on PATH - a missing runtime DLL, a bitness mismatch, a WSL stub and a compiler
+blocked by antivirus all pass `which()` - by running `g++ --version` and
+compiling and running a trivial program with the user's own commands, naming a
+missing `<bits/stdc++.h>` separately from a broken toolchain, and checking gdb,
+clang-format and the configured checker/interactor files; the practice report
+shows the verdict distribution that has been recorded all along and takes
+attempt counts from the permanent ledger instead of the capped history.
+
+Fixed: `{checker}`, `{interactor}` and their directories were unknown to the
+placeholder check, so every configured SPJ was reported as a typo. Startup cost
+fell again, ~221 ms to ~158 ms, with 51 fewer modules loaded per start.
+
+The probes run on a worker thread after the report is on screen, so no UI path
+blocks. No new dependencies, no binaries, no keybindings outside the package's
+own syntax and its own gate, nothing written to the user's settings file from a
+background callback.
 
 ## v2.4.7 notes
 

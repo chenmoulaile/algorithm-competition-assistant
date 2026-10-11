@@ -475,11 +475,46 @@ def summary_data(days=7, now=None):
 		k = e.get('key')
 		if k not in last_by_key or t >= last_by_key[k][0]:
 			last_by_key[k] = (t, e)
+
+	# Attempt counts come from the permanent per-problem ledger first. The
+	# history log is capped at _HISTORY_LIMIT and only describes "recently",
+	# so counting its rows understated a hard problem as soon as its older
+	# attempts scrolled out - and the report then contradicted the very ledger
+	# record_run() had just written. max() keeps the number honest for stores
+	# written before the ledger carried the field.
+	ledger = {}
+	problems = data.get('problems')
+	if isinstance(problems, dict):
+		for k, rec in problems.items():
+			if isinstance(rec, dict):
+				ledger[k] = rec
+
 	attempts_by_key = {}
 	for t, e in parsed:
 		k = e.get('key')
 		if not e.get('all_ac'):
 			attempts_by_key[k] = attempts_by_key.get(k, 0) + 1
+	for k, rec in ledger.items():
+		stored = rec.get('attempts')
+		if stored is None:
+			continue
+		try:
+			attempts_by_key[k] = max(int(stored), attempts_by_key.get(k, 0))
+		except (TypeError, ValueError):
+			pass
+
+	# Same reason: by_verdict has been recorded per problem since it was added
+	# and shown nowhere. Summing the ledger is exact, unlike sampling history.
+	verdicts = {}
+	for rec in ledger.values():
+		by_verdict = rec.get('by_verdict')
+		if not isinstance(by_verdict, dict):
+			continue
+		for name, count in by_verdict.items():
+			try:
+				verdicts[name] = verdicts.get(name, 0) + int(count)
+			except (TypeError, ValueError):
+				pass
 
 	needs = []
 	for k in touched:
@@ -497,7 +532,6 @@ def summary_data(days=7, now=None):
 	# Stress rounds were written since the stress runner was wired to
 	# record_stress(); older stores simply have no field, which reads as 0.
 	stress_rounds = 0
-	problems = data.get('problems')
 	if isinstance(problems, dict):
 		for rec in problems.values():
 			if isinstance(rec, dict):
@@ -525,6 +559,7 @@ def summary_data(days=7, now=None):
 		'solved': solved,
 		'per_day': per_day,
 		'needs': needs,
+		'verdicts': verdicts,
 		'stress_rounds': stress_rounds,
 		'span': span,
 	}
@@ -558,6 +593,11 @@ def render_summary(info, translate=None):
 	lines.append(say('stats_summary_header', days=info['days'],
 					 problems=info['problems'], runs=info['runs']))
 	lines.append(say('stats_summary_solved', count=info['solved']))
+	if info.get('verdicts'):
+		_items = sorted(info['verdicts'].items(), key=lambda kv: (-kv[1], kv[0]))
+		lines.append(say('stats_summary_verdicts',
+						 list='  '.join('%s %d' % (name, count)
+										for name, count in _items)))
 	lines.append(say('stats_summary_per_day'))
 	if info['per_day']:
 		for row in info['per_day']:
@@ -585,6 +625,7 @@ _ENGLISH_LABELS = {
 	'stats_summary_header': 'CPH practice stats (last {days} days): '
 							'{problems} problems, {runs} runs',
 	'stats_summary_solved': 'Solved: {count}',
+	'stats_summary_verdicts': 'Verdicts: {list}',
 	'stats_summary_per_day': 'Per-day:',
 	'stats_summary_day_row': '  {date}  {runs} runs  {solved} solved',
 	'stats_summary_no_runs': '  (no runs)',
@@ -600,6 +641,7 @@ _ENGLISH_LABELS = {
 _LABEL_FIELDS = {
 	'stats_summary_header': ('days', 'problems', 'runs'),
 	'stats_summary_solved': ('count',),
+	'stats_summary_verdicts': ('list',),
 	'stats_summary_per_day': (),
 	'stats_summary_day_row': ('date', 'runs', 'solved'),
 	'stats_summary_no_runs': (),

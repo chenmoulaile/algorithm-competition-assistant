@@ -25,9 +25,11 @@ from .cph_verdict import (get_verdict, get_verdict_by_code, find_crash_location,
                           looks_like_crash)
 from .cph_gdb_trace import names_source as _names_source
 
-#: Extra allowance on top of the time limit before we kill a run. Kept tiny so
-#: the semantics match the serial path (whose watchdog kills at exactly the
-#: limit, measured from before Popen); this only covers the 10ms poll step.
+#: Extra allowance on top of the time limit before we kill a run. It covers
+#: only this loop's 10 ms poll step - the moment we *notice* the program is
+#: over the limit, not how long it is allowed to run. The verdict itself is
+#: made from the measured runtime against the plain limit, so a run is never
+#: given more time here than a judge would give it.
 _GRACE_SECONDS = 0.05
 
 
@@ -60,8 +62,12 @@ def _run_one(make_manager, input_text, expected, time_limit_ms, memory_limit_mb,
         if memory_limit_mb:
             manager.set_memory_limit(memory_limit_mb)
 
-        started = time.time()
         manager.run_file()
+        # The program's own clock, taken from the manager the instant Popen
+        # returned. Starting it before the spawn (as this path used to) charged
+        # ~36 ms of process creation to every single test case, and made the
+        # serial and the parallel path disagree about the same binary.
+        started = getattr(manager, 'spawn_time', None) or time.time()
         if input_text:
             manager.insert(input_text)
             # EOF after the stored sample: a program that reads until the end
@@ -84,7 +90,10 @@ def _run_one(make_manager, input_text, expected, time_limit_ms, memory_limit_mb,
         # Measure the runtime the moment the process is gone - before
         # read()/get_stderr()/finish_memory_sampling(), which can take a
         # noticeable moment on Windows and used to be billed to the program.
-        runtime = int((time.time() - started) * 1000)
+        measured = getattr(manager, 'runtime_ms', None)
+        runtime = measured() if measured is not None else None
+        if runtime is None:
+            runtime = int((time.time() - started) * 1000)
         stdout = manager.read()
         stderr = manager.get_stderr()
         try:

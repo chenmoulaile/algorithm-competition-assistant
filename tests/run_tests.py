@@ -351,7 +351,8 @@ DYNAMIC_I18N_KEYS = frozenset(('interactive_running', 'parallel_running'))
 # literal t('key') scan sees none of these, so they are whitelisted here and
 # covered by the stats-report checks further down instead.
 STATS_I18N_KEYS = frozenset((
-	'stats_summary_header', 'stats_summary_solved', 'stats_summary_per_day',
+	'stats_summary_header', 'stats_summary_solved', 'stats_summary_verdicts',
+	'stats_summary_per_day',
 	'stats_summary_day_row', 'stats_summary_no_runs', 'stats_summary_needs_work',
 	'stats_summary_needs_row', 'stats_summary_needs_none',
 	'stats_summary_stress', 'stats_summary_total_time',
@@ -3402,6 +3403,232 @@ def main():
         stderr=subprocess.STDOUT).decode().strip()
     check('starting up does not drag http.server / urllib into memory',
           _lazy == 'False', 'stdlib web modules imported at startup: %s' % _lazy)
+
+    # ------------------------------------------------------------------
+    # v2.4.8: the run clock must measure the program, not the plugin, and
+    # three recorded-but-invisible things get surfaced.
+    # ------------------------------------------------------------------
+    print('== v2.4.8: run clock, near-TLE advisory, stats ledger, doctor ==')
+
+    cal = importlib.import_module(pkg + '.core.cph_calibrate')
+
+    class _StampProc(object):
+        """Alive on the first poll, gone with code 3 afterwards."""
+        pid = 7
+
+        def __init__(self):
+            self.calls = 0
+
+        def poll(self):
+            self.calls += 1
+            return None if self.calls == 1 else 3
+
+        def kill(self):
+            pass
+
+    pm3 = pm_mod.ProcessManager(os.path.join(tempfile.mkdtemp(), 'c.cpp'), 'C++')
+    _clock_api = hasattr(pm3, 'runtime_ms') and hasattr(pm3, 'spawn_time')
+    check('ProcessManager owns the clock primitive (spawn/exit/runtime_ms)',
+          _clock_api, 'spawn_time / exit_time / runtime_ms missing')
+
+    if _clock_api:
+        check('a manager that never spawned reports no runtime',
+              pm3.runtime_ms() is None, repr(pm3.runtime_ms()))
+        pm3.process = _StampProc()
+        pm3.spawn_time = time.time() - 0.300
+        check('a live child has no exit stamped and no runtime yet',
+              pm3.is_stopped() is None and pm3.exit_time is None
+              and pm3.runtime_ms() is None)
+        gone = pm3.is_stopped()
+        check('the exit is stamped the first time the child is seen gone',
+              gone == 3 and pm3.exit_time is not None)
+        stamp = pm3.exit_time
+        pm3.is_stopped()
+        pm3.is_stopped()
+        check('the exit stamp is written once and never moved later',
+              pm3.exit_time == stamp)
+        pm3.spawn_time = 1000.0
+        pm3.exit_time = 1000.25
+        check('runtime_ms is the program lifetime in ms',
+              pm3.runtime_ms() == 250, repr(pm3.runtime_ms()))
+
+    class _SpawnProcess(object):
+        """Stands in for ProcessManager: spawn_time only exists once run() returned."""
+        is_run = False
+
+        def __init__(self):
+            self.spawn_time = None
+            self.exit_time = None
+
+        def set_calls(self, *args):
+            pass
+
+        def run(self, *args, **kwargs):
+            self.spawn_time = time.time()
+
+        def write(self, s):
+            pass
+
+        def close_stdin(self):
+            pass
+
+        def is_stopped(self):
+            return 0
+
+        def get_time_limit_ms(self):
+            return 1000
+
+        def get_memory_limit_mb(self):
+            return 256
+
+        def runtime_ms(self):
+            return None
+
+    clock_tester = make_tester([tm.CphTestManagerCommand.Test('1 2\n')])
+    clock_tester.process_manager = _SpawnProcess()
+    clock_tester.awaiting_input = False
+    before_spawn = time.time()
+    clock_tester.insert_test(0)
+    check('the run clock never starts before the process exists',
+          clock_tester._clock_start is not None
+          and clock_tester._clock_start >= before_spawn
+          and clock_tester._clock_start == clock_tester.process_manager.spawn_time,
+          'clock=%r spawn=%r' % (clock_tester._clock_start,
+                                 clock_tester.process_manager.spawn_time))
+    paste_tester = make_tester([tm.CphTestManagerCommand.Test('')])
+    paste_tester.process_manager = _SpawnProcess()
+    paste_tester.awaiting_input = True
+    paste_tester.insert_test(0)
+    check('while the sample is still being pasted the clock stays paused',
+          paste_tester._clock_start is None
+          and paste_tester.process_manager.spawn_time is not None,
+          'clock=%r spawn=%r' % (paste_tester._clock_start,
+                                 paste_tester.process_manager.spawn_time))
+
+    _par_src = open(os.path.join(ROOT, 'core', 'cph_parallel.py'),
+                    encoding='utf-8').read()
+    _run_one_body = _par_src[_par_src.find('def _run_one'):
+                             _par_src.find('def run_batch')]
+    check('the parallel path times the same window as the serial one',
+          'started = time.time()' not in _run_one_body
+          and 'spawn_time' in _run_one_body,
+          'parallel still starts the clock before Popen')
+    check('the serial listener stops the clock at the exit, not after the drain',
+          'exit_time' in _tm_src)
+
+    _advisory = getattr(tm, 'tle_advisory', None)
+    check('a run that used 90-100% of the limit is flagged as risky',
+          _advisory is not None and _advisory(1950, 2000) and _advisory(1801, 2000))
+    check('a comfortable run and an actual TLE are both left alone',
+          _advisory is not None and _advisory(500, 2000) is None
+          and _advisory(2100, 2000) is None and _advisory(1000, 1000) is None)
+    check('the advisory needs a limit to compare against',
+          _advisory is not None and _advisory(1900, None) is None
+          and _advisory(None, 2000) is None and _advisory(0, 2000) is None)
+
+    cal._cache['factor'] = 1.5
+    try:
+        check('a calibrated machine reports the equivalent judge limit',
+              cal.adjusted_limit_ms(2000) == 3000
+              and '1.50' in cal.label(2000))
+        _label_src = open(os.path.join(ROOT, 'test_manager.py'),
+                          encoding='utf-8').read()
+        _label_body = _label_src[_label_src.find('def run_view_status_label'):
+                                 _label_src.find('\ndef ', _label_src.find('def run_view_status_label') + 10)]
+        check('the calibration result actually reaches the status bar',
+              'calibrate' in _label_body and 'label' in _label_body,
+              'the measured factor is still shown nowhere')
+    finally:
+        cal._cache.pop('factor', None)
+
+    # Doctor: which() alone says PASS for a toolchain that cannot build.
+    doc_src = open(os.path.join(ROOT, 'cph_doctor.py'), encoding='utf-8').read()
+    check('doctor actually runs the compiler instead of only looking it up',
+          'subprocess' in doc_src and '--version' in doc_src,
+          'doctor still spawns nothing')
+    _parse_ver = getattr(doc, 'parse_compiler_version', None)
+    check('the compiler version is read out of its banner',
+          _parse_ver is not None
+          and _parse_ver('g++ (Rev8, Built by MSYS2 project) 15.2.0\n'
+                         'Copyright (C) 2025\n') == '15.2.0'
+          and _parse_ver('Configured with: nothing\n') == '',
+          repr(_parse_ver('x')) if _parse_ver else 'missing')
+    # `go version go1.22.5 windows/amd64` glues the number to the tool name, so
+    # a word boundary in front of the digits made it read "22.5".
+    check('a version glued to the tool name is still read whole',
+          _parse_ver is not None
+          and _parse_ver('go version go1.22.5 windows/amd64\n') == '1.22.5'
+          and _parse_ver('rustc 1.78.0 (9b00956e5 2024-04-29)\n') == '1.78.0',
+          repr(_parse_ver('go version go1.22.5 windows/amd64'))
+          if _parse_ver else 'missing')
+    _state = importlib.import_module(pkg + '.core.cph_state')
+    _keep_version = _state.plugin_version()
+    _state.set_plugin_version('9.9.9-probe')
+    try:
+        check('the loaded build is recorded where every module can read it',
+              _state.plugin_version() == '9.9.9-probe')
+        check('the doctor report names the loaded build and the real folder',
+              'plugin_version' in doc_src and 'base_name' in doc_src)
+    finally:
+        _state.set_plugin_version(_keep_version)
+    _init_src = open(os.path.join(ROOT, 'plugin_init.py'), encoding='utf-8').read()
+    check('the entry point publishes its VERSION into the shared state at load',
+          'set_plugin_version(VERSION)' in _init_src)
+    check('doctor checks the optional helpers a run depends on',
+          'gdb' in doc_src and 'checker' in doc_src and 'interactor' in doc_src)
+    check('the companion placeholders are known to the placeholder check',
+          all(name in doc_src for name in ("'checker'", "'interactor'")))
+
+    # Stats: the permanent ledger is the truth; history is capped at 5000 and
+    # is only "what happened recently". A problem with 40 recorded attempts but
+    # one surviving history row must still report 40.
+    store = os.path.join(tempfile.mkdtemp(), 'stats.json')
+    old_env = os.environ.get('CPH_STATS_PATH')
+    os.environ['CPH_STATS_PATH'] = store
+    _now_iso = time.strftime('%Y-%m-%dT%H:%M:%S')
+    try:
+        with open(store, 'w', encoding='utf-8') as f:
+            json.dump({'problems': {
+                'p': {'file': 'p.cpp', 'runs': 12, 'attempts': 11, 'ac_runs': 1,
+                      'solved': True, 'first_ac': _now_iso, 'last': _now_iso,
+                      'last_verdict': 'AC',
+                      'by_verdict': {'WA': 7, 'RE': 3, 'AC': 2},
+                      'stress_rounds': 40},
+                'q': {'file': 'q.cpp', 'runs': 40, 'attempts': 40, 'ac_runs': 0,
+                      'solved': False, 'first_ac': None, 'last': _now_iso,
+                      'last_verdict': 'WA', 'by_verdict': {'WA': 38, 'TLE': 2},
+                      'stress_rounds': 0},
+            }, 'history': [
+                {'key': 'p', 'file': 'p.cpp', 'time': _now_iso,
+                 'verdict': 'AC', 'all_ac': True},
+                {'key': 'q', 'file': 'q.cpp', 'time': _now_iso,
+                 'verdict': 'WA', 'all_ac': False},
+            ]}, f)
+        summary = stats_mod.summary_data(days=7)
+        check('the recorded verdict distribution is finally shown',
+              summary.get('verdicts') == {'WA': 45, 'RE': 3, 'AC': 2, 'TLE': 2},
+              repr(summary.get('verdicts')))
+        _q = [n for n in summary.get('needs', []) if 'q.cpp' in n.get('file', '')]
+        check('a problem is judged by the ledger, not by how many history rows survived',
+              len(_q) == 1 and _q[0]['attempts'] == 40,
+              repr(summary.get('needs')))
+    finally:
+        if old_env is None:
+            os.environ.pop('CPH_STATS_PATH', None)
+        else:
+            os.environ['CPH_STATS_PATH'] = old_env
+
+    # i18n: the language-switch reply was a hardcoded lowercase English literal.
+    lang_src = open(os.path.join(ROOT, 'cph_language.py'), encoding='utf-8').read()
+    check('the language switch answers through the translation table',
+          "status_message('algorithm competition assistant" not in lang_src
+          and "t('lang_switched" in lang_src,
+          'still hardcoded English in a Chinese UI')
+    check('both switch languages really exist in the table',
+          i18n.STRINGS.get('lang_switched_zh', {}).get('zh')
+          and i18n.STRINGS.get('lang_switched_zh', {}).get('en')
+          and i18n.STRINGS.get('lang_switched_en', {}).get('zh')
+          and i18n.STRINGS.get('lang_switched_en', {}).get('en'))
 
     print('')
     print('%d checks, %d failures' % (CHECKS[0], len(FAILURES)))
