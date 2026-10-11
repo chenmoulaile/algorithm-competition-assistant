@@ -2942,9 +2942,26 @@ def main():
     check('lone CR mixed with CRLF normalizes to LF only',
           pm_mod._decode_output(b'a\r\nb\rc\r') == 'a\nb\nc\n',
           repr(pm_mod._decode_output(b'a\r\nb\rc\r')))
-    check('undecodable bytes come out as replacement characters',
-          pm_mod._decode_output(b'\xff\xfe bad').count('\ufffd') == 2,
-          repr(pm_mod._decode_output(b'\xff\xfe bad')))
+    # Which bytes survive the locale step depends on the machine's ANSI code
+    # page, so this cannot be asserted against the host's own locale: 0xff 0xfe
+    # is illegal in utf-8 and in cp936, but perfectly legal in cp1252 (ÿþ). The
+    # original assertion passed on Linux, macOS and a Chinese Windows and failed
+    # only on the Western-locale CI runner - a test bug, not a decoder bug. Pin
+    # the codec and the fallback chain is what is actually under test.
+    saved_pref = pm_mod.locale.getpreferredencoding
+    try:
+        pm_mod.locale.getpreferredencoding = lambda flag=False: 'ascii'
+        undec = pm_mod._decode_output(b'\xff\xfe bad')
+        check('bytes no codec can read become replacement characters',
+              undec.count('\ufffd') == 2 and undec.endswith(' bad'),
+              repr(undec.encode('ascii', 'backslashreplace').decode('ascii')))
+        pm_mod.locale.getpreferredencoding = lambda flag=False: 'cp1252'
+        western = pm_mod._decode_output(b'\xff\xfe bad')
+        check('a locale codec that can read the bytes wins over replacing them',
+              western == 'ÿþ bad',
+              repr(western.encode('ascii', 'backslashreplace').decode('ascii')))
+    finally:
+        pm_mod.locale.getpreferredencoding = saved_pref
 
     # cp936 g++ diagnostics: utf-8 decoding fails, the locale codec steps in
     diag = 'main.cpp:4:9: error: 变量 x 未声明'
