@@ -273,10 +273,14 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 	REGION_BEGIN_KEY = 'test_begin_%d'
 	REGION_OUT_KEY = 'test_out_%d'
 	REGION_END_KEY = 'test_end_%d'
-	REGION_BEGIN_PROP = ['string', 'Packages/Algorithm Competition Assistant/icons/arrow_right.png', \
+	# Built from base_name (the folder the host loaded us from) rather than a
+	# hardcoded package name: the two arrow icons must resolve whether the
+	# package is installed as "Algorithm Competition Assistant" (Package
+	# Control) or opened from a differently named checkout.
+	REGION_BEGIN_PROP = ['string', 'Packages/%s/icons/arrow_right.png' % base_name, \
 				sublime.DRAW_NO_FILL | sublime.DRAW_STIPPLED_UNDERLINE | \
 					sublime.DRAW_NO_OUTLINE | sublime.DRAW_EMPTY_AS_OVERWRITE]
-	REGION_END_PROP = ['variable.c++', 'Packages/Algorithm Competition Assistant/icons/arrow_left.png', sublime.HIDDEN]
+	REGION_END_PROP = ['variable.c++', 'Packages/%s/icons/arrow_left.png' % base_name, sublime.HIDDEN]
 
 	# Dispatched actions that index the test model. A failed compile leaves
 	# the -run panel open with tester = None, yet the bindings scoped to

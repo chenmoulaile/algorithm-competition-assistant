@@ -1,10 +1,10 @@
-cph-by-chenkx - C++ competitive programming for Sublime Text
-===========================================================
+Algorithm Competition Assistant - C++ competitive programming for Sublime Text
+==============================================================================
 
 Thanks for installing. Quick start:
   1. Save your .cpp file, press Ctrl+Alt+B to run the tests.
-  2. Right-click -> cph-by-chenkx -> Listen to Competitive Companion,
-     then send samples from your browser (port 12345).
+  2. Right-click -> Algorithm Competition Assistant -> Listen to Competitive
+     Companion, then send samples from your browser (port 12345).
 
 Handy keys (source view):
   Ctrl+Alt+B           run tests
@@ -21,5 +21,5 @@ Handy keys (source view):
   Ctrl+Alt+D           check environment (doctor)
   Ctrl+Alt+P           collapse/restore the run panel
 
-Settings: Preferences -> Package Settings -> cph-by-chenkx
+Settings: Preferences -> Package Settings -> Algorithm Competition Assistant
 On macOS use Cmd instead of Ctrl.

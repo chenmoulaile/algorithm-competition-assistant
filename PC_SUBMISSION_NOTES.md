@@ -1,8 +1,24 @@
 # Algorithm Competition Assistant — Package Control Submission Notes
 
-Package version: v2.4.4
+Package version: v2.4.5
 Repository: https://github.com/chenmoulaile/cph-by-chenkx
 Channel entry file: `repository/a.json` (see snippet at the bottom)
+
+## v2.4.5 notes
+
+Follow-ups to the 2.4.4 rename:
+
+- `messages/install.txt` (the first-install screen) still said `cph-by-chenkx`;
+  it now uses the published name.
+- The two fold-arrow region icons were the last hardcoded
+  `Packages/Algorithm Competition Assistant/...` paths; they now follow
+  `base_name` like every other resource, so a renamed folder no longer breaks
+  them.
+- The stress "replay last counterexample" worker wrote to its view from a
+  background thread; its output is now posted to the main thread, matching the
+  main stress loop.
+- `.workbuddy-ai/` added to `.gitignore` and to `.gitattributes`
+  `export-ignore`, so assistant scratch never ships inside the package.
 
 ## v2.4.4 notes
 
@@ -555,11 +571,16 @@ Reviewer feedback addressed:
 - [x] `tests/`, `.github/` and dev documents are `export-ignore`d.
 - [x] `README.md` and `LICENSE` included for users.
 
-## Channel entry (repository/c/cph-by-chenkx.json)
+## Channel entry (repository/a.json)
+
+The entry is filed under the letter of the published name (`a` for
+"Algorithm Competition Assistant"), not the repository name. Package Control
+derives the install folder from `name`, so the repository URL stays
+`chenmoulaile/cph-by-chenkx`.
 
 ```json
 {
-	"name": "cph-by-chenkx",
+	"name": "Algorithm Competition Assistant",
 	"details": "https://github.com/chenmoulaile/cph-by-chenkx",
 	"labels": ["c", "c++", "competitive programming", "testing"],
 	"releases": [

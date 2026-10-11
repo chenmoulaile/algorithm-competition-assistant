@@ -5,6 +5,34 @@
 
 ---
 
+# v2.4.5
+
+## 修复
+
+- **首次安装提示仍写旧名**：`messages/install.txt` 里还写着 `cph-by-chenkx`，
+  新用户装好看到的是个已经不存在名字。已改为 `Algorithm Competition Assistant`。
+- **折叠箭头的图标路径是硬编码**：`test_manager.py` 的 `REGION_BEGIN_PROP` /
+  `REGION_END_PROP` 写死了 `Packages/Algorithm Competition Assistant/icons/...`，
+  而其它资源都跟随实际加载目录（`base_name`）。已统一：包目录被改名时箭头
+  不再失效。
+- **对拍「重放反例」从后台线程直接写视图**：`CphStressReplayCommand` 的 worker
+  线程直接调用 `_append_stress`（内部是 `view.run_command('append')`），而主
+  循环都是经 `sublime.set_timeout` 回主线程的。已改为同样回主线程，避免
+  跨线程操作视图 API。
+
+## 新增与改进
+
+- `.workbuddy-ai/`（助手的工作目录/记忆）加入 `.gitignore` 与 `.gitattributes`
+  的 `export-ignore`，确保它不会被打进发布包。
+
+## 说明
+
+- 回归测试 328 → 333 项，新增 5 条守卫：首次安装提示必须用新名、折叠图标必须
+  解析到本包、`.workbuddy-ai` 必须被 export-ignore、对拍重放必须回主线程。
+  这 5 条都用「注入故障」验证过确实能抓到对应回归。
+
+---
+
 # v2.4.4
 
 ## 新增与改进

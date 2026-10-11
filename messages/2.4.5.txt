@@ -1,0 +1,19 @@
+Algorithm Competition Assistant 2.4.5
+=====================================
+
+Naming and thread-safety follow-ups from the 2.4.4 rename.
+
+Fixed:
+
+* The first-install message still called the package `cph-by-chenkx`; it now
+  uses the published name.
+* The fold arrows were the last hardcoded package path. They now follow the
+  folder the package was loaded from, like every other resource.
+* The stress "replay last counterexample" worker wrote to its view from a
+  background thread. Its output is now posted to the main thread, the same way
+  the main stress loop reports progress.
+
+Notes:
+
+* `.workbuddy-ai/` (assistant scratch/memory) is now export-ignored, so it can
+  never end up inside the installed package.

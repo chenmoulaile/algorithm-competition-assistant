@@ -949,6 +949,34 @@ def main():
     check('menu entries only reference this package or User/', not outside,
           '; '.join(outside))
 
+    # 5a. Package naming must stay consistent after the rename. The
+    #     first-install message is the one screen a brand-new user reads, and
+    #     the fold arrows must point at this package's own icons rather than a
+    #     hardcoded name (which broke whenever the folder differed).
+    with open(os.path.join(ROOT, 'messages', 'install.txt'), encoding='utf-8') as f:
+        install_text = f.read()
+    check('first-install message uses the published name',
+          'Algorithm Competition Assistant' in install_text
+          and 'cph-by-chenkx' not in install_text)
+
+    settings_mod = importlib.import_module(pkg + '.core.cph_settings')
+    tm_mod = importlib.import_module(pkg + '.test_manager')
+    _prefix = 'Packages/%s/' % settings_mod.base_name
+    for _label, _prop in (('begin', tm_mod.CphTestManagerCommand.REGION_BEGIN_PROP),
+                          ('end', tm_mod.CphTestManagerCommand.REGION_END_PROP)):
+        _icon = [p for p in _prop if isinstance(p, str) and p.endswith('.png')]
+        _ok = False
+        if len(_icon) == 1 and _icon[0].startswith(_prefix):
+            _rel = _icon[0][len(_prefix):].replace('/', os.sep)
+            _ok = os.path.isfile(os.path.join(ROOT, _rel))
+        check('fold %s icon resolves inside this package' % _label, _ok,
+              str(_icon))
+
+    with open(os.path.join(ROOT, '.gitattributes'), encoding='utf-8') as f:
+        gitattrs = f.read()
+    check('assistant memory dir is export-ignored',
+          '.workbuddy-ai export-ignore' in gitattrs)
+
     # 6. The context menu switch is documented in the shipped settings.
     with open(os.path.join(ROOT, 'Algorithm Competition Assistant.sublime-settings'), encoding='utf-8') as f:
         settings_text = f.read()
@@ -1843,6 +1871,15 @@ def main():
           and 'checker_message' in stress_src)
     check('a checker that cannot be built stops the run',
           'Failed to build checker' in stress_src)
+    # The replay worker runs on its own thread and the view API (append) is
+    # main-thread only, so its progress lines must be posted back the same way
+    # the main stress loop does - not written straight from the worker.
+    _replay = stress_src[stress_src.index('class CphStressReplayCommand'):]
+    _replay = _replay[:_replay.index('\nclass ', 1)]
+    check('stress replay marshals view writes to the main thread',
+          'def say(msg):' in _replay
+          and 'sublime.set_timeout(lambda m=msg: _append_stress(sess, m), 0)'
+              in _replay)
     # One-click import of the .in/.out pairs sitting next to the source file
     # (OJ data packs and "Export tests as .in/.out" both land there).
     import_src = open(os.path.join(ROOT, 'cph_import.py'),

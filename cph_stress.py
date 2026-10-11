@@ -1411,40 +1411,50 @@ class CphStressReplayCommand(sublime_plugin.TextCommand):
 		seed = state['seed']
 		_append_stress(sess, '\n[Algorithm Competition Assistant] ' + t('stress_replaying', seed=seed) + '\n')
 
+		def say(msg):
+			# The worker below runs on its own thread, and the view API
+			# (append) is main-thread only; post every line back the same way
+			# the main stress loop reports progress. `m=msg` keeps the text
+			# alive for the deferred call.
+			sublime.set_timeout(lambda m=msg: _append_stress(sess, m), 0)
+
 		def worker():
 			try:
 				ok, gen_exe, why = _compile_program(gen_file, sess=sess)
 				if not ok:
-					_append_stress(sess, '[Algorithm Competition Assistant] generator: %s\n' % (why or 'failed'))
+					say('[Algorithm Competition Assistant] generator: %s\n' % (why or 'failed'))
 					return
 				rc, inp, err, tle = _run_program(
 					gen_exe, '', time_limit=float(
 						get_settings().get('stress_generator_time_limit_seconds', 10) or 10),
 					env={'CPH_SEED': str(seed)}, sess=sess)
 				if rc != 0 or tle:
-					_append_stress(sess, '[Algorithm Competition Assistant] generator failed: rc=%s %s\n'
-								   % (rc, err[:200]))
+					say('[Algorithm Competition Assistant] generator failed: rc=%s %s\n'
+						% (rc, err[:200]))
 					return
-				_append_stress(sess, '[Algorithm Competition Assistant] regenerated %d bytes\n' % len(inp))
+				say('[Algorithm Competition Assistant] regenerated %d bytes\n' % len(inp))
 				ok1, user_exe, why1 = _compile_program(user_file, sess=sess)
 				ok2, std_exe, why2 = _compile_program(std_file, sess=sess)
 				if not (ok1 and ok2):
-					_append_stress(sess, '[Algorithm Competition Assistant] compile failed: %s%s\n'
-								   % (why1 or '', why2 or ''))
+					say('[Algorithm Competition Assistant] compile failed: %s%s\n'
+						% (why1 or '', why2 or ''))
 					return
 				limit = float(get_settings().get('stress_time_limit_seconds', 2) or 2)
 				_rc1, user_out, _e1, tle1 = _run_program(user_exe, inp, time_limit=limit, sess=sess)
 				_rc2, std_out, _e2, _tle2 = _run_program(std_exe, inp, time_limit=limit, sess=sess)
 				if tle1:
-					_append_stress(sess, '[Algorithm Competition Assistant] ' + t('stress_replay_tle') + '\n')
+					say('[Algorithm Competition Assistant] ' + t('stress_replay_tle') + '\n')
 					return
 				if normalize_lines(user_out) == normalize_lines(std_out):
-					_append_stress(sess, '[Algorithm Competition Assistant] ' + t('stress_replay_same') + '\n')
+					say('[Algorithm Competition Assistant] ' + t('stress_replay_same') + '\n')
 				else:
-					_on_stress_failed(state.get('round') or 0, inp, user_out, std_out,
-										  sess=sess)
+					# _on_stress_failed writes to the view and saves a test, so
+					# the whole call is handed to the main thread.
+					sublime.set_timeout(
+						lambda: _on_stress_failed(state.get('round') or 0, inp,
+												  user_out, std_out, sess=sess), 0)
 			except Exception as e:
-				_append_stress(sess, '[Algorithm Competition Assistant] replay error: %s\n' % e)
+				say('[Algorithm Competition Assistant] replay error: %s\n' % e)
 
 		thread = threading.Thread(target=worker)
 		thread.daemon = True
