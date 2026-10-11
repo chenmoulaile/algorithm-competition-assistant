@@ -18,6 +18,7 @@ import importlib
 import importlib.util
 import io
 import json
+import locale
 import os
 import re
 import shutil
@@ -336,6 +337,75 @@ def _lambdas_leaking_except_var(rel_path):
                     break
     return found
 
+
+# i18n keys that are fetched through a VARIABLE: test_manager._run_parallel
+# builds the label at runtime ('interactive_running' if interactive else
+# 'parallel_running'), so a literal t('key') scan cannot see them. Everything
+# else must be called through t('key') or it is a dead entry.
+DYNAMIC_I18N_KEYS = frozenset(('interactive_running', 'parallel_running'))
+
+# core/cph_stats.py renders the practice report through a key variable: it is
+# pure stdlib and must stay free of a cph_i18n import, so the caller passes
+# t() in and this module looks the key up by name (see _ENGLISH_LABELS). A
+# literal t('key') scan sees none of these, so they are whitelisted here and
+# covered by the stats-report checks further down instead.
+STATS_I18N_KEYS = frozenset((
+	'stats_summary_header', 'stats_summary_solved', 'stats_summary_per_day',
+	'stats_summary_day_row', 'stats_summary_no_runs', 'stats_summary_needs_work',
+	'stats_summary_needs_row', 'stats_summary_needs_none',
+	'stats_summary_stress', 'stats_summary_total_time',
+))
+
+
+def _i18n_usage():
+    """(keys defined in core/cph_i18n.py STRINGS, keys referenced in code)."""
+    i18n_path = os.path.join(ROOT, 'core', 'cph_i18n.py')
+    tree = ast.parse(open(i18n_path, encoding='utf-8').read())
+    keys = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == 'STRINGS'
+                for target in node.targets):
+            if isinstance(node.value, ast.Dict):
+                keys = {k.value for k in node.value.keys
+                        if isinstance(k, ast.Constant)}
+
+    used = set()
+    for rel in _plugin_py_files():
+        fpath = os.path.join(ROOT, rel)
+        try:
+            mod = ast.parse(open(fpath, encoding='utf-8').read())
+        except Exception:
+            continue
+        # names the i18n helper t() is imported under ('t', '_i18n_t', ...)
+        helpers = set()
+        for node in ast.walk(mod):
+            if (isinstance(node, ast.ImportFrom) and node.module
+                    and node.module.endswith('cph_i18n')):
+                for alias in node.names:
+                    if alias.name == 't':
+                        helpers.add(alias.asname or alias.name)
+        for node in ast.walk(mod):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            fn = node.func
+            if isinstance(fn, ast.Name):
+                name, recv = fn.id, None
+            elif isinstance(fn, ast.Attribute):
+                name = fn.attr
+                recv = getattr(fn.value, 'id', None)
+            else:
+                continue
+            # t('key') / i18n.t('key') / STRINGS.get('key')
+            if not ((recv is None and (name == 't' or name in helpers))
+                    or (recv == 'STRINGS' and name == 'get')):
+                continue
+            a0 = node.args[0]
+            if isinstance(a0, ast.Constant) and isinstance(a0.value, str):
+                used.add(a0.value)
+    return keys, used
+
+
 # ------------------------------------------------------------------ test rig
 FAILURES = []
 CHECKS = [0]
@@ -356,6 +426,8 @@ def main():
 
     print('== cph_verdict: comparison and verdicts ==')
     verdict = importlib.import_module(pkg + '.core.cph_verdict')
+    verdict_src = open(os.path.join(ROOT, 'core', 'cph_verdict.py'),
+                       encoding='utf-8').read()
 
     check('exact token match', verdict.outputs_equal('1 2 3', '1 2 3', 0))
     check('whitespace insensitive', verdict.outputs_equal('1  2\n3\n', '1 2 3', 0))
@@ -393,6 +465,63 @@ def main():
     check('line diff finds the changed line',
           diff is not None and any(op[0] == '!=' and op[1] == 2 for op in diff),
           str(diff))
+
+    # Regression: SequenceMatcher is quadratic, and this runs on the UI
+    # thread when a detail view opens. 20k lines of repetitive output took
+    # 56s before the trim + cell budget below were added.
+    import time as _time
+    big_exp = '\n'.join(['0'] * 10000)
+    big_act = '\n'.join(['0'] * 5000 + ['1'] + ['0'] * 4999)
+    t0 = _time.time()
+    big_diff, big_total = verdict.build_line_diff(big_exp, big_act)
+    took = _time.time() - t0
+    check('a repeated 10k-line diff stays interactive',
+          big_diff is not None and len(big_diff) == 1 and big_diff[0][1] == 5001,
+          '%d ops in %.2fs' % (len(big_diff or []), took))
+    check('the repeated diff is not reported as every line differing',
+          big_diff is not None and len(big_diff) < 100, str(len(big_diff or [])))
+    check('the diff total still counts the longer side', big_total == 10000, str(big_total))
+
+    # The head/tail trim must not lose line numbers: a change in the middle
+    # of two long identical runs is still reported at its real position.
+    trim_exp = '\n'.join(str(i % 10) for i in range(5000))
+    trim_act = '\n'.join(str(i % 10) if i != 3000 else 'X' for i in range(5000))
+    trim_diff, _ = verdict.build_line_diff(trim_exp, trim_act)
+    check('trimming keeps the real line number',
+          trim_diff == [('!=', 3001, '0', 'X')], str(trim_diff))
+
+    shift_diff, shift_total = verdict.build_line_diff('1\n2\n3', '1\n2')
+    check('a deleted trailing line is still a delete op',
+          shift_diff == [('-', 3, '3', '')], str(shift_diff))
+
+    insert_diff, _ = verdict.build_line_diff('1\n2', '1\n2\n3')
+    check('an inserted trailing line is still an insert op',
+          insert_diff == [('+', 3, '', '3')], str(insert_diff))
+
+    check('the diff cell budget is a named constant',
+          '_DIFF_CELL_BUDGET' in verdict_src and 'autojunk=False' in verdict_src,
+          'guards must stay visible in the source')
+
+    # The diff itself got fast, but the DETAIL VIEW had no cap at all: 800k
+    # differing lines (well inside the 8 MB max_output_bytes) built 42 MB of
+    # text over 2.4M lines and handed it to a Sublime view. The listing is
+    # now capped; the count line and the raw outputs above stay complete.
+    # (The checks live right after the test_manager import below.)
+    class _DetailTest(object):
+        verdict = None
+        memory = '-'
+        test_string = ''
+        correct_answers = []
+        expected_output = ''
+        stdout = ''
+        stderr = ''
+        message = ''
+
+        def get_nice_runtime(self):
+            return '1 ms'
+
+        def get_nice_memory(self):
+            return '-'
 
     print('== runtime error: detected and located ==')
     for label, rtcode in (('segfault (139)', 139), ('abort (exit 3)', 3),
@@ -456,6 +585,34 @@ def main():
 
     cmd = tm.CphTestManagerCommand.__new__(tm.CphTestManagerCommand)
     cmd.view = sys.modules['sublime'].View()
+
+    # The diff itself got fast (see _DIFF_CELL_BUDGET above), but the DETAIL
+    # VIEW had no cap at all: 800k differing lines - well inside the default
+    # 8 MB max_output_bytes - built 42 MB of text over 2.4M lines and handed
+    # it to a Sublime view. The listing is capped now; the count line and the
+    # raw outputs above it stay complete.
+    _detail_src = open(os.path.join(ROOT, 'test_manager.py'), encoding='utf-8').read()
+    _detail_i18n = importlib.import_module(pkg + '.core.cph_i18n')
+    _truncated = _detail_i18n.STRINGS['diff_shown_truncated']['zh'][:4]
+    detail_test = _DetailTest()
+    detail_test.expected_output = '\n'.join(str(i % 7) for i in range(5000))
+    detail_test.stdout = '\n'.join(str((i + 1) % 7) for i in range(5000))
+    detail_text = cmd.build_detail_content(0, detail_test)
+    check('a huge diff is capped in the detail view',
+          detail_text.count('  Line ') == tm._DETAIL_DIFF_LIMIT,
+          '%d line entries for 5000 differences' % detail_text.count('  Line '))
+    check('the cap is announced with the real total',
+          '5000' in detail_text and _truncated in detail_text,
+          'the reader must be told what was left out')
+    check('the detail cap is a named constant',
+          '_DETAIL_DIFF_LIMIT' in _detail_src
+          and 'ops[:_DETAIL_DIFF_LIMIT]' in _detail_src)
+    small_test = _DetailTest()
+    small_test.expected_output = '1\n2\n3'
+    small_test.stdout = '1\n9\n3'
+    small_text = cmd.build_detail_content(0, small_test)
+    check('a small diff is not truncated',
+          '  Line ' in small_text and _truncated not in small_text)
 
     # 'Run failed tests' jumps past accepted tests: index 3 with only 2 tests
     tester = make_tester([tm.CphTestManagerCommand.Test('a'),
@@ -1010,6 +1167,36 @@ def main():
     stray = [f for f in os.listdir(ROOT) if ' (' in f and f.endswith('.sublime-settings')]
     check('no stray platform settings variants', not stray, '; '.join(stray))
 
+    # 5. Sublime loads every .py in the package root as an independent plugin,
+    #    so a stray file there is not inert: it either raises on import (the
+    #    removed cph_stress_tmp_section.py died on a missing 'import re') or
+    #    silently registers a second copy of a command. The list has to be a
+    #    deliberate decision, which means adding a root module means adding it
+    #    here as well.
+    expected_root_modules = set([
+        '__init__.py', 'plugin_init.py', 'test_edit.py', 'test_manager.py',
+        'cph_auto.py', 'cph_companion.py', 'cph_context.py', 'cph_doctor.py',
+        'cph_extras.py', 'cph_import.py', 'cph_jump.py', 'cph_language.py',
+        'cph_run_modes.py', 'cph_stress.py', 'cph_template.py',
+        'cph_tests_io.py',
+    ])
+    actual_root_modules = set(
+        f for f in os.listdir(ROOT)
+        if f.endswith('.py') and os.path.isfile(os.path.join(ROOT, f)))
+    check('the package root holds exactly the modules we ship',
+          actual_root_modules == expected_root_modules,
+          'missing %s / unexpected %s' % (
+              sorted(expected_root_modules - actual_root_modules),
+              sorted(actual_root_modules - expected_root_modules)))
+
+    #    Same hazard for anything an editor or a test run might drop next to
+    #    the sources: .pyc files, backup copies, rejected patches.
+    leftovers = sorted(f for f in os.listdir(ROOT)
+                       if f.endswith(('.pyc', '.orig', '.rej', '~'))
+                       or '.bak' in f)
+    check('no editor leftovers in the package root', not leftovers,
+          '; '.join(leftovers))
+
     print('== build artifacts: the compiler does not always use the -o name ==')
     artifacts = importlib.import_module(pkg + '.Modules.build_artifact')
 
@@ -1249,6 +1436,19 @@ def main():
         check('save_tests syncs %s' % os.path.basename(os.path.dirname(candidate)),
               len(data) == 1 and data[0]['test'] == '1 2\n', str(data))
 
+    # memorize_tests() runs after every run and used to drop save_tests()'s
+    # return value: a read-only folder or file lost every test point without
+    # a word. Every other save path (companion, extras, import, stress)
+    # already reports the failure.
+    _tm_src = open(os.path.join(ROOT, 'test_manager.py'), encoding='utf-8').read()
+    check('memorize_tests reports a failed save',
+          'if not save_tests(self.dbg_file, tests_data):' in _tm_src
+          and "t('tests_save_failed'" in _tm_src,
+          'the return value must not be discarded again')
+    check('the failed-save message exists in both languages',
+          i18n.STRINGS.get('tests_save_failed', {}).get('zh')
+          and i18n.STRINGS.get('tests_save_failed', {}).get('en'))
+
     # RE vs TLE
     check('crash exit codes are recognised',
           verdict.is_crash_exit_code(-11) and verdict.is_crash_exit_code(0xC0000005)
@@ -1274,6 +1474,23 @@ def main():
           verdict.get_verdict_by_code(
               0, 3000, 2000, 256, '',
               "Assertion '__n < this->size()' failed.", 'x\n')['name'] == 'RE')
+    # A program that printed the right answer and then aborted (a sanitizer
+    # that calls _exit(0), a crash in a static destructor, an interactive
+    # judge's child dying after the last flush) must not score AC: the crash
+    # text is the only witness, and stdout is where it lands when the user
+    # keeps separate stderr off.
+    check('a crash signature in stdout beats an AC verdict',
+          verdict.get_verdict_by_code(
+              0, 50, 2000, 256, '',
+              '1 2 3\n==1==ERROR: AddressSanitizer: heap-use-after-free',
+              '1 2 3\n')['name'] == 'RE')
+    check('an ordinary wrong answer is not turned into RE',
+          verdict.get_verdict_by_code(0, 50, 2000, 256, '',
+                                      '1 2 4\n', '1 2 3\n')['name'] == 'WA')
+    check('plain stderr text does not invent a crash',
+          verdict.get_verdict_by_code(0, 50, 2000, 256, '',
+                                      '1 2 3\n', '1 2 3\n',
+                                      ignore_error=False)['name'] == 'AC')
     check('the shipped C++ command optimises the build',
           '-O2' in ([x for x in shipped.get('run_settings', [])
                      if 'cpp' in (x.get('extensions') or [])][0].get('compile_cmd') or ''),
@@ -1528,8 +1745,27 @@ def main():
           .endswith('-O2'))
     check('debug drops -O2 and adds -g -fsanitize',
           '-O2' not in debug and '-g' in debug
-          and '-fsanitize=address,undefined' in debug
+          and '-fsanitize=undefined' in debug
+          and '-fsanitize-trap=undefined' in debug
           and '-fno-omit-frame-pointer' in debug, debug)
+    # The trap form is the whole point: plain -fsanitize=undefined makes the
+    # linker resolve libubsan and -fsanitize=address,undefined makes it resolve
+    # libasan as well, so on a toolchain that ships neither (MSYS2 mingw gcc:
+    # "ld.exe: cannot find -lubsan/-lasan") every debug compile used to fail
+    # once and fall back to a build with no UB detection at all. Trapping emits
+    # ud2 instead of calling a runtime, so the default must never ask for a
+    # sanitizer library.
+    check('the default sanitizer needs no runtime library',
+          '-fsanitize=address' not in debug and '-lubsan' not in debug
+          and '-lasan' not in debug, debug)
+    check('a hand-written -fsanitize=address survives debug mode',
+          '-fsanitize=address' in build_mode.transform(
+              base + ' -fsanitize=address', build_mode.MODE_DEBUG)
+          and build_mode.transform(
+              base + ' -fsanitize=address', build_mode.MODE_DEBUG)
+          .count('-fsanitize=undefined') == 0,
+          build_mode.transform(base + ' -fsanitize=address',
+                               build_mode.MODE_DEBUG))
     # An out-of-bounds std::vector read is undefined behaviour, not a crash:
     # at -O2 it prints heap garbage and exits 0, so the judge can only say WA
     # and never RE. The assertion macro is the only UB probe that survives on
@@ -1542,8 +1778,25 @@ def main():
           and '-D_GLIBCXX_ASSERTIONS'
           not in build_mode.transform(base + ' -D_GLIBCXX_DEBUG',
                                       build_mode.MODE_RELEASE))
+    # Both halves of the default pair, not just the first one: the old
+    # r'-fsanitize=\S+' left "-fsanitize-trap=undefined" behind as an orphan,
+    # which still compiles but silently turns undefined behaviour into ud2 in
+    # release mode - the mode that is supposed to be fast and faithful.
     check('switching back to release removes the sanitizer',
-          '-fsanitize' not in build_mode.transform(debug, build_mode.MODE_RELEASE))
+          '-fsanitize' not in build_mode.transform(debug, build_mode.MODE_RELEASE),
+          build_mode.transform(debug, build_mode.MODE_RELEASE))
+    check('release strips a hand-written trap flag too',
+          '-fsanitize' not in build_mode.transform(
+              base + ' -fsanitize=undefined -fsanitize-trap=undefined',
+              build_mode.MODE_RELEASE),
+          build_mode.transform(base + ' -fsanitize=undefined '
+                               '-fsanitize-trap=undefined',
+                               build_mode.MODE_RELEASE))
+    check('debug does not stack a second sanitizer on a hand-written one',
+          build_mode.transform(base + ' -fsanitize=address',
+                               build_mode.MODE_DEBUG).count('-fsanitize') == 1,
+          build_mode.transform(base + ' -fsanitize=address',
+                               build_mode.MODE_DEBUG))
     check('a hand-written -D_GLIBCXX_DEBUG does not double up in debug mode',
           build_mode.transform(base + ' -D_GLIBCXX_DEBUG', build_mode.MODE_DEBUG)
           .count('-D_GLIBCXX') == 1,
@@ -1695,6 +1948,180 @@ def main():
     check('an empty statement is reported, not guessed',
           html_mod.extract_samples('') == [])
 
+    # --- the status bar says something even without a title ----------------
+    # problem_title() needs a <title> or an <h1>; a self-hosted judge may have
+    # neither, and the status bar then showed the bare URL. summarize() picks
+    # the longest visible line instead - navigation and sample blocks are
+    # short, problem prose is not.
+    untitled = ('<html><body><nav><a href="/">Home</a><a href="/login">Login'
+                '</a></nav><h2>P1001</h2>'
+                '<p>Given two integers a and b, output their sum. This is the '
+                'classic first problem of every online judge.</p>'
+                '<div>Sample Input</div><pre>1 2</pre></body></html>')
+    check('an untitled page yields no title but still summarises',
+          html_mod.problem_title(untitled) == ''
+          and 'classic first problem' in fetch_mod.summarize(untitled),
+          repr(fetch_mod.summarize(untitled)))
+    check('the summary is the longest line, not the first one',
+          fetch_mod.summarize('<html><body><p>Home</p><p>%s</p></body></html>'
+                              % ('x' * 90)) == 'x' * 90)
+    check('a long summary is truncated with an ellipsis',
+          fetch_mod.summarize('<p>%s</p>' % ('y' * 500)) == 'y' * 157 + '...')
+    check('a text-free page summarises as empty, not as markup',
+          fetch_mod.summarize('<html><body><script>var a=1;</script>'
+                              '<style>p{color:red}</style></body></html>') == '')
+    check('summarize never raises on junk input',
+          fetch_mod.summarize(None) == '' and fetch_mod.summarize(42) == '')
+    extras_src = open(os.path.join(ROOT, 'cph_extras.py'),
+                      encoding='utf-8').read()
+    check('the fetch status bar falls back to the statement summary',
+          "label = t('statement_summary', text=line)" in extras_src
+          and 'summarize(html)' in extras_src)
+
+    # --- fetch: the response body is capped (max_fetch_bytes) ---------------
+    # fetch() used to read the whole page with a bare response.read(); now it
+    # reads in chunks and refuses pages heavier than max_fetch_bytes. The cap
+    # is exercised through cph_settings.get_settings() itself, so a rename of
+    # either side breaks here instead of silently defaulting.
+    import urllib.request
+
+    real_urlopen = urllib.request.urlopen
+    fetch_settings_obj = settings.get_settings()
+    saved_cap = fetch_settings_obj.get('max_fetch_bytes')
+    saved_lang = i18n.get_lang()
+
+    class _FakePage(object):
+        """urlopen stand-in serving a fixed body in fixed-size chunks."""
+
+        def __init__(self, body, chunk):
+            self._body = body
+            self._chunk = chunk
+            self._pos = 0
+
+        def read(self, size=-1):
+            if size is None or size < 0:
+                data = self._body[self._pos:]
+                self._pos = len(self._body)
+            else:
+                data = self._body[self._pos:self._pos + size]
+                self._pos += len(data)
+            return data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def _serve(body, chunk=16):
+        urllib.request.urlopen = lambda request, timeout=None: _FakePage(body, chunk)
+
+    def _set_fetch_cap(value):
+        # get_settings() returns whatever init_settings() stored: a plain
+        # dict before the host loads settings, a Settings-like object after.
+        if hasattr(fetch_settings_obj, 'set'):
+            fetch_settings_obj.set('max_fetch_bytes', value)
+        else:
+            fetch_settings_obj['max_fetch_bytes'] = value
+
+    small_page = ('<html><title>P1001 A+B Problem</title><body>'
+                  '<h2>A+B Problem</h2><div>样例输入</div><pre>1 2</pre>'
+                  '<div>样例输出</div><pre>3</pre></body></html>')
+    too_large_url = 'https://oj.example/problem/P1001'
+    try:
+        i18n.set_lang('en')
+        _set_fetch_cap(1048576)
+        _serve(small_page.encode('utf-8'), chunk=16)
+        html, err = fetch_mod.fetch(too_large_url)
+        check('a small page is still fetched and parsed in full',
+              err == '' and '样例输入' in html
+              and fetch_mod.samples(html) == [('1 2', '3')],
+              'err=%s samples=%s' % (ascii(err), ascii(fetch_mod.samples(html))))
+
+        _set_fetch_cap(100)
+        _serve(small_page.encode('utf-8'), chunk=16)
+        html, err = fetch_mod.fetch(too_large_url)
+        check('an oversized page is refused with the new message, not the body',
+              html == '' and err == i18n.t('fetch_response_too_large',
+                                           limit='100 B')
+              and '样例输入' not in err, ascii(err))
+
+        _set_fetch_cap(100)
+        _serve(b'x' * 100, chunk=16)
+        html, err = fetch_mod.fetch(too_large_url)
+        check('a page exactly at the cap is accepted whole (no off-by-one)',
+              err == '' and html == 'x' * 100,
+              'err=%s len=%s' % (ascii(err), len(html)))
+
+        _serve(b'x' * 101, chunk=16)
+        html, err = fetch_mod.fetch(too_large_url)
+        check('one byte past the cap is refused',
+              html == '' and err == i18n.t('fetch_response_too_large',
+                                           limit='100 B'), ascii(err))
+
+        # --- fetch timeout is a setting, not a hard-coded 25 ---------------
+        saved_timeout = fetch_settings_obj.get('fetch_timeout_seconds')
+
+        def _set_fetch_timeout(value):
+            if hasattr(fetch_settings_obj, 'set'):
+                fetch_settings_obj.set('fetch_timeout_seconds', value)
+            else:
+                fetch_settings_obj['fetch_timeout_seconds'] = value
+
+        seen_timeouts = []
+
+        def _serve_capturing(body):
+            def _open(request, timeout=None):
+                seen_timeouts.append(timeout)
+                return _FakePage(body, 16)
+            urllib.request.urlopen = _open
+
+        _set_fetch_cap(1048576)
+        _set_fetch_timeout(40)
+        _serve_capturing(small_page.encode('utf-8'))
+        html, err = fetch_mod.fetch(too_large_url)
+        check('the configured fetch timeout reaches urlopen',
+              err == '' and seen_timeouts == [40],
+              'timeouts=%s err=%s' % (seen_timeouts, ascii(err)))
+
+        _serve_capturing(small_page.encode('utf-8'))
+        fetch_mod.fetch(too_large_url, timeout=7)
+        check('an explicit timeout argument overrides the setting',
+              seen_timeouts[-1] == 7, 'timeouts=%s' % (seen_timeouts,))
+
+        for bogus in (0, -3, 'abc', None):
+            _set_fetch_timeout(bogus)
+            _serve_capturing(small_page.encode('utf-8'))
+            fetch_mod.fetch(too_large_url)
+        check('a bogus fetch timeout falls back to the default',
+              seen_timeouts[-4:] == [fetch_mod.DEFAULT_FETCH_TIMEOUT] * 4,
+              'timeouts=%s' % (seen_timeouts[-4:],))
+        _set_fetch_timeout(saved_timeout)
+    finally:
+        urllib.request.urlopen = real_urlopen
+        _set_fetch_cap(saved_cap)
+        i18n.set_lang(saved_lang)
+
+    fetch_src = open(os.path.join(ROOT, 'core', 'cph_fetch.py'),
+                     encoding='utf-8').read()
+    check('cph_fetch no longer reads the response without a cap',
+          not re.search(r'response\.read\(\s*\)', fetch_src)
+          and 'response.read(CHUNK_SIZE)' in fetch_src)
+    check('the fetch cap is read from the settings',
+          "get_settings().get('max_fetch_bytes'" in fetch_src)
+    check('the shipped max_fetch_bytes matches the code default',
+          shipped.get('max_fetch_bytes') == fetch_mod.DEFAULT_MAX_FETCH_BYTES,
+          repr(shipped.get('max_fetch_bytes')))
+    check('the fetch timeout is read from the settings',
+          "get_settings().get('fetch_timeout_seconds'" in fetch_src)
+    check('the shipped fetch_timeout_seconds matches the code default',
+          shipped.get('fetch_timeout_seconds')
+          == fetch_mod.DEFAULT_FETCH_TIMEOUT,
+          repr(shipped.get('fetch_timeout_seconds')))
+    check('the too-large message is translated (zh and en)',
+          i18n.STRINGS.get('fetch_response_too_large', {}).get('zh')
+          and i18n.STRINGS.get('fetch_response_too_large', {}).get('en'))
+
     # --- practice statistics ---
     check('the worst verdict wins',
           stats.worst_verdict(['AC', 'WA']) == 'WA'
@@ -1702,6 +2129,91 @@ def main():
           and stats.worst_verdict([]) == 'AC')
     check('a missing store still summarises',
           isinstance(stats.summary(7), str) and stats.load() is not None)
+
+    # --- dead code must not come back -------------------------------------
+    # These nine helpers had no caller anywhere in the shipped tree (or in the
+    # tests) and were removed in the same pass that wired stress_rounds up. A
+    # static check keeps them out: importing them again would mean someone
+    # re-added dead code, which is exactly what this audit was about.
+    for module_name, gone in (
+            ('core/cph_fetch.py', 'first_lines'),
+            ('core/cph_stats.py', 'def record_unused_stress'),
+            ('core/cph_state.py', 'get_listener_port'),
+            ('core/cph_checker.py', 'quote_argv'),
+            ('core/cph_gdb_trace.py', 'signal_name'),
+            ('core/cph_subtasks.py', 'group_of'),
+            ('core/cph_settings.py', 'is_lang_view'),
+            ('core/cph_settings.py', 'get_folder_tests_file_path'),
+            ('core/cph_build_mode.py', 'def forget')):
+        path = os.path.join(ROOT, *module_name.split('/'))
+        try:
+            with open(path, encoding='utf-8') as f:
+                body = f.read()
+        except Exception:
+            body = ''
+        check('the dead helper %s stays out of %s' % (gone, module_name),
+              gone not in body)
+    # and every core module still imports cleanly after the removals
+    for core_mod in ('cph_fetch', 'cph_state', 'cph_checker', 'cph_gdb_trace',
+                     'cph_subtasks', 'cph_settings', 'cph_build_mode',
+                     'cph_stats'):
+        try:
+            importlib.import_module(pkg + '.core.' + core_mod)
+            ok = True
+        except Exception as e:  # noqa - reported, not raised
+            ok = False
+            print('    import %s failed: %s' % (core_mod, e))
+        check('core.%s still imports after the cleanup' % core_mod, ok)
+
+    # --- stress rounds must reach the statistics store ----------------------
+    # core.cph_stats.record_stress() existed from the start but nothing called
+    # it, so every problem's "stress_rounds" stayed 0. cph_stress.py now feeds
+    # it; these checks keep the wiring alive (a renamed module, a removed
+    # import or a counter that stops accumulating fails here).
+    stress_src = open(os.path.join(ROOT, 'cph_stress.py'), encoding='utf-8').read()
+    check('cph_stress imports record_stress from core.cph_stats',
+          'from .core.cph_stats import record_stress' in stress_src)
+    check('the stress loop counts its rounds into the store',
+          '_record_stress_rounds(user_file, round_count)' in stress_src
+          and re.search(r'def _record_stress_rounds\(user_file, rounds\):',
+                        stress_src) is not None)
+    check('the stress counter never lets an exception escape',
+          re.search(r'def _record_stress_rounds\(user_file, rounds\):'
+                    r'(?:.*?\n)*?    try:\n'
+                    r'        record_stress\(user_file, rounds\)\n'
+                    r'    except Exception:\n        pass',
+                    stress_src) is not None)
+
+    stress_store = os.path.join(tempfile.mkdtemp(), 'cph-stress-stats.json')
+    old_env = os.environ.get('CPH_STATS_PATH')
+    os.environ['CPH_STATS_PATH'] = stress_store
+    try:
+        probe_dir = os.path.join(tempfile.mkdtemp(), 'proj')
+        os.makedirs(probe_dir)
+        probe_file = os.path.join(probe_dir, 'main.cpp')
+        with open(probe_file, 'w', encoding='utf-8') as f:
+            f.write('// probe\n')
+        record_stress = getattr(stats, 'record_stress')
+        record_stress(probe_file, 12)
+        record_stress(probe_file, 3)
+        rec = stats.load().get('problems').get(stats.key_for(probe_file))
+        check('record_stress accumulates rounds per problem',
+              rec is not None and rec['stress_rounds'] == 15, str(rec))
+        # The wiring must survive a round count of 0 (a run that never made it
+        # past the first compile) instead of writing a bogus record.
+        before = stats.load()
+        record_stress(probe_file, 0)
+        check('record_stress(0) leaves the counter untouched',
+              stats.load().get('problems').get(stats.key_for(probe_file), {})
+              .get('stress_rounds') == 15)
+        check('a pointless write did not touch the history',
+              len(stats.load().get('history') or [])
+              == len(before.get('history') or []))
+    finally:
+        if old_env is None:
+            os.environ.pop('CPH_STATS_PATH', None)
+        else:
+            os.environ['CPH_STATS_PATH'] = old_env
 
     # --- the new commands must be reachable ---
     for command in ('cph_fetch_problem', 'cph_view_statement', 'cph_benchmark',
@@ -2153,6 +2665,516 @@ def main():
           and '"%s"' not in _quote_body
           and 'replace(' not in _quote_body,
           repr(_quote_body.strip()[:120]))
+
+    # --- round 14: template snippets, clipboard io, language switching,
+    # and the ProcessManager decode chain - three plugin modules and the
+    # process decoder that the suite had never touched before.
+    print('== round 14: template, clipboard io, language, decoding ==')
+    i18n = importlib.import_module(pkg + '.core.cph_i18n')
+    template_mod = importlib.import_module(pkg + '.cph_template')
+    tests_io = importlib.import_module(pkg + '.cph_tests_io')
+    lang_mod = importlib.import_module(pkg + '.cph_language')
+    fake_sublime = sys.modules['sublime']
+    Region = fake_sublime.Region
+
+    class _SelList(list):
+        def clear(self):
+            del self[:]
+
+        def add(self, region):
+            self.append(region)
+
+    class _TemplateView(object):
+        """Just enough view for CphInsertTemplateCommand.run()."""
+
+        def __init__(self, text, regions, word_region=None):
+            self._text = text
+            self._sel = _SelList(regions)
+            self._word = word_region if word_region is not None else Region(0, 0)
+
+        def sel(self):
+            return self._sel
+
+        def substr(self, region):
+            return self._text[region.begin():region.end()]
+
+        def word(self, pt):
+            return self._word
+
+        def replace(self, edit, region, snippet):
+            self._text = (self._text[:region.begin()] + snippet
+                          + self._text[region.end():])
+
+        def text(self):
+            return self._text
+
+    msgs = []
+    saved_status = fake_sublime.status_message
+    fake_sublime.status_message = lambda m: msgs.append(m)
+    saved_lang = i18n.get_lang()
+    try:
+        # {cursor} marks where the caret must land; the marker itself must go
+        view = _TemplateView('bf', [Region(0, 2)])
+        template_mod.CphInsertTemplateCommand(view).run(None)
+        bf_snippet = template_mod.BUILTIN_TEMPLATES['bf']
+        want_pt = len(bf_snippet[:bf_snippet.find('{cursor}')])
+        check('template expansion drops the {cursor} marker',
+              view.text() == bf_snippet.replace('{cursor}', '', 1),
+              repr(view.text()[:60]))
+        check('the caret lands exactly where {cursor} stood',
+              list(view.sel()) == [Region(want_pt, want_pt)],
+              str([(r.a, r.b) for r in view.sel()]))
+
+        view = _TemplateView('fastio', [Region(0, 6)])
+        template_mod.CphInsertTemplateCommand(view).run(None)
+        check('a template without {cursor} leaves the selection alone',
+              view.text() == template_mod.BUILTIN_TEMPLATES['fastio']
+              and list(view.sel()) == [Region(0, 6)], repr(view.text()[:40]))
+
+        view = _TemplateView('bf tail', [Region(0, 2), Region(4, 8)])
+        template_mod.CphInsertTemplateCommand(view).run(None)
+        check('multiple selections make the command a no-op',
+              view.text() == 'bf tail', repr(view.text()))
+
+        view = _TemplateView('   ', [Region(1, 1)], word_region=Region(1, 1))
+        template_mod.CphInsertTemplateCommand(view).run(None)
+        check('an empty keyword reports and changes nothing',
+              view.text() == '   '
+              and msgs and msgs[-1] == i18n.t('template_no_keyword'),
+              repr(msgs[-1] if msgs else None))
+
+        view = _TemplateView('nosuchtemplate', [Region(0, 14)])
+        template_mod.CphInsertTemplateCommand(view).run(None)
+        check('an unknown keyword is reported, not expanded',
+              view.text() == 'nosuchtemplate'
+              and msgs and msgs[-1] == i18n.t('template_not_found',
+                                              name='nosuchtemplate'),
+              repr(msgs[-1] if msgs else None))
+
+        # _lookup: algorithms_base extensions in priority order, then the
+        # settings dict, then the built-ins
+        work = tempfile.mkdtemp(prefix='cph-tests-tpl-')
+
+        def _put(name, body):
+            with open(os.path.join(work, name), 'w', encoding='utf-8') as f:
+                f.write(body)
+
+        _put('kw.cpp', 'cpp 正文\n')
+        _put('both.cc', 'cc body\n')
+        _put('both.py', 'py body\n')
+        _put('chain.py', 'py wins\n')
+        _put('chain.txt', 'txt loses\n')
+        _put('only.cxx', 'cxx body\n')
+        _put('notes.txt', 'txt body\n')
+        settings_core = importlib.import_module(pkg + '.core.cph_settings')
+        saved_core = settings_core.settings
+        settings_core.settings = {'algorithms_base': work,
+                                  'templates': {'mine': 'A{cursor}B'}}
+        try:
+            probe = template_mod.CphInsertTemplateCommand(
+                _TemplateView('', [Region(0, 0)]))
+            check('_lookup finds the .cpp file (utf-8, trailing newline stripped)',
+                  probe._lookup('kw') == 'cpp 正文', repr(probe._lookup('kw')))
+            check('_lookup prefers .cc over .py',
+                  probe._lookup('both') == 'cc body', repr(probe._lookup('both')))
+            check('_lookup prefers .py over .txt',
+                  probe._lookup('chain') == 'py wins', repr(probe._lookup('chain')))
+            check('_lookup finds a .cxx file',
+                  probe._lookup('only') == 'cxx body', repr(probe._lookup('only')))
+            check('_lookup falls through to .txt',
+                  probe._lookup('notes') == 'txt body', repr(probe._lookup('notes')))
+            check('_lookup reads the settings templates dict',
+                  probe._lookup('mine') == 'A{cursor}B', repr(probe._lookup('mine')))
+            check('_lookup ends with the built-ins and None for misses',
+                  probe._lookup('fastio') == template_mod.BUILTIN_TEMPLATES['fastio']
+                  and probe._lookup('still-nothing') is None,
+                  repr((probe._lookup('fastio'), probe._lookup('still-nothing'))))
+            settings_core.settings = {'algorithms_base': os.path.join(work, 'nope')}
+            check('_lookup survives a missing algorithms_base directory',
+                  probe._lookup('kw') is None, repr(probe._lookup('kw')))
+            settings_core.settings = {'algorithms_base': work,
+                                      'templates': {'mine': 'A{cursor}B'}}
+            view = _TemplateView('mine', [Region(0, 4)])
+            template_mod.CphInsertTemplateCommand(view).run(None)
+            check('a settings template honours {cursor} too',
+                  view.text() == 'AB' and list(view.sel()) == [Region(1, 1)],
+                  repr((view.text(), [(r.a, r.b) for r in view.sel()])))
+        finally:
+            settings_core.settings = saved_core
+            shutil.rmtree(work, ignore_errors=True)
+
+        # SEPARATOR: dashes and equals both split a whole line, prose never
+        sep = tests_io.SEPARATOR
+        # the rule itself is consumed by split(); the newlines around it stay
+        check('the separator splits on a dash rule',
+              sep.split('1 2\n---\n3\n', maxsplit=1) == ['1 2\n', '\n3\n'],
+              repr(sep.split('1 2\n---\n3\n', maxsplit=1)))
+        check('the separator splits on an equals rule',
+              sep.split('in\n=====\nout', maxsplit=1) == ['in\n', '\nout'],
+              repr(sep.split('in\n=====\nout', maxsplit=1)))
+        check('the separator allows indented / padded rules',
+              sep.split('a\n  ---  \nb', maxsplit=1) == ['a\n', '\nb'],
+              repr(sep.split('a\n  ---  \nb', maxsplit=1)))
+        prose = ('a---b is inline\n'
+                 '-- too short\n'
+                 '--- trailing text\n'
+                 'text before ---\n')
+        check('the separator never cuts ordinary text',
+              sep.split(prose, maxsplit=1) == [prose],
+              repr(sep.split(prose, maxsplit=1)))
+
+        # the clipboard command: split, merge and status messages
+        clipboard_val = ''
+        saved_clip = fake_sublime.get_clipboard
+        fake_sublime.get_clipboard = lambda: clipboard_val
+        saved_merge = tests_io.merge_into_file
+        calls = []
+
+        def fake_merge(file_name, new_tests):
+            calls.append((file_name, new_tests))
+            return True, 2, []
+
+        tests_io.merge_into_file = fake_merge
+        try:
+            view = fake_sublime.View(file_name='D:/proj/main.cpp',
+                                     settings={'cph_run_view': True})
+            add_cmd = tests_io.CphAddTestFromClipboardCommand(view)
+
+            clipboard_val = '1 2\n---\n3\n'
+            add_cmd.run(None)
+            check('a clipboard with a dash rule becomes input + answer',
+                  calls and calls[-1][1]
+                  == [{'test': '1 2\n', 'correct_answers': ['3']}],
+                  repr(calls[-1] if calls else None))
+            check('the run panel is refreshed and the total announced',
+                  msgs and msgs[-1] == i18n.t('clipboard_test_added', total=2),
+                  repr(msgs[-1] if msgs else None))
+
+            del calls[:]
+            clipboard_val = '9 9'
+            add_cmd.run(None)
+            check('a clipboard without a rule stores everything as input',
+                  calls and calls[-1][1] == [{'test': '9 9',
+                                              'correct_answers': []}],
+                  repr(calls[-1] if calls else None))
+
+            del calls[:]
+            clipboard_val = 'a\n---\nb\n---\nc'
+            add_cmd.run(None)
+            check('only the first rule splits (the rest stays the answer)',
+                  calls and calls[-1][1]
+                  == [{'test': 'a\n', 'correct_answers': ['b\n---\nc']}],
+                  repr(calls[-1] if calls else None))
+
+            del calls[:]
+            clipboard_val = '   \n'
+            add_cmd.run(None)
+            check('a blank clipboard is reported and not stored',
+                  not calls and msgs and msgs[-1] == i18n.t('clipboard_empty'),
+                  repr(msgs[-1] if msgs else None))
+
+            tests_io.merge_into_file = lambda fn, nt: (True, 1, [('x', 'y')])
+            clipboard_val = '1\n---\n2'
+            add_cmd.run(None)
+            check('an answer conflict announces that the stored one was kept',
+                  msgs and i18n.t('answer_conflict_kept') in msgs[-2:],
+                  repr(msgs[-2:]))
+        finally:
+            tests_io.merge_into_file = saved_merge
+            fake_sublime.get_clipboard = saved_clip
+
+        # language switching: get_lang() and the persisted setting agree
+        lang_settings = fake_sublime.Settings({})
+        saves = []
+        saved_load, saved_save = fake_sublime.load_settings, fake_sublime.save_settings
+        fake_sublime.load_settings = lambda name: lang_settings
+        fake_sublime.save_settings = lambda name: saves.append(name)
+        try:
+            lang_view = fake_sublime.View()
+            set_cmd = lang_mod.CphLanguageSetLanguageCommand(lang_view)
+            toggle_cmd = lang_mod.CphLanguageToggleLanguageCommand(lang_view)
+            set_cmd.run(None, language='zh')
+            check('set_language zh switches get_lang and persists',
+                  i18n.get_lang() == 'zh'
+                  and lang_settings.get('language') == 'zh'
+                  and saves == ['Algorithm Competition Assistant.sublime-settings'],
+                  repr((i18n.get_lang(), lang_settings.get('language'), saves)))
+            toggle_cmd.run(None)
+            check('toggle flips zh to en and persists',
+                  i18n.get_lang() == 'en'
+                  and lang_settings.get('language') == 'en'
+                  and len(saves) == 2,
+                  repr((i18n.get_lang(), lang_settings.get('language'), saves)))
+            toggle_cmd.run(None)
+            check('toggle flips back to zh and persists',
+                  i18n.get_lang() == 'zh'
+                  and lang_settings.get('language') == 'zh'
+                  and len(saves) == 3,
+                  repr((i18n.get_lang(), lang_settings.get('language'), saves)))
+            set_cmd.run(None)          # the default argument is 'en'
+            check('set_language defaults to english',
+                  i18n.get_lang() == 'en', i18n.get_lang())
+        finally:
+            fake_sublime.load_settings, fake_sublime.save_settings = \
+                saved_load, saved_save
+            i18n.set_lang(saved_lang)
+    finally:
+        fake_sublime.status_message = saved_status
+
+    # --- ProcessManager._decode_output: utf-8 first, locale fallback ---
+    pm_mod = importlib.import_module(pkg + '.Modules.ProcessManager')
+    check('decode(None) is an empty string', pm_mod._decode_output(None) == '',
+          repr(pm_mod._decode_output(None)))
+    check('a str input still gets its newlines normalized',
+          pm_mod._decode_output('a\r\nb\rc') == 'a\nb\nc',
+          repr(pm_mod._decode_output('a\r\nb\rc')))
+    check('pure ascii bytes decode unchanged',
+          pm_mod._decode_output(b'hello world\n') == 'hello world\n',
+          repr(pm_mod._decode_output(b'hello world\n')))
+    check('valid utf-8 chinese decodes',
+          pm_mod._decode_output('中文断言'.encode('utf-8')) == '中文断言',
+          repr(pm_mod._decode_output('中文断言'.encode('utf-8'))))
+    check('lone CR mixed with CRLF normalizes to LF only',
+          pm_mod._decode_output(b'a\r\nb\rc\r') == 'a\nb\nc\n',
+          repr(pm_mod._decode_output(b'a\r\nb\rc\r')))
+    check('undecodable bytes come out as replacement characters',
+          pm_mod._decode_output(b'\xff\xfe bad').count('\ufffd') == 2,
+          repr(pm_mod._decode_output(b'\xff\xfe bad')))
+
+    # cp936 g++ diagnostics: utf-8 decoding fails, the locale codec steps in
+    diag = 'main.cpp:4:9: error: 变量 x 未声明'
+    cp936_bytes = diag.encode('cp936')
+    saved_pref = pm_mod.locale.getpreferredencoding
+    try:
+        pm_mod.locale.getpreferredencoding = lambda flag=False: 'gbk'
+        check('cp936 g++ diagnostics decode when the locale is gbk',
+              pm_mod._decode_output(cp936_bytes) == diag,
+              repr(pm_mod._decode_output(cp936_bytes)))
+    finally:
+        pm_mod.locale.getpreferredencoding = saved_pref
+    pref = locale.getpreferredencoding(False).lower().replace('-', '')
+    pref = pref.replace('_', '')
+    decoded = pm_mod._decode_output(cp936_bytes)
+    if pref in ('gbk', 'cp936', 'ms936', '936', 'gb2312', 'gb18030'):
+        check('cp936 g++ diagnostics decode on a real gbk locale too',
+              decoded == diag, repr(decoded))
+    else:
+        check('cp936 g++ diagnostics never raise outside a gbk locale',
+              isinstance(decoded, str) and '\r' not in decoded, repr(decoded))
+
+    # the captured-stderr path runs through the same decoder
+    pm_obj = pm_mod.ProcessManager.__new__(pm_mod.ProcessManager)
+    pm_obj.stderr_file = io.BytesIO('stderr 正文\r\nsecond line'.encode('utf-8'))
+    check('get_stderr decodes and normalizes the captured stderr',
+          pm_obj.get_stderr() == 'stderr 正文\nsecond line',
+          repr(pm_obj.get_stderr()))
+    saved_pref = pm_mod.locale.getpreferredencoding
+    try:
+        pm_mod.locale.getpreferredencoding = lambda flag=False: 'gbk'
+        pm_obj.stderr_file = io.BytesIO(cp936_bytes)
+        check('get_stderr falls back to the locale codec for cp936 output',
+              pm_obj.get_stderr() == diag, repr(pm_obj.get_stderr()))
+    finally:
+        pm_mod.locale.getpreferredencoding = saved_pref
+
+    # end-to-end: a real child prints CRLF + lone CR + utf-8 Chinese; the text
+    # that reaches prog_out must carry no 0x0d artifact and no mojibake.
+    tmp = tempfile.mkdtemp(prefix='cph-tests-e2e-')
+    try:
+        script = os.path.join(tmp, 'printer.py')
+        with open(script, 'w', encoding='utf-8') as f:
+            f.write('import sys\n'
+                    "sys.stdout.buffer.write('中文输出OK\\r\\n'.encode('utf-8'))\n"
+                    "sys.stdout.buffer.write(b'1\\r\\n2\\rlone\\r')\n"
+                    "sys.stdout.buffer.write('end'.encode('utf-8'))\n"
+                    'sys.stdout.buffer.flush()\n')
+        entry = [{'name': 'Python', 'extensions': ['py'], 'compile_cmd': None,
+                  'run_cmd': sys.executable.replace('\\', '/') + ' "{source_file}"',
+                  'time_limit_ms': 3000, 'memory_limit_mb': 256}]
+        manager = pm_mod.ProcessManager(script, 'source.python',
+                                        run_settings=entry)
+        manager.set_time_limit(3000)
+        # match the host: the fake sublime reports linux, but this really
+        # spawns a process (the POSIX branch would reach for os.setsid).
+        real_platform = 'windows' if os.name == 'nt' else 'linux'
+        saved_platform = sys.modules['sublime'].platform
+        sys.modules['sublime'].platform = lambda: real_platform
+        try:
+            manager.run_file()
+            deadline = time.time() + 15
+            while manager.is_stopped() is None and time.time() < deadline:
+                time.sleep(0.02)
+            out = manager.read()
+            code = manager.is_stopped()
+        finally:
+            sys.modules['sublime'].platform = saved_platform
+            manager.close_stderr()
+        check('the end-to-end child exits cleanly', code == 0, str(code))
+        check('prog_out never sees a 0x0d artifact',
+              isinstance(out, str) and '\r' not in out, repr(out))
+        check('prog_out carries decoded utf-8 and normalized newlines',
+              out == '中文输出OK\n1\n2\nlone\nend', repr(out))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # --- i18n hygiene: a deleted key must never come back from the dead ---
+    keys_defined, keys_used = _i18n_usage()
+    orphaned = sorted(DYNAMIC_I18N_KEYS - keys_defined)
+    check('the dynamic i18n whitelist still names real keys', not orphaned,
+          ', '.join(orphaned))
+    orphaned_stats = sorted(STATS_I18N_KEYS - keys_defined)
+    check('the stats i18n whitelist still names real keys', not orphaned_stats,
+          ', '.join(orphaned_stats))
+    dead = sorted(keys_defined - keys_used
+                  - DYNAMIC_I18N_KEYS - STATS_I18N_KEYS)
+    check('every i18n key is called through t() or whitelisted', not dead,
+          ', '.join(dead))
+    # The stats keys are reached through a variable, so prove they are wired:
+    # _ENGLISH_LABELS must carry exactly the whitelisted key set, and
+    # render_summary() must actually emit a translated line for one of them.
+    stats_src = open(os.path.join(ROOT, 'core', 'cph_stats.py'),
+                     encoding='utf-8').read()
+    extras_src = open(os.path.join(ROOT, 'cph_extras.py'),
+                      encoding='utf-8').read()
+    for key in sorted(STATS_I18N_KEYS):
+        check('_ENGLISH_LABELS carries %s' % key,
+              "'%s':" % key in stats_src)
+    check('render_summary is called with the translator from the plugin',
+          'summary_localized' in extras_src
+          and 'from .cph_i18n import t' in stats_src)
+    # ...and it really produces the numbers in both languages, not just the
+    # labels: the whole point of moving summary() onto summary_data().
+    stats_mod = importlib.import_module(pkg + '.core.cph_stats')
+    i18n_mod = importlib.import_module(pkg + '.core.cph_i18n')
+    stress_store = os.path.join(tempfile.mkdtemp(), 'cph-report.json')
+    old_env = os.environ.get('CPH_STATS_PATH')
+    os.environ['CPH_STATS_PATH'] = stress_store
+    try:
+        saved_lang = i18n_mod.get_lang()
+        try:
+            rep_file = os.path.join(tempfile.mkdtemp(), 'rep.cpp')
+            with open(rep_file, 'w', encoding='utf-8') as f:
+                f.write('// report\n')
+            stats_mod.record_run(rep_file, ['AC', 'AC'])
+            stats_mod.record_run(rep_file, ['WA'])
+            stats_mod.record_stress(rep_file, 7)
+            body = stats_mod.summary_data(7)
+            check('summary_data reports the stress rounds',
+                  body.get('stress_rounds') == 7
+                  and body.get('runs') == 2 and body.get('solved') == 1
+                  and len(body.get('needs') or []) == 1, str(body))
+            i18n_mod.set_lang('zh')
+            zh = stats_mod.summary_localized(7)
+            i18n_mod.set_lang('en')
+            en = stats_mod.summary_localized(7)
+            check('the report is rendered in the active language',
+                  '练习统计' in zh and '待加强' in zh and '对拍累计' in zh
+                  and 'practice statistics' in en and 'Needs work' in en,
+                  repr(zh[:40]) + ' / ' + repr(en[:40]))
+            check('the stress line appears once rounds were recorded',
+                  '对拍累计' in zh and 'Stress rounds' in en)
+            check('the plain summary() text is unchanged (english fallback)',
+                  'CPH practice stats' in stats_mod.summary(7)
+                  and 'Stress rounds: 7' in stats_mod.summary(7))
+        finally:
+            i18n_mod.set_lang(saved_lang)
+    finally:
+        if old_env is None:
+            os.environ.pop('CPH_STATS_PATH', None)
+        else:
+            os.environ['CPH_STATS_PATH'] = old_env
+
+    # --- the run log is bounded, the lifetime counters are not --------------
+    # record_run() rewrites the whole JSON on every run, so an unbounded history
+    # makes every later run slower (measured: 4000 entries = 636 KB, 18.4 ms per
+    # call, quadratic overall). Writing the real 5000 entries here would take
+    # tens of seconds, so shrink the limit and exercise the same code path.
+    check('the history limit is a named constant',
+          '_HISTORY_LIMIT = 5000' in stats_src)
+    hist_store = os.path.join(tempfile.mkdtemp(), 'cph-history.json')
+    old_env = os.environ.get('CPH_STATS_PATH')
+    os.environ['CPH_STATS_PATH'] = hist_store
+    saved_limit = stats_mod._HISTORY_LIMIT
+    try:
+        stats_mod._HISTORY_LIMIT = 5
+        hist_file = os.path.join(tempfile.mkdtemp(), 'hist.cpp')
+        with open(hist_file, 'w', encoding='utf-8') as f:
+            f.write('// history\n')
+        base = 1700000000
+        stats_mod.record_run(hist_file, ['AC'], now=base)
+        for i in range(1, 9):
+            stats_mod.record_run(hist_file, ['WA'], now=base + i)
+        entries = stats_mod.load().get('history') or []
+        check('the run log is capped at the limit',
+              len(entries) == 5, str(len(entries)))
+        check('the newest runs are the ones kept',
+              [e['time'] for e in entries]
+              == [stats_mod._iso(base + i) for i in (4, 5, 6, 7, 8)],
+              str([e['time'] for e in entries]))
+        rec = (stats_mod.load().get('problems')
+               or {}).get(stats_mod.key_for(hist_file)) or {}
+        check('truncating the log keeps the lifetime counters',
+              rec.get('runs') == 9 and rec.get('ac_runs') == 1
+              and rec.get('attempts') == 8, str(rec))
+        # The AC is now older than the log, so "solved" must come from the
+        # problem record instead of from history.
+        body = stats_mod.summary_data(7, now=base + 9)
+        check('a solved problem stays solved after its AC leaves the log',
+              body.get('solved') == 1, str(body))
+    finally:
+        stats_mod._HISTORY_LIMIT = saved_limit
+        if old_env is None:
+            os.environ.pop('CPH_STATS_PATH', None)
+        else:
+            os.environ['CPH_STATS_PATH'] = old_env
+
+    # --- failures that used to be swallowed reach the user ------------------
+    # Both of these were 'except Exception: return None/False' with no way for
+    # the caller to tell them apart from the ordinary path, so the user saw
+    # "listener target missing" or an empty report instead of the real cause.
+    companion_src = open(os.path.join(ROOT, 'cph_companion.py'),
+                         encoding='utf-8').read()
+    check('a directory that cannot be created is reported, not swallowed',
+          companion_src.count("t('auto_create_failed'") == 2
+          and 'auto_create_failed' in i18n.STRINGS
+          and i18n.STRINGS['auto_create_failed'].get('zh')
+          and i18n.STRINGS['auto_create_failed'].get('en'))
+    check('the auto-create failure carries the path and the os error',
+          "t('auto_create_failed', path=directory, error=str(e))" in companion_src
+          and "t('auto_create_failed', path=path, error=str(e))" in companion_src)
+    check('record_stats reports a failed statistics save',
+          'stats_take_save_error()' in _tm_src
+          and "t('stats_save_failed', error=problem)" in _tm_src
+          and i18n.STRINGS.get('stats_save_failed', {}).get('zh')
+          and i18n.STRINGS.get('stats_save_failed', {}).get('en'))
+    check('clearing the tests reports the files it could not empty',
+          'clear_failures.append(' in _tm_src
+          and "t('tests_clear_failed', error='; '.join(clear_failures)[:300])" in _tm_src
+          and i18n.STRINGS.get('tests_clear_failed', {}).get('zh')
+          and i18n.STRINGS.get('tests_clear_failed', {}).get('en'))
+    # The store must remember why it failed, hand the reason over exactly once
+    # (otherwise every later run repeats a stale error), and stay quiet when it
+    # works. Pointing CPH_STATS_PATH at a path *under a regular file* makes
+    # save() fail deterministically on every platform.
+    fail_store = os.path.join(tempfile.mkdtemp(), 'blocker')
+    with open(fail_store, 'w', encoding='utf-8') as f:
+        f.write('not a directory\n')
+    old_env = os.environ.get('CPH_STATS_PATH')
+    os.environ['CPH_STATS_PATH'] = os.path.join(fail_store, 'sub', 'stats.json')
+    try:
+        check('a working store leaves no error behind',
+              stats_mod.take_save_error() == '')
+        stats_mod.record_run(os.path.join(tempfile.mkdtemp(), 'x.cpp'), ['AC'])
+        first = stats_mod.take_save_error()
+        check('a failed save keeps the reason for the caller',
+              'blocker' in first and first != '', repr(first))
+        check('the reason is handed over only once',
+              stats_mod.take_save_error() == '')
+    finally:
+        if old_env is None:
+            os.environ.pop('CPH_STATS_PATH', None)
+        else:
+            os.environ['CPH_STATS_PATH'] = old_env
 
     print('')
     print('%d checks, %d failures' % (CHECKS[0], len(FAILURES)))

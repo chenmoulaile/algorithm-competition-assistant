@@ -54,7 +54,3 @@ def set_listener(server, port=None, view_id=None):
 
 def is_listener_running():
 	return bool(state.get('listener_running'))
-
-
-def get_listener_port():
-	return state.get('listener_port')

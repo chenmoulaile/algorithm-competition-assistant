@@ -1,11 +1,43 @@
-*.pyc
+# --- build / packaging artefacts (this package ships none) ----------------
+# Sublime Text compiles every .py it loads in the package root, and the
+# .pyc files land next to the source unless -B is used. Two versions of
+# every module show up because both host Pythons touched the plugin.
 __pycache__/
-.DS_Store
-Thumbs.db
-.omo/
-.omo
-*.sublime-package
-.agent-teams/
-.codegraph/
+*.py[cod]
+*.pyo
+
+# --- old snapshots, kept locally for diffs but not for the user ----------
+# Sublime loads every .py in the package directory; a .py.bak file is not
+# loaded, but it does clutter a directory the user browses.
+*.bak-*
+*.orig
+*~
+
+# --- developer scratch, not part of the plugin ---------------------------
 .workbuddy/
 .workbuddy-ai/
+.zcode/
+_fake_packages/
+tmp_*/
+*.mjs
+.dwf/
+
+# --- scratch dirs other tools left behind (seen in the upstream tree) ----
+# Kept so a checkout of this package never picks them up if they appear.
+.omo/
+.omo
+.agent-teams/
+.codegraph/
+
+# --- editor / OS ---------------------------------------------------------
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+
+# --- test output ---------------------------------------------------------
+/fixtures/
+/tmp/
+*.log
+*.sublime-package
+!messages/*.txt

@@ -255,8 +255,3 @@ def _cleanup(workdir):
 		os.rmdir(workdir)
 	except Exception:
 		pass
-
-
-def quote_argv(argv):
-	"""Only used for the status/doctor text."""
-	return ' '.join(shlex.quote(a) for a in argv)

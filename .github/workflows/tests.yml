@@ -54,5 +54,17 @@ jobs:
       - name: Regression tests (no Sublime required)
         run: python tests/run_tests.py
 
+      # A directory handed to the import dialog produced
+      # `[Errno 13] Permission denied` on Windows, which reads like a real
+      # permissions problem and sends the user looking in the wrong place.
+      - name: Import guards reject directories, not files
+        run: python tests/check_import_dir.py
+
+      # Numbers for the "is a C++ rewrite worth it" answer. Not a gate: it
+      # prints what the Python parts cost compared with a g++ compile.
+      - name: Cost of the Python layer (informational)
+        if: always()
+        run: python tests/check_perf.py
+
       - name: Byte-compile every module
         run: python -m compileall -q .

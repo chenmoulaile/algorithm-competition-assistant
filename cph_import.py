@@ -22,20 +22,61 @@ from .core.cph_tests_merge import merge_tests, merge_into_file
 from .core.cph_i18n import t
 
 
+def _strip_input_suffix(stem):
+    """"1.in" -> "1" so "1.out.txt" pairs correctly with "1.in.txt"."""
+    return re.sub(r'(?i)\.in$', '', stem)
+
+
+def _is_dir(path):
+    """True when the path is an existing directory.
+
+    `os.path.exists()` says True for a directory too, and a directory
+    being "there" is not the same as a data file being there.
+    """
+    try:
+        return os.path.isdir(path)
+    except Exception:
+        return False
+
+
+def _is_file_like(path):
+    """True for a regular file, or a symlink/hard link to one.
+
+    Directories are excluded explicitly: `[Errno 13] Permission denied`
+    is what Windows raises when open() is handed a directory.
+    """
+    try:
+        if os.path.isdir(path):
+            return False
+        return os.path.isfile(path)
+    except Exception:
+        return False
+
+
 def _read_text(file_path):
     """Read test data tolerating non-UTF-8 encodings.
 
     Chinese OJ data is often GB2312/GBK; strict UTF-8 decoding used to
     abort the whole import with an exception.
+
+    Passing a DIRECTORY used to surface as Windows'
+    `[Errno 13] Permission denied: '<dir>'`, which reads like a real
+    permissions problem instead of "this is a folder". Explorer's
+    "Copy as path" produces a folder path just as happily as a file
+    path, so all four import flows could be fed one. Detected here, at
+    the single reading chokepoint, with a message that says what to do.
     """
+    if not file_path or _is_dir(file_path):
+        # str(e) of the old PermissionError was the raw errno 13 text;
+        # this says what actually went wrong.
+        raise IOError('%s is a directory, not a test data file - point at '
+                      'a .in/.out file, or use "import from folder"'
+                      % (file_path or '(empty path)'))
     # A UTF-16 BOM must be handled before the UTF-8 attempt: UTF-16 bytes
     # decode "successfully" as UTF-8 (mojibake) or fall through to gb18030,
     # so the utf-16 branch below could never actually be reached.
-    try:
-        with open(file_path, 'rb') as fb:
-            head = fb.read(2)
-    except Exception:
-        head = b''
+    with open(file_path, 'rb') as fb:
+        head = fb.read(2)
     if head in (b'\xff\xfe', b'\xfe\xff'):
         with open(file_path, 'r', encoding='utf-16') as f:
             return f.read()
@@ -107,6 +148,9 @@ class CphImportTestsCommand(sublime_plugin.TextCommand):
         def on_done(input_path):
             if not input_path:
                 return
+            if _is_dir(input_path):
+                sublime.error_message(t('path_is_directory', path=input_path))
+                return
             candidates = self._find_output_for_input(input_path)
             if not candidates:
                 sublime.status_message(t('output_file_not_found'))
@@ -162,11 +206,11 @@ class CphImportTestsCommand(sublime_plugin.TextCommand):
         for stem in stems:
             for new_ext in ['.out', '.ans', '.out.txt', '.ans.txt', '.txt']:
                 cand = stem + new_ext
-                if os.path.exists(cand) and cand != input_path:
+                if _is_file_like(cand) and cand != input_path:
                     candidates.append(cand)
         for new_name in ['out.txt', 'output.txt', 'stdout.txt', 'ans.txt']:
             cand = os.path.join(os.path.dirname(input_path), new_name)
-            if os.path.exists(cand) and cand != input_path:
+            if _is_file_like(cand) and cand != input_path:
                 candidates.append(cand)
         return sorted(set(candidates))
 
@@ -204,7 +248,14 @@ class CphImportTestsCommand(sublime_plugin.TextCommand):
         )
 
     def _do_import_single(self, file_path):
-        if not file_path or not os.path.exists(file_path):
+        if not file_path:
+            return
+        # Windows reports "Permission denied" for a directory handed to
+        # open(); say what actually happened before the read attempt.
+        if _is_dir(file_path):
+            sublime.error_message(t('path_is_directory', path=file_path))
+            return
+        if not os.path.exists(file_path):
             sublime.status_message(t('file_not_found'))
             return
 
@@ -277,8 +328,16 @@ class CphImportTestsCommand(sublime_plugin.TextCommand):
 
     def _do_import_from_folder(self, selected_path, window):
         """Import all .in/.out pairs from a folder; merges (dedup) with existing tests."""
-        if not selected_path or not os.path.isdir(selected_path):
-            sublime.status_message(t('file_not_found'))
+        if not selected_path:
+            return
+        # A data FILE pasted here used to reach open() and surface as
+        # `[Errno 13] Permission denied` on Windows (a file that is not a
+        # directory is refused with the same errno in reverse). Say so.
+        if not os.path.isdir(selected_path):
+            if os.path.exists(selected_path):
+                sublime.error_message(t('path_is_file_not_dir', path=selected_path))
+            else:
+                sublime.status_message(t('file_not_found'))
             return
 
         in_files = []
@@ -286,12 +345,13 @@ class CphImportTestsCommand(sublime_plugin.TextCommand):
             in_files.extend(glob.glob(os.path.join(selected_path, pattern)))
 
         if not in_files:
-            sublime.status_message(t('no_test_files_in_dir'))
+            sublime.error_message(t('no_test_files_in_dir'))
             return
 
         in_files.sort()
 
         new_tests = []
+        skipped = []
         for in_file in in_files:
             # ".in.txt" must lose BOTH suffixes, otherwise the base
             # becomes "1.in" and no "1.out.txt" is ever found.
@@ -299,7 +359,7 @@ class CphImportTestsCommand(sublime_plugin.TextCommand):
             out_file = None
             for out_ext in ['.out', '.ans', '.ans.txt', '.out.txt']:
                 candidate = base_file + out_ext
-                if os.path.exists(candidate):
+                if _is_file_like(candidate):
                     out_file = candidate
                     break
 
@@ -311,12 +371,24 @@ class CphImportTestsCommand(sublime_plugin.TextCommand):
 
                 new_tests.append({'test': inp, 'correct_answers': [out] if out else []})
             except Exception as e:
+                # Keep going: one unreadable pair must not abort the batch,
+                # but the user has to be able to see WHY the count is low -
+                # a console-only print() left a silently truncated import
+                # looking like success.
+                skipped.append('%s (%s)' % (os.path.basename(in_file), e))
                 print('[Algorithm Competition Assistant] Failed to import %s: %s' % (in_file, e))
 
         if new_tests:
+            # "3 of 5 imported, 2 skipped" beats "imported 3 tests" when a
+            # sample is locked or oversized.
+            if skipped:
+                sublime.status_message(t('import_partially_done',
+                                          kept=len(new_tests),
+                                          total=len(new_tests) + len(skipped)))
             self._save_and_show(new_tests, selected_path, append=True)
         else:
-            sublime.error_message(t('import_save_failed'))
+            detail = ('; '.join(skipped))[:200] if skipped else ''
+            sublime.error_message(t('import_failed', error=detail or t('no_test_files_in_dir')))
 
     # ---------- shared ----------
 
@@ -361,6 +433,12 @@ class CphImportTestsHereCommand(CphImportTestsCommand):
 
 
 class CphPickImportFileCommand(sublime_plugin.TextCommand):
+    """Pick ONE data file next to the source file and import it.
+
+    A directory would be listed by a plain "every file here" scan, and
+    opening one is what produced `[Errno 13] Permission denied`.
+    """
+
     def is_visible(self, event=None, **kwargs):
         """Context menu: only offered where this package applies.
 
@@ -382,14 +460,23 @@ class CphPickImportFileCommand(sublime_plugin.TextCommand):
         src_dir = os.path.dirname(src_file)
 
         candidates = []
-        for f in sorted(os.listdir(src_dir)):
+        try:
+            entries = sorted(os.listdir(src_dir))
+        except Exception as e:
+            sublime.error_message(t('read_failed', error=str(e)))
+            return
+        for f in entries:
             full = os.path.join(src_dir, f)
-            if os.path.isfile(full) and (f.endswith('.in') or f.endswith('.out') or
-                                         f.endswith('.in.txt') or f.endswith('.out.txt') or
-                                         f.endswith('.ans') or f == 'in.txt' or
-                                         f == 'input.txt' or f == 'out.txt' or
-                                         f == 'output.txt' or f == 'sample.txt' or
-                                         (f.endswith('.txt') and not f.endswith('__tests'))):
+            # os.path.isfile() alone is not enough: a symlink to a
+            # directory is a file for the OS but open() refuses it.
+            if not _is_file_like(full):
+                continue
+            if (f.endswith('.in') or f.endswith('.out') or
+                    f.endswith('.in.txt') or f.endswith('.out.txt') or
+                    f.endswith('.ans') or f == 'in.txt' or
+                    f == 'input.txt' or f == 'out.txt' or
+                    f == 'output.txt' or f == 'sample.txt' or
+                    (f.endswith('.txt') and not f.endswith('__tests'))):
                 candidates.append([f, full])
 
         if not candidates:
@@ -415,16 +502,20 @@ class CphImportTestsFileCommand(sublime_plugin.TextCommand):
             sublime.status_message(t('save_file_first'))
             return
 
+        if _is_dir(file_path):
+            sublime.error_message(t('path_is_directory', path=file_path))
+            return
+
         candidates = []
         base, ext = os.path.splitext(file_path)
         for new_ext in ['.out', '.ans']:
             p = base + new_ext
-            if os.path.exists(p):
+            if _is_file_like(p):
                 candidates.append(p)
         if ext in ('.in', '.in.txt', '.txt') and 'in' in os.path.basename(file_path).lower():
             for new_name in ['out.txt', 'output.txt', 'stdout.txt', 'ans.txt']:
                 p = os.path.join(os.path.dirname(file_path), new_name)
-                if os.path.exists(p):
+                if _is_file_like(p):
                     candidates.append(p)
 
         try:

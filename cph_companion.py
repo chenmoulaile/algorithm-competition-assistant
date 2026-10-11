@@ -22,7 +22,7 @@ import threading
 
 from .core.cph_i18n import t
 from .core.cph_settings import (get_settings, load_all_tests, save_tests,
-								set_problem_limits)
+								set_problem_limits, settings_file)
 from .core.cph_tests_merge import merge_tests as merge_stored_with
 from .core.cph_state import set_listener
 
@@ -209,6 +209,10 @@ def _auto_create_file(view, problem_name):
     Returns the view for the new file, or None when auto-create is off or no
     usable directory could be found (in which case the caller reports the
     usual 'no target' message).
+
+    A directory that exists but cannot be written to is a different story:
+    the caller cannot tell that apart from "no target", so the failure is
+    reported here, where the path and the OS error are still known.
     """
     settings = get_settings() or {}
     if not settings.get('auto_create_file', True):
@@ -232,7 +236,8 @@ def _auto_create_file(view, problem_name):
     try:
         if not os.path.isdir(directory):
             os.makedirs(directory)
-    except Exception:
+    except Exception as e:
+        sublime.status_message(t('auto_create_failed', path=directory, error=str(e)))
         return None
 
     path = os.path.join(directory, '%s.%s' % (name, ext))
@@ -245,7 +250,8 @@ def _auto_create_file(view, problem_name):
     try:
         with open(path, 'w', encoding='utf-8', newline='\n') as handle:
             handle.write(skeleton)
-    except Exception:
+    except Exception as e:
+        sublime.status_message(t('auto_create_failed', path=path, error=str(e)))
         return None
 
     window = view.window() or sublime.active_window()
@@ -276,7 +282,7 @@ def _start_listener(view):
             return
         port = 12345
         try:
-            port = int(sublime.load_settings('Algorithm Competition Assistant.sublime-settings')
+            port = int(sublime.load_settings(settings_file)
                        .get('companion_port', 12345) or 12345)
             server = HTTPServer(('localhost', port), _CompanionHandler)
         except Exception as e:

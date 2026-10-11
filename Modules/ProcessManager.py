@@ -28,9 +28,12 @@ from ..core.cph_gdb_trace import (find_gdb as _find_gdb, find_crash as _find_cra
 #: byte, which was the slow path described in 问题2.
 _READ_CHUNK = 65536
 
-#: -fsanitize=... (the value may be a comma list). Matched with \S+ so
-#: `-fsanitize=address,undefined` is removed whole.
-_SANITIZE_FLAG = re.compile(r'-fsanitize=\S+')
+#: Every -fsanitize flag, value included (the value may be a comma list, and
+#: the trap form is a second flag: `-fsanitize=undefined
+#: -fsanitize-trap=undefined`). Matched with \S* so both are removed whole -
+#: r'-fsanitize=\S+' used to leave the trap half behind as an orphan, which
+#: still compiles but silently turns undefined behaviour into ud2.
+_SANITIZE_FLAG = re.compile(r'-fsanitize\S*')
 
 
 def _hidden_startupinfo():
@@ -45,6 +48,12 @@ def _hidden_startupinfo():
 def _sanitizer_fallback_note():
 	"""One-line explanation shown when a sanitizer build had to be retried.
 
+	Since debug mode's own default pair (-fsanitize=undefined
+	-fsanitize-trap=undefined) needs no runtime library, this note now only
+	fires for a sanitizer the user wrote into compile_cmd themselves - hence
+	the hint line, which says so instead of leaving them to wonder why the
+	plugin's own debug mode suddenly lost its sanitizer.
+
 	t() returns the key itself while the string is not in core/cph_i18n.py
 	yet, so a literal fallback keeps the message meaningful in the meantime
 	(the canonical text lands there via i18nKeysNeeded).
@@ -54,7 +63,11 @@ def _sanitizer_fallback_note():
 		msg = ('本机工具链缺少 sanitizer 运行库 (ld: cannot find -lubsan/-lasan), '
 			   '已自动去掉 -fsanitize 参数重新编译一次; debug 模式的 -D_GLIBCXX_ASSERTIONS '
 			   '不依赖该运行库, 越界等未定义行为仍会中止并判 RE')
-	return '[Algorithm Competition Assistant] %s\n' % msg
+	hint = t('sanitizer_fallback_hint')
+	if hint == 'sanitizer_fallback_hint':
+		hint = ('（这条只会在你自己往 compile_cmd 里写了 -fsanitize=address 之类时才出现；'
+				'插件默认用的 -fsanitize=undefined -fsanitize-trap=undefined 不需要运行库）')
+	return '[Algorithm Competition Assistant] %s %s\n' % (msg, hint)
 
 
 _SHELL_METACHARS = set('|&;<>()`$\n*?[]{}~')

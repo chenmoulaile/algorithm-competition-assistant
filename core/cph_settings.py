@@ -19,7 +19,16 @@ _package_root = path.dirname(path.dirname(__file__))
 root_dir = _package_root
 base_name = path.split(_package_root)[1]
 
+# The display name changed in v2.4.4. The DATA files (practice statistics,
+# machine calibration, tests suffix) deliberately keep their old names so a
+# user who already has months of data does not lose it - only the settings
+# file the package itself is loaded from was renamed.
 settings_file = 'Algorithm Competition Assistant.sublime-settings'
+
+#: User-visible name. The directory on disk may still be 'cph-by-chenkx' (the
+#: repository name), so never build a packages/ path out of this constant -
+#: base_name above is the directory, this is only for captions and messages.
+PACKAGE_NAME = 'Algorithm Competition Assistant'
 
 tests_file_suffix_default = '__tests'
 tests_relative_dir_default = ''
@@ -55,12 +64,6 @@ def get_supported_exts(lang):
 				return option['extensions']
 		return []
 	return []
-
-
-def is_lang_view(view, lang):
-	if view.file_name() is None:
-		return False
-	return path.splitext(view.file_name())[1][1:] in get_supported_exts(lang)
 
 
 def try_load_settings():
@@ -143,22 +146,6 @@ def get_tests_file_path(file):
 	return os.path.join(dirname, filename + suffix)
 
 
-def get_folder_tests_file_path(file):
-	if not file:
-		return None
-	dirname = os.path.dirname(file)
-	filename = os.path.basename(file)
-	suffix = get_tests_file_suffix()
-	folder_name = get_tests_folder_name()
-	folder_dir = os.path.join(dirname, folder_name)
-	if not os.path.exists(folder_dir):
-		try:
-			os.makedirs(folder_dir)
-		except:
-			pass
-	return os.path.join(folder_dir, filename + suffix)
-
-
 def load_all_tests(file):
 	all_paths = get_tests_paths(file)
 	seen = set()
@@ -235,7 +222,7 @@ def save_tests(file, tests):
 		if not os.path.exists(target_dir):
 			try:
 				os.makedirs(target_dir)
-			except:
+			except Exception:
 				pass
 		target_path = os.path.join(target_dir, filename + suffix)
 	elif os.path.exists(os.path.join(dirname, filename + suffix)):
@@ -245,7 +232,7 @@ def save_tests(file, tests):
 		if not os.path.exists(target_dir):
 			try:
 				os.makedirs(target_dir)
-			except:
+			except Exception:
 				pass
 		target_path = os.path.join(target_dir, filename + suffix)
 

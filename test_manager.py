@@ -21,6 +21,7 @@ from .core.cph_checker import (config as checker_config,
 							   executable as checker_executable,
 							   judge as checker_judge)
 from .core.cph_stats import record_run as stats_record_run
+from .core.cph_stats import take_save_error as stats_take_save_error
 from .core.cph_subtasks import (parse as subtask_parse,
 								evaluate as subtask_evaluate,
 								html as subtask_html)
@@ -38,6 +39,21 @@ from .core.cph_i18n import t
 # Ctrl+Alt+B used to recompile synchronously (up to 30s) on every run even
 # when nothing had changed, which made iterating on one sample painful.
 _compile_cache = {}
+
+#: Files already told "a WA in release mode may be hidden UB, try Debug".
+#: One note per file per session - a wrong answer is normal, and a lecture on
+#: every WA would be noise.
+_WA_RELEASE_HINTED = set()
+
+#: How many differing lines the detail view spells out. Every entry costs
+#: three lines ("Line N:", expected, actual), and a diff can hold one entry
+#: per line of output. At the default 8 MB max_output_bytes a single WA
+#: produced 42 MB / 2.4 M lines of detail text (measured: 800k differing
+#: lines -> 0.4 s to diff, 0.55 s to build, and then Sublime has to lay out
+#: two million lines). The count line above still reports the true total, the
+#: raw outputs right below are complete, and the run view shows the whole
+#: output - so a cap here costs nothing but the wall of text.
+_DETAIL_DIFF_LIMIT = 200
 
 
 def _iter_local_includes(path, seen=None, depth=3):
@@ -1354,6 +1370,12 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					verdicts.append(verdict['name'])
 			if verdicts:
 				stats_record_run(file_name, verdicts)
+			# The store is best-effort, but silence is not: a read-only User
+			# directory means the report quietly stays empty forever, and the
+			# only trace used to be a console print nobody reads.
+			problem = stats_take_save_error()
+			if problem:
+				sublime.status_message(t('stats_save_failed', error=problem))
 		except Exception as e:
 			print('[Algorithm Competition Assistant] stats: %s' % e)
 
@@ -1813,12 +1835,17 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			else:
 				lines.append(t('diff_lines_differ', n=len(ops), total=total))
 				lines.append('')
-				for kind, line_no, e, a in ops:
+				shown = ops[:_DETAIL_DIFF_LIMIT]
+				for kind, line_no, e, a in shown:
 					lines.append('  Line %d:' % line_no)
 					if kind != '+':
 						lines.append('- %s: %s' % (t('expected_short'), e if e else t('detail_empty')))
 					if kind != '-':
 						lines.append('+ %s: %s' % (t('actual_short'), a if a else t('detail_empty')))
+				if len(ops) > len(shown):
+					lines.append('')
+					lines.append(t('diff_shown_truncated', shown=len(shown),
+						n=len(ops)))
 		lines.append('')
 
 		if test.stderr and test.stderr.strip():
@@ -2285,7 +2312,14 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 	def memorize_tests(self):
 		if self.tester and self.dbg_file:
 			tests_data = [x.memorize() for x in (self.tester.get_tests())]
-			save_tests(self.dbg_file, tests_data)
+			if not save_tests(self.dbg_file, tests_data):
+				# Every other save path reports this (cph_companion,
+				# cph_extras, cph_import, cph_stress). Silently dropping it
+				# here meant "my test points are gone" with no explanation.
+				# Not a status_message: a read-only folder fails on every
+				# single run, and the tests are already shown in the view.
+				print('[Algorithm Competition Assistant] %s'
+					% t('tests_save_failed', path=self.dbg_file))
 
 	def on_insert(self, s):
 		self.view.run_command('cph_test_manager', {'action': 'insert_opd_input', 'text': s})
@@ -2466,6 +2500,22 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			existing = self.tester.tests[test_id].message
 			self.tester.tests[test_id].message = \
 				(existing + '\n' if existing else '') + checker_message
+
+		# Release mode cannot see undefined behaviour, and that is the one
+		# failure the user cannot explain from the output: at -O2 an
+		# out-of-bounds read returns heap garbage, so the program prints a
+		# random number and exits 0 - the verdict is a plain WA with nothing
+		# pointing at the real cause. Checked after the checker so an SPJ that
+		# accepted the answer does not get the note, and mentioned once per
+		# file: a wrong answer is normal and must not come with a lecture.
+		if self.tester.tests[test_id].verdict['name'] == 'WA' \
+				and not build_mode_label(self.dbg_file):
+			key = (self.dbg_file or '').replace('\\', '/').lower()
+			if key and key not in _WA_RELEASE_HINTED:
+				_WA_RELEASE_HINTED.add(key)
+				existing = self.tester.tests[test_id].message
+				self.tester.tests[test_id].message = \
+					(existing + '\n' if existing else '') + t('wa_release_hint')
 
 		self.tester.tests[test_id].set_stderr(stderr)
 		self.tester.tests[test_id].set_expected_output(expected_output)
@@ -2872,6 +2922,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			v.run_command('toggle_setting', {'setting': 'word_wrap'})
 
 		previously_accepted = set()
+		clear_failures = []
 		if not clr_tests:
 			# Try to load tests from all possible locations (traditional + cph-ng style folder)
 			loaded_data = load_all_tests(run_file)
@@ -2893,7 +2944,13 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					with open(tests_path, 'w', encoding='utf-8') as f:
 						f.write('[]')
 				except Exception as e:
+					# A file that cannot be emptied is not cosmetic: the next
+					# load_all_tests() merges it straight back, so the user
+					# presses "clear tests" and the tests return.
 					print('[Algorithm Competition Assistant] failed to clear %s: %s' % (tests_path, e))
+					clear_failures.append('%s: %s' % (tests_path, e))
+			if clear_failures:
+				sublime.status_message(t('tests_clear_failed', error='; '.join(clear_failures)[:300]))
 			tests = []
 
 		if not load_session:
@@ -3252,7 +3309,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			try:
 				if self.tester is not None:
 					self.tester.terminate()
-			except:
+			except Exception:
 				print('[Algorithm Competition Assistant] process terminating error')
 
 		elif action == 'new_test':
@@ -3473,7 +3530,7 @@ class CphViewTesterCommand(sublime_plugin.TextCommand):
 			if get_settings().get('close_sidebar'):
 				try:
 					sublime.set_timeout_async(lambda window=window: window.set_sidebar_visible(False), 50)
-				except:
+				except Exception:
 					pass
 			dbg_view.run_command('toggle_setting', {'setting': 'word_wrap'})
 

@@ -34,17 +34,9 @@ STRINGS = {
         'zh': '内存',
         'en': 'mem',
     },
-    'close': {
-        'zh': '关闭',
-        'en': 'close',
-    },
     'accept': {
         'zh': '接受',
         'en': 'accept',
-    },
-    'has_stderr': {
-        'zh': '有 stderr',
-        'en': 'stderr',
     },
     'decline': {
         'zh': '拒绝',
@@ -142,6 +134,13 @@ STRINGS = {
         'zh': '抓取失败：HTTP {code}（{url}）',
         'en': 'fetch failed: HTTP {code} ({url})',
     },
+    'fetch_response_too_large': {
+        'zh': '抓取失败：页面超过 max_fetch_bytes 上限（{limit}），已中止下载；'
+              '确需更大的页面可在设置里调高 max_fetch_bytes',
+        'en': 'fetch failed: the page is larger than the max_fetch_bytes cap '
+              '({limit}); raise max_fetch_bytes in the settings if you really '
+              'need bigger pages',
+    },
     'fetch_failed': {
         'zh': '抓取失败：{error}（{url}）',
         'en': 'fetch failed: {error} ({url})',
@@ -167,6 +166,10 @@ STRINGS = {
         'zh': '> 来源：{url}',
         'en': '> Source: {url}',
     },
+    'statement_summary': {
+        'zh': '题面摘要：{text}',
+        'en': 'statement: {text}',
+    },
     'statement_empty': {
         'zh': '题面解析为空（可能需要在浏览器里登录）',
         'en': 'the statement parsed as empty (it may need a login)',
@@ -183,10 +186,6 @@ STRINGS = {
     'contest_stopped': {
         'zh': '比赛计时已停止',
         'en': 'contest timer stopped',
-    },
-    'contest_remaining': {
-        'zh': '剩余 {time}',
-        'en': '{time} left',
     },
     'contest_finished': {
         'zh': '比赛时间到！',
@@ -218,9 +217,53 @@ STRINGS = {
         'zh': '练习统计已清空',
         'en': 'practice statistics cleared',
     },
-    'stats_title': {
-        'zh': '练习统计（最近 {days} 天）',
-        'en': 'practice statistics (last {days} days)',
+    # --- 统计报告正文（core/cph_stats.py 的 summary() 输出） -----------------
+    # summary() itself stays i18n-free: it is a pure-stdlib module that must
+    # also run from a plain script, and importing cph_i18n there would drag
+    # the whole plugin in. These keys are looked up by name inside
+    # render_summary(), so they are whitelisted in tests/run_tests.py
+    # (STATS_I18N_KEYS) instead of being called through t('key').
+    # the report body (cph_extras.CphStatsCommand), which already imports t().
+    'stats_summary_header': {
+        'zh': '练习统计（最近 {days} 天）：{problems} 道题，{runs} 次运行',
+        'en': 'practice statistics (last {days} days): {problems} problems, '
+              '{runs} runs',
+    },
+    'stats_summary_solved': {
+        'zh': '已解决：{count}',
+        'en': 'Solved: {count}',
+    },
+    'stats_summary_per_day': {
+        'zh': '按天：',
+        'en': 'Per-day:',
+    },
+    'stats_summary_day_row': {
+        'zh': '  {date}  {runs} 次运行  {solved} 次首 AC',
+        'en': '  {date}  {runs} runs  {solved} solved',
+    },
+    'stats_summary_no_runs': {
+        'zh': '  （没有运行记录）',
+        'en': '  (no runs)',
+    },
+    'stats_summary_needs_work': {
+        'zh': '待加强（{count}）：',
+        'en': 'Needs work ({count}):',
+    },
+    'stats_summary_needs_row': {
+        'zh': '  {index}. {file}  尝试 {attempts} 次',
+        'en': '  {index}. {file}  attempts={attempts}',
+    },
+    'stats_summary_needs_none': {
+        'zh': '  无',
+        'en': '  none',
+    },
+    'stats_summary_stress': {
+        'zh': '对拍累计：{count} 轮',
+        'en': 'Stress rounds: {count}',
+    },
+    'stats_summary_total_time': {
+        'zh': '总用时：{duration}',
+        'en': 'Total time on task: {duration}',
     },
     'stress_seed': {
         'zh': '本轮随机种子 seed = {seed}（生成器可通过环境变量 CPH_SEED 复现）',
@@ -250,13 +293,12 @@ STRINGS = {
         'zh': 'interactor 编译失败：{cmd}\n{error}',
         'en': 'interactor failed to compile: {cmd}\n{error}',
     },
+    # Reached through the dynamic key t(label) in test_manager.py
+    # (label = 'interactive_running' if interactive else 'parallel_running').
+    # NOT dead: the static literal scan cannot see it - keep on the whitelist.
     'interactive_running': {
         'zh': '交互题：正在与 interactor 交互（{done}/{total}）',
         'en': 'interactive: talking to the interactor ({done}/{total})',
-    },
-    'interactor_label': {
-        'zh': 'interactor 对话',
-        'en': 'interactor dialogue',
     },
     'checker_missing': {
         'zh': '找不到 checker 文件：{path}（{error}）',
@@ -274,19 +316,7 @@ STRINGS = {
         'zh': 'SPJ 判定：{verdict}',
         'en': 'judged by the checker: {verdict}',
     },
-    'checker_label': {
-        'zh': 'checker 输出',
-        'en': 'checker output',
-    },
-    'checker_disabled': {
-        'zh': '该语言没有配置 checker（run_settings 里的 "checker"），仍按逐 token 比较',
-        'en': 'no checker configured for this language (run_settings "checker"); '
-              'falling back to token comparison',
-    },
-    'checker_ok': {
-        'zh': 'checker 可用：{path}',
-        'en': 'checker ready: {path}',
-    },
+    # Dynamic key: see the note on interactive_running above.
     'parallel_running': {
         'zh': '并行运行测试点：{done}/{total}',
         'en': 'running tests in parallel: {done}/{total}',
@@ -313,6 +343,18 @@ STRINGS = {
               'looping forever. If it works in a terminal, check that the '
               'whole sample was pasted.',
     },
+    'wa_release_hint': {
+        'zh': 'Release 模式看不出未定义行为：数组越界读在 -O2 下会读到堆里的垃圾值，'
+              '程序照样 exit 0，判定只能是 WA。若这题逻辑上应该对，按 Ctrl+Alt+G '
+              '切到 Debug 再跑一次（会加上断言与 sanitizer，越界会直接中止并给出'
+              '文件:行号）。本条提示每题只出现一次。',
+        'en': 'release mode cannot see undefined behaviour: an out-of-bounds '
+              'read at -O2 returns heap garbage, the program still exits 0, and '
+              'the verdict can only be WA. If this should be correct, press '
+              'Ctrl+Alt+G to switch to Debug and run again (assertions and the '
+              'sanitizer are added, so the out-of-bounds read aborts with a '
+              'file:line). Shown once per problem.',
+    },
     # ---- sanitizer 回退 ----
     'sanitizer_fallback': {
         'zh': '本机工具链缺少 sanitizer 运行库 (ld: cannot find -lubsan/-lasan), '
@@ -325,6 +367,13 @@ STRINGS = {
               'out-of-bounds and other undefined behaviour still abort and '
               'are judged RE',
     },
+    'sanitizer_fallback_hint': {
+        'zh': '（这条只会在你自己往 compile_cmd 里写了 -fsanitize=address 之类时才出现；'
+              '插件默认用的 -fsanitize=undefined -fsanitize-trap=undefined 不需要运行库）',
+        'en': '(This only appears when your own compile_cmd carries a sanitizer '
+              'such as -fsanitize=address; the default '
+              '-fsanitize=undefined -fsanitize-trap=undefined needs no runtime)',
+    },
     'diff': {
         'zh': '差异',
         'en': 'Diff',
@@ -332,22 +381,6 @@ STRINGS = {
     'cannot_action_while_running': {
         'zh': '运行中无法{action}',
         'en': 'can not {action} while process running',
-    },
-    'listen_companion': {
-        'zh': '监听 Competitive Companion',
-        'en': 'Listen to Competitive Companion',
-    },
-    'server_started': {
-        'zh': 'Algorithm Competition Assistant 监听已启动，等待 Competitive Companion 发送数据...',
-        'en': 'Algorithm Competition Assistant listener started, waiting for Competitive Companion...',
-    },
-    'tests_loaded': {
-        'zh': '已加载 {count} 个测试用例',
-        'en': 'Loaded {count} test cases',
-    },
-    'tests_loaded_with_limits': {
-        'zh': '已加载 {count} 个测试用例（时间限制: {time}ms, 内存限制: {memory}MB）',
-        'en': 'Loaded {count} test cases (Time limit: {time}ms, Memory limit: {memory}MB)',
     },
     'process_terminated': {
         'zh': '进程已终止',
@@ -365,21 +398,9 @@ STRINGS = {
         'zh': '进程已在运行',
         'en': 'process already running',
     },
-    'no_more_tests': {
-        'zh': '已是最后一个测试',
-        'en': 'no more tests',
-    },
     'cant_restore_session': {
         'zh': '无法恢复会话',
         'en': 'Can\'t restore session',
-    },
-    'session_saved': {
-        'zh': 'Algorithm Competition Assistant: 会话已保存',
-        'en': 'Algorithm Competition Assistant: session saved',
-    },
-    'settings_loaded': {
-        'zh': 'Algorithm Competition Assistant: 设置已加载',
-        'en': 'Algorithm Competition Assistant: settings loaded',
     },
     'next_test': {
         'zh': '下一个测试',
@@ -389,10 +410,6 @@ STRINGS = {
         'zh': '处理 POST 请求出错 - {error}',
         'en': 'Error handling POST - {error}',
     },
-    'error_starting_thread': {
-        'zh': '错误: 无法启动线程 - {error}',
-        'en': 'Error: unable to start thread - {error}',
-    },
     'new_test_file_path': {
         'zh': '测试用例文件路径: {path}',
         'en': 'New test case path: {path}',
@@ -401,10 +418,6 @@ STRINGS = {
         'zh': '编译错误',
         'en': 'compilation error',
     },
-    'hide_phantoms': {
-        'zh': '隐藏面板',
-        'en': 'hide phantoms',
-    },
     'save': {
         'zh': '保存',
         'en': 'save',
@@ -412,30 +425,6 @@ STRINGS = {
     'delete': {
         'zh': '删除',
         'en': 'delete',
-    },
-    'show_phantoms': {
-        'zh': '显示面板',
-        'en': 'show phantoms',
-    },
-    'debugger_enabled': {
-        'zh': '调试器已启用',
-        'en': 'debugger enabled',
-    },
-    'debugger_disabled': {
-        'zh': '调试器已禁用',
-        'en': 'debugger disabled',
-    },
-    'no_input_provided': {
-        'zh': '请输入测试数据',
-        'en': 'No input provided',
-    },
-    'expand_test': {
-        'zh': '展开测试',
-        'en': 'expand test',
-    },
-    'fold_test': {
-        'zh': '折叠测试',
-        'en': 'fold test',
     },
     'import_from_pair': {
         'zh': '从 in/out 文件对导入 (cph-ng 风格)',
@@ -489,6 +478,18 @@ STRINGS = {
         'zh': '读取文件失败: {error}',
         'en': 'Failed to read file: {error}',
     },
+    'path_is_directory': {
+        'zh': '{path} 是文件夹，不是测试数据文件：请指向具体的 .in / .out 文件，或用"从文件夹批量导入"',
+        'en': '{path} is a folder, not a test data file: point at a .in/.out file, or use "import from folder"',
+    },
+    'path_is_file_not_dir': {
+        'zh': '{path} 是文件，不是文件夹：请在路径栏填数据所在的文件夹，或改用"从单个文件导入"',
+        'en': '{path} is a file, not a folder: put the folder holding the data in the path bar, or use "import from a single file"',
+    },
+    'import_partially_done': {
+        'zh': '已导入 {kept} / {total} 个数据文件，其余读取失败（详见 Sublime 控制台）',
+        'en': 'imported {kept} of {total} data files; the rest failed to read (see the Sublime console)',
+    },
     'file_not_found': {
         'zh': '文件不存在',
         'en': 'File not found',
@@ -508,14 +509,6 @@ STRINGS = {
     'save_file_first': {
         'zh': '请先保存当前文件',
         'en': 'Please save the current file first',
-    },
-    'stress_test': {
-        'zh': '对拍',
-        'en': 'Stress Test',
-    },
-    'stress_test_desc': {
-        'zh': '使用 std 与用户程序对拍 (生成随机数据, 比较输出)',
-        'en': 'Stress test against standard solution with random data',
     },
     'stress_running': {
         'zh': '对拍进行中...',
@@ -587,14 +580,6 @@ STRINGS = {
               ' a debug() call left inside a loop is extremely slow (stderr is'
               ' unbuffered) and times out locally; remove it or drop -DLOCAL',
     },
-    'stress_choose_std': {
-        'zh': '请先选择 std 文件',
-        'en': 'Please choose the standard (std) file first',
-    },
-    'stress_choose_generator': {
-        'zh': '请先选择数据生成器文件',
-        'en': 'Please choose the data generator file first',
-    },
     'choose_std_file': {
         'zh': '选择 std (标准) 文件',
         'en': 'Choose std (standard) file',
@@ -602,10 +587,6 @@ STRINGS = {
     'choose_generator_file': {
         'zh': '选择数据生成器文件',
         'en': 'Choose data generator file',
-    },
-    'generator_hint': {
-        'zh': '提示: 数据生成器应输出随机测试数据到 stdout',
-        'en': 'Hint: generator should output random test data to stdout',
     },
     'stress_time_limit': {
         'zh': '对拍时间限制(秒)',
@@ -615,17 +596,14 @@ STRINGS = {
         'zh': '对拍最大轮数',
         'en': 'Stress test max rounds',
     },
-    'choose_stress_files': {
-        'zh': '选择对拍文件',
-        'en': 'Choose stress test files',
-    },
-    'stress_files_needed': {
-        'zh': '需要 std 文件和 generator 文件',
-        'en': 'Need both std file and generator file',
-    },
     'stress_finished': {
         'zh': '对拍结束，用时 {seconds} 秒',
         'en': 'stress test finished in {seconds}s',
+    },
+    'stress_summary': {
+        'zh': '本轮统计: 共 {rounds} 轮, 实际比较 {compared} 轮, 生成器超时 {timeouts} 次',
+        'en': 'this run: {rounds} rounds, {compared} compared, '
+              '{timeouts} generator timeouts',
     },
     'stress_wall_limit': {
         'zh': '已达总时长上限 {limit} 秒，已停止（可调大 stress_max_wall_seconds）',
@@ -669,6 +647,10 @@ STRINGS = {
         'zh': '监听目标文件不存在或未保存',
         'en': 'Listener target missing or unsaved',
     },
+    'auto_create_failed': {
+        'zh': '自动建文件失败: {path} ({error})',
+        'en': 'Could not auto-create the file: {path} ({error})',
+    },
     'listener_port_error': {
         'zh': '监听启动失败 (端口 {port}): {error}',
         'en': 'Failed to start listener on port {port}: {error}',
@@ -698,6 +680,11 @@ STRINGS = {
         'zh': '{n} 处不同 (共 {total} 行)',
         'en': '{n} difference(s) over {total} lines',
     },
+    'diff_shown_truncated': {
+        'zh': '（只列出前 {shown} 处，其余 {n} 处省略——上方"预期输出/实际输出"是完整的，运行视图里也有全量输出）',
+        'en': '(showing the first {shown} of {n} differences - the expected/actual '
+              'outputs above are complete, and the run view holds the full output)',
+    },
     'diff_no_expected': {
         'zh': '未设置标准答案，无法对比。可在 "test N -answer" 标签页设置后再运行',
         'en': 'No expected answer set. Fill it in the "test N -answer" tab and re-run',
@@ -709,14 +696,6 @@ STRINGS = {
     'actual_short': {
         'zh': '实际',
         'en': 'actual',
-    },
-    'expected_only': {
-        'zh': '仅预期输出有',
-        'en': 'expected only',
-    },
-    'actual_only': {
-        'zh': '仅实际输出有',
-        'en': 'actual only',
     },
     # ---- import ----
     'import_from_folder': {
@@ -811,6 +790,27 @@ STRINGS = {
               'stress_max_insert_bytes={limit} - not written to __tests '
               '(the full input is printed above; raise the setting or use -1 '
               'to save it anyway)',
+    },
+    'stress_counterexample_save_failed': {
+        'zh': '反例没能写入 __tests：{reason}',
+        'en': 'the counterexample could not be saved to __tests: {reason}',
+    },
+    'tests_save_failed': {
+        'zh': '测试点没能写入 {path}（文件只读或目录权限不足），'
+              '这次运行结果不会保留',
+        'en': 'test points could not be written to {path} '
+              '(read-only file or no permission) - they will not be kept',
+    },
+    'stats_save_failed': {
+        'zh': '练习统计没能保存: {error}（本次运行不计入统计）',
+        'en': 'practice statistics could not be saved: {error} '
+              '(this run is not counted)',
+    },
+    'tests_clear_failed': {
+        'zh': '测试点没能清空: {error}（这些文件只读或目录权限不足，'
+              '下次运行会把它们重新读回来）',
+        'en': 'test points could not be cleared: {error} '
+              '(read-only file or no permission - they come back on the next run)',
     },
     'doctor_title': {
         'zh': 'Algorithm Competition Assistant 环境自检',

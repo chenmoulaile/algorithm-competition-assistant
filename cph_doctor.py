@@ -21,7 +21,8 @@ import sublime
 import sublime_plugin
 
 from .core.cph_i18n import t
-from .core.cph_settings import get_settings, get_tests_file_path
+from .core.cph_settings import (get_settings, get_tests_file_path,
+                                PACKAGE_NAME)
 from .core.cph_resources import read_resource
 
 try:
@@ -190,7 +191,7 @@ class CphDoctorCommand(sublime_plugin.TextCommand):
 		lines.append(t('doctor_markdown_hint'))
 		lines.append('')
 		lines.append('```markdown')
-		lines.append('### Algorithm Competition Assistant doctor report')
+		lines.append('### %s doctor report' % PACKAGE_NAME)
 		lines.append('')
 		lines.append('- Sublime Text: build %s' % sublime.version())
 		lines.append('- Platform: %s (%s)' % (sublime.platform(), sys.platform))
@@ -213,7 +214,7 @@ class CphDoctorCommand(sublime_plugin.TextCommand):
 		report = '\n'.join(lines)
 		window = self.view.window()
 		view = window.new_file()
-		view.set_name('Algorithm Competition Assistant - doctor')
+		view.set_name('%s - doctor' % PACKAGE_NAME)
 		view.set_scratch(True)
 		view.settings().set('word_wrap', False)
 		view.run_command('cph_test_detail_view', {'text': report})

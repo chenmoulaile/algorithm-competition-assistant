@@ -1,24 +1,25 @@
+# Normalize every line ending to LF in the repo, so a Windows clone of this
+# package does not carry CRLF into files a Sublime Text Python 3.3 host reads.
 * text=auto eol=lf
-*.png binary
-*.ico binary
-*.jpg binary
 
-.gitattributes export-ignore
-.gitignore export-ignore
-.workbuddy export-ignore
+# Imports are binary blobs, not text that could be re-encoded.
+*.png binary
+*.jpg binary
+*.ico binary
+*.mp4 binary
+*.pdf binary
+
+# Not part of the shipped package: Package Control's export drops them, but
+# they stay here so a local diff against an old build is still possible.
+*.bak-* export-ignore
+.workbuddy/ export-ignore
 .workbuddy-ai export-ignore
-.github export-ignore
-tests export-ignore
+.zcode/ export-ignore
+_fake_packages/ export-ignore
+.github/ export-ignore
+tests/ export-ignore
 ScreenShots/ export-ignore
 PC_SUBMISSION_NOTES.md export-ignore
 RELEASE_NOTES_CN.md export-ignore
-
-# Another assistant's workflow scratch: drafts and eval drivers, ~87 KB of
-# nothing the plugin needs. Not export-ignored before because nothing
-# referenced it.
-.zcode/ export-ignore
-
-# The *.bak-<date> files are whole-file snapshots taken before a risky edit,
-# so a reviewer can diff them. Useful in the repository, useless (and
-# confusing) inside the installed package.
-*.bak-* export-ignore
+.gitignore export-ignore
+.gitattributes export-ignore

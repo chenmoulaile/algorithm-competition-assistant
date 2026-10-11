@@ -49,12 +49,12 @@ copy-paste reference if you want to change one.
 
 ## 相比原版 FastOlympicCoding，多了什么
 
-| 能力 | FastOlympicCoding | Algorithm Competition Assistant |
+| 能力 | FastOlympicCoding | 本插件 |
 | --- | --- | --- |
 | 彩色 verdict 徽章（AC/WA/TLE/MLE/RE/PE/CE…） | ❌ 只有纯文本 | ✅ 类 cph-ng 的徽章样式 |
 | **真实内存判定（MLE）** | ❌ 内存是死配置 | ✅ 跨平台采样进程峰值内存，超限真判 MLE |
 | **超时硬杀（TLE）** | ❌ 死循环杀不掉 | ✅ 看门狗到点终止整个进程树 |
-| **运行错误定位（RE 位置）** | ❌ | ✅ 从程序输出解析 `文件:行号`（Python 回溯 / Java 栈 / `-fsanitize` 诊断） |
+| **运行错误定位（RE 位置）** | ❌ | ✅ 从程序输出解析 `文件:行号`（Python 回溯 / Java 栈 / sanitizer 诊断），解析不到就用 gdb 回放崩溃现场 |
 | 详情视图 + **逐行 diff** | ❌ | ✅ 独立标签页，可选中可复制 |
 | **编译缓存** | ❌ 每次都重编 | ✅ 源文件/命令未变则跳过编译 |
 | 只重跑失败 / 跑完全部 / 强制重编 | ❌ | ✅ 三个命令 + 快捷键 |
@@ -85,9 +85,15 @@ copy-paste reference if you want to change one.
 - **运行错误定位**：程序崩溃（`RE`）时，若输出里有位置信息（Python 回溯、Java 栈、`-fsanitize` 诊断），卡片详情会显示 `运行错误 (RE) 位置: main.py:12`，状态栏同时提示
 - **三个按钮**：`编辑`、`运行`、`详情`
 
-> **C++ 想拿到 RE 行号？** 普通的段错误不带行号。把编译命令加上
-> `-fsanitize=address,undefined -g -fno-omit-frame-pointer`（在 `run_settings` 里自定义
-> `compile_cmd`），崩溃时就会输出 `main.cpp:12:5: runtime error: ...`，插件会自动解析出行号。
+> **C++ 想拿到 RE 行号？** 普通的段错误本身不带行号。用 `Ctrl+Alt+G` 切到
+> **Debug 模式**再跑一次：Debug 会加上 `-g -fsanitize=undefined
+> -fsanitize-trap=undefined -D_GLIBCXX_ASSERTIONS`，有符号溢出、栈数组越界、除零
+> 会直接变成非零退出码（判 `RE`），`std::vector` 越界由断言宏给出 `stl_vector.h:1263`。
+> 若程序是裸段错误、输出里没有行号，插件会自动用 **gdb 回放**崩溃现场
+> （`bt` + `info locals`）找出你自己的那一帧，行号照样可以点着跳过去。
+> 只有崩溃发生在 Debug 也没覆盖到的地方（例如堆越界）才需要手动把
+> `-fsanitize=address` 写进 `compile_cmd`——注意本机 MSYS2 mingw 没有
+> `libasan`/`libubsan`，写进去会链接失败。
 
 ### 2. 详情视图（detail）+ 逐行 diff
 
@@ -136,11 +142,12 @@ copy-paste reference if you want to change one.
 - **Subtask 分组**：`subtasks` 里分组，组内全 AC 才拿分，汇总行显示部分分
 - **Benchmark / 机器校准 / 练习统计 / 比赛计时 / 抓题与题面预览 / 保存自动运行**：命令面板里搜 `Algorithm Competition Assistant:` 都能找到
 - **错误位置可点击**：RE 的 `文件:行:号` 和编译器的每条诊断都会渲染成链接，点一下直接跳到源码那一行（已经打开的标签会被复用，不会新开一个）
-- **Debug / Release 一键切换**（`Ctrl+Alt+G`）：Debug 去掉优化并加 `-g -fsanitize=address,undefined`，崩溃时能给出精确行号；Release 保证 `-O2` 并去掉 sanitizer，计时与评测机可比。按文件记忆，**不写你的设置文件**；当前模式显示在运行面板状态栏
+- **Debug / Release 一键切换**（`Ctrl+Alt+G`）：Debug 去掉优化并加 `-g -fsanitize=undefined -fsanitize-trap=undefined -D_GLIBCXX_ASSERTIONS`，有符号溢出、数组越界、除零都会变成非零退出码并判 RE，行号由 gdb 回放给出、可以点着跳过去；Release 保证 `-O2` 并去掉 sanitizer 与断言，计时与评测机可比。按文件记忆，**不写你的设置文件**；当前模式显示在运行面板状态栏
 - **并行运行**（`Ctrl+Alt+Shift+P`）：每个测试点一个独立进程、`parallel_workers`（默认 4）个 worker 同时跑。串行时 5 个点里有 2 个 TLE 要等 2×时限，并行约 1/4
 - **环境自检**：`Ctrl+Alt+D` 检查编译器是否在 PATH、端口占用、测试路径可写、资源可加载，并给出一段可粘贴到 issue 的 Markdown 报告
 - **纯键盘流**：`Ctrl+Alt+M` 选测试点 → 运行 / 详情 / 编辑 / 接受 / 拒绝 / 删除
 - **对拍反例入库**：对拍发现反例自动保存为正式测试点（可用 `stress_save_counterexample` 关闭）
+- **对拍收尾统计**：结束时报 `本轮统计: 共 N 轮, 实际比较 M 轮, 生成器超时 K 次`——`Passed: N rounds` 只说明跑了多少轮，不说明有多少轮真的比出结果
 - **统一合并策略**：导入文件 / 剪贴板 / 浏览器 / 对拍反例四条路径共用「按输入去重、答案只补不覆盖」，重发样例不会顶掉你手动标记的答案
 
 ### 7. 测试面板自适应宽度
@@ -160,7 +167,8 @@ copy-paste reference if you want to change one.
 ## 安装
 
 1. 克隆或下载本仓库
-2. 把 `Algorithm Competition Assistant` 文件夹复制到 Sublime Text 的 `Packages` 目录
+2. 把仓库文件夹复制到 Sublime Text 的 `Packages` 目录（显示名为 Algorithm Competition Assistant，
+   安装目录名沿用仓库名 `cph-by-chenkx` 即可，功能与数据文件名都不变）
 3. 重启 Sublime Text
 
 ## 使用方法
@@ -176,7 +184,10 @@ copy-paste reference if you want to change one.
 ## 已知限制
 
 - **macOS 内存占用**是单进程实时采样（`libproc.proc_pid_rusage`）的峰值，不是内核严格意义上的峰值 RSS，可能比 Activity Monitor 略低；已不再使用 `RUSAGE_CHILDREN`（所有子进程累计峰值）那种错误口径。
-- **裸段错误（C++）不带行号**：RE 位置只在程序输出包含位置信息时才有（Python 回溯 / Java 栈 / `-fsanitize` 诊断）；纯 C++ 段错误需要自行加 `-fsanitize` 编译。
+- **裸段错误（C++）的行号看编译模式**：RE 位置优先从程序自己的输出里解析（Python 回溯 / Java 栈 / sanitizer 诊断）；
+  解析不到时插件用 gdb 回放崩溃现场。回放要能报出 `文件:行` 得靠调试符号，所以 **Release 下只给出 `main ()` 这样的函数名**
+  （实测 gdb 输出 `No symbol table info available`），**`Ctrl+Alt+G` 切到 Debug 后同一个段错误能直接定位到行**
+  （实测 `seg.cpp:4`）。想要 Release 也有行号，就自己往 `compile_cmd` 里加 `-g`。
 - **`sync_output`（逐字符同步输出）默认关闭**：开启后一个字符刷新一次视图，只适合交互式程序。
 - **stderr（`cerr` 调试输出）只显示在详情视图里**，不再挂在卡片上（卡片会变得又挤又长）。
 - **"还没粘贴样例"的时间不计时**：新建测试点后如果输入还是空的，程序虽然已经启动，
@@ -189,12 +200,16 @@ copy-paste reference if you want to change one.
   你粘贴样例的占位），不会写进测试文件。
 - **`PE`（Presentation Error）**：只有「token 完全相同但空白/换行不同」才算 PE，默认与 WA 分别显示；若你的 OJ 把 PE 也算通过，把 `regard_pe_as_ac` 设为 `true`。
 - 输出超过 `max_output_bytes`（默认 8MB）时超出部分会被丢弃，并插入一行截断提示。
-- **抓题没有页面体积上限**：`core/cph_fetch.py` 直接 `response.read()` 把整页一次性读进
-  内存，不按字节截断——题库整页嵌入、大图多的站点会照单全收，内存占用只跟页面大小成正比。
-  唯一的闸门是 `fetch(url, timeout=25)` 的 **25 秒**：超时按抓取失败报 `抓取失败：…`（英文环境
-  是 `fetch failed: ...`），不会给你半页题面。题面本身不做任何长度裁剪，样例、标题、题面正文
-  有多长就写多长（该模块里唯一的定长函数 `first_lines(text, limit=200)` 目前**没有任何调用方**，
-  是留给以后做摘要的死代码，所以状态栏与消息里也没有 200 字的截断）。
+- **抓题有页面体积上限**（`max_fetch_bytes`，默认 8MB，可在设置里调整）：`core/cph_fetch.py`
+  按 64KB 分块下载页面，累计一超过上限就立即停止并报
+  「抓取失败：页面超过 max_fetch_bytes 上限…」（英文环境是
+  `fetch failed: the page is larger than the max_fetch_bytes cap ...`），
+  超限的页面既不会照单全收，也不会给你半页题面。另一道闸门是超时（`fetch_timeout_seconds`，
+  默认 **25 秒**，可在设置里调整）：超时同样按抓取失败报 `抓取失败：…`。慢的 OJ 和挂掉的 OJ
+  原本长得一样，所以这个值从硬编码的签名默认值改成了设置项。题面本身不做任何长度裁剪，上限内放得下的
+  样例、标题、题面正文有多长就写多长。唯一的例外是状态栏：题面里没有标题时
+  （`<title>` 与 `<h1>` 都没有），`summarize()` 会取最长的一行正文压到 160 字当摘要，
+  免得状态栏只剩一个光秃秃的 URL、看不出抓的是不是这道题。
   题面转 Markdown 时会丢掉 `<script>` / `<style>` / 注释，所以靠内嵌脚本渲染的题目
   （少数动态 OJ）会解析成空，此时提示「题面解析为空（可能需要在浏览器里登录）」。
 - **非 ASCII 文件名靠自动识别**：Windows 上编译器按 ANSI 代码页写出的 `中文.exe`
@@ -331,7 +346,7 @@ int main() {
 
 ## 设置示例
 
-在 `Algorithm Competition Assistant.sublime-settings` 中：
+在 `Algorithm Competition Assistant.sublime-settings`（旧名 `cph-by-chenkx.sublime-settings`，Preferences > Package Settings > Algorithm Competition Assistant）中：
 
 ```json
 {
@@ -351,4 +366,8 @@ int main() {
 ```
 
 > 想要 C++ 崩溃时给出**行号**，把 `compile_cmd` 改成：
-> `g++ "{source_file}" -std=c++11 -g -fsanitize=address,undefined -fno-omit-frame-pointer -o "{file_name}"`
+> `g++ "{source_file}" -std=c++11 -g -fsanitize=undefined -fsanitize-trap=undefined -fno-omit-frame-pointer -o "{file_name}"`
+> （`-fsanitize-trap=undefined` 不需要 sanitizer 运行库，所以 MSYS2 mingw 这类不带
+> `libubsan` 的工具链也能用；换成 `-fsanitize=address` 需要 `libasan`，缺库时插件会
+> 自动去掉 `-fsanitize` 重试一次并提示。也可以干脆用 `Ctrl+Alt+G` 切到 debug 模式，
+> 由插件帮你加这组参数。）

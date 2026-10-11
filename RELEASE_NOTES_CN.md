@@ -5,6 +5,162 @@
 
 ---
 
+# v2.4.6
+
+## 修复
+
+- **Debug 模式每次编译都要先失败一次** —— 旧的默认形态是
+  `-fsanitize=address,undefined`，而 MSYS2 mingw gcc 15.2 两个运行库都没有
+  （`ld.exe: cannot find -lubsan` / `-lasan`），于是每次切到 Debug 编译都会先报一次
+  链接错误，再由 `Modules/ProcessManager.compile` 的重试逻辑去掉 `-fsanitize` 重编。
+  现在默认形态改成 `-fsanitize=undefined -fsanitize-trap=undefined`：trap 形态把每条
+  UBSan 检查换成一条 `ud2` 指令，**链接期不需要任何运行库**，却仍然把有符号溢出、
+  栈数组越界、除零变成非零退出码（`0xC000001D`，即 SIGILL）判为 RE，行号照旧由
+  `core/cph_gdb_trace.py` 的 gdb 回放给出（它认 SIGILL 和认 SIGSEGV 一样）。
+  `std::vector` 越界继续由 `-D_GLIBCXX_ASSERTIONS` 覆盖。AddressSanitizer 没有删，
+  只是不再进默认形态：用户自己写进 `compile_cmd` 的 `-fsanitize=address` 会被保留。
+  顺带修掉一个正则隐患：`-fsanitize=\S+` 会把 `-fsanitize-trap=undefined` 留成孤儿，
+  切回 Release 时那条 trap 仍然生效、把 UB 静默变成 `ud2`，现在按 `-fsanitize\S*` 整对删除。
+- **练习统计的日志会无限增长** —— `core/cph_stats.py` 每次运行都是「读全量 JSON →
+  追加一条 history → 写全量 JSON」，而 history 从不清理，于是总成本是二次的
+  （实测 500 条时单次 3.4 ms、4000 条时 18.4 ms、文件 636 KB，20000 条两分钟跑不完），
+  而它跑在 UI 线程上、每次运行都触发。现在 history 只保留最新 `_HISTORY_LIMIT = 5000` 条
+  （约等于重度使用数周，远超默认 7 天的报表窗口），单次成本与文件大小都被钉住；
+  `problems` 里的累计字段（runs / attempts / ac_runs / first_ac / solved / by_verdict）
+  是永久账本，一条都不丢。「已解决」因此不再只靠 history 判断：`summary_data` 先读
+  `problems` 里的 `first_ac`，再拿 history 兜底，否则最老的那条 AC 被截掉后
+  一道早就做出来的题会退回「未解决」。
+- **题面转 Markdown 的占位符替换是二次的** —— `core/cph_html.py` 的
+  `html_to_markdown()` 以前按块号循环调用 `text.replace()`，块数一多就是
+  O(块数 × 文本长度)：实测 8000 块 / 36 万字符单独耗时 2.44 秒（每翻倍约 4 倍），
+  而它同样跑在 UI 线程上。现在改成一次 `re.sub()` 按编号回填，同样的输入 0.246 秒。
+- **详情视图的逐行 diff 会把编辑器冻住** —— `core/cph_verdict.py` 的
+  `build_line_diff()` 直接拿全量输出喂 `difflib.SequenceMatcher`，而它是二次的、
+  又跑在 UI 线程：实测 2 万行 `0/1` 输出里改 20 行要 56 秒，8 千行相同输出里改 1 行
+  要 11.8 秒，两个数字都足以让 Sublime 卡到无响应。现在先把首尾相同的部分裁掉
+  （只有「第一处差异到最后一处差异」之间才可能产生非 equal 的结果），剩下的部分
+  超过 `_DIFF_CELL_BUDGET`（100 万格）就退化成一次 O(n) 的逐行扫描——它不会凭空
+  造出差异（同一位置相同的行会被跳过），也不会像 `autojunk=True` 那样把一整段
+  相同行合成一个巨型 replace 块。`test_manager.py` 另外给详情视图加了
+  `_DETAIL_DIFF_LIMIT = 200` 条上限：一条 WA 在默认 8MB 输出上限下能产生
+  240 万行明细（实测 80 万差异行要 0.4 秒对齐 + 0.55 秒拼装，然后交给 Sublime 排版），
+  超出部分现在只列前 200 处并注明省略了多少，上方的「预期输出 / 实际输出」与运行视图
+  仍是完整的。
+- **导入测试数据时，把文件夹路径喂给读取函数会报权限错误** —— Windows 对
+  `open()` 一个**目录**返回的是 `[Errno 13] Permission denied`，看起来像真的权限问题，
+  于是用户会去查目录权限而不是改路径；而资源管理器的「复制文件地址」给出的正是
+  文件夹路径。四条导入路径（单个文件、文件对话框、文件夹批量、右键「导入旁边的数据文件」）
+  现在在唯一的读取入口处识别目录并明说该怎么办，`_is_file_like()` 同时把「目录」
+  和「指向目录的符号链接」排除出候选输出文件列表（`os.path.isfile()` 对符号链接会
+  说 True，`open()` 却拒绝）。
+- **批量导入里一个坏样例会让整批静默变少** —— 读失败的那一对以前只 `print()` 到
+  控制台，用户看到的是「导入 3 个测试点」而不是「5 个里 2 个没读进来」。现在会报
+  `已导入 N / M 个数据文件，其余读取失败（详见 Sublime 控制台）`；一个都没成功时
+  把具体原因（最多 200 字）一并显示，而不是笼统的「导入失败」。
+- **子任务评分把未判定的测试当成通过** —— `core/cph_subtasks.py` 里
+  `passed = bool(judged) and all(v == 'AC' for v in collected if v)` 先用 `if v`
+  把未判定的项过滤掉了，于是「这一组里有一个测试根本没跑」会被算成整组通过、
+  拿满这一组的分。现在要求组内每一项都是 `'AC'`（未判定是 `None`，不是 `'AC'`），
+  未判定即不通过。
+- **Release 模式下 WA 可能是未定义行为，但没有任何提示** —— 数组越界读在 `-O2` 下
+  读到的是堆里的垃圾值，程序照样 `exit 0`，判定只能是 WA，全流程没有一处指向真正的原因。
+  现在第一次遇到某个文件的 WA 时，详情里会附一段说明，告诉用户按 `Ctrl+Alt+G`
+  切到 Debug 再跑一次（每题只提示一次：答错是常态，每次 WA 都上课就成了噪音）。
+- **程序崩溃后仍然 exit 0 会被判成 AC** —— 中止发生在析构函数、信号处理器里，
+  或者 sanitizer 自己调了 `_exit(0)` 时，退出码是 0，于是「先打印正确答案、
+  再崩溃」的程序会拿到 AC。`core/cph_verdict.py` 现在把崩溃文本的检查提到输出比较
+  **之前**：只看程序自己的 stdout，`ignore_error=True` 能压住 stderr 但压不住这个。
+- **对拍反例保存失败只有控制台知道** —— 反例本身已经打印在对拍页上了，但「没能写进
+  `__tests`」以前只走 `print_safe()`，落在没人打开的 Sublime 控制台里，于是
+  「存下来了」和「没存下来」在界面上长得一模一样。现在对拍页里也会多一行说明。
+- **对拍的轮数从来没进过练习统计** —— `core/cph_stats.py` 的 `record_stress()`
+  从第一版数据结构就有，但从来没有任何调用方，于是每道题的 `stress_rounds` 恒为 0，
+  统计页长期少报了这部分工作量。现在对拍循环收尾时会记账（中途按 Stop 或撞到轮数
+  上限也算，那是用户真做过的工作），写入是尽力而为：统计坏掉绝不能带崩一次对拍。
+- **三处「失败只有控制台知道」** —— 自动建文件时目录不可写（`cph_companion.py`）
+  以前静默返回 `None`，上层只报「监听目标文件不存在或未保存」，用户看到的是
+  「没有目标」而不是「目录不可写」；练习统计写盘失败（`core/cph_stats.py` 的 `save()`）
+  以前只 `return False`，调用方只 print；清空测试点文件失败（`test_manager.py`）
+  同样只 print——而清不掉的文件下次 `load_all_tests()` 会原样读回来，用户按了
+  「清空测试点」却发现测试点回来了。三处现在都会在状态栏说清失败原因与实际影响
+  （新增文案 `auto_create_failed` / `stats_save_failed` / `tests_clear_failed`），
+  统计的错误原因用「读取即清空」的 `take_save_error()` 交给调用方，避免每次运行
+  重复报同一个陈旧错误。
+- **抓题把整页无条件读进内存** —— `core/cph_fetch.py` 的 `fetch()` 以前直接
+  `response.read()` 一次读完全部响应体，页面多大就吃多少。现在改为按 64KB 分块读取，
+  累计一超过新设置 `max_fetch_bytes`（默认 8MB，设置文件与代码常量同值）就停止下载，
+  返回新文案 `fetch_response_too_large`（中英文各一条，`{limit}` 填上限数值），
+  不会静默截断。
+
+## 新增与改进
+
+- **练习统计报表支持中文** —— 统计页的渲染以前是英文硬编码在 `core/cph_stats.py` 里
+  （该模块刻意只依赖标准库，好让普通脚本也能加载它），于是中文界面下只有它一张页面
+  是英文。现在聚合与渲染分成两层：`summary_data()` 出数据，`render_summary()`
+  负责渲染（可以传 `cph_i18n.t`），`summary()` 与新增的 `summary_localized()`
+  共用同一条路径，两边不可能再漂移。英文回退标签保留在 `_ENGLISH_LABELS` 里，
+  统计页的标题也一并由渲染层生成。
+- **统计页多一行对拍累计** —— 与上面「对拍轮数进统计」配套，报表里会多出
+  `对拍累计: N 轮`（英文 `Stress rounds: N`）。老统计文件里没有这个字段，读作 0。
+- **对拍结束时给出本轮统计** —— 以前只报 `Passed: N rounds`，而 `N` 是循环轮数，
+  不说明有多少轮真的比较过（生成器超时、程序没跑完的轮次都不算）。现在收尾会多一行
+  `本轮统计: 共 N 轮, 实际比较 M 轮, 生成器超时 K 次`（英文
+  `this run: N rounds, M compared, K generator timeouts`），三个数字都取自
+  `cph_stress.py` 里本来就有的计数器。
+- **抓题的题面摘要进状态栏** —— `core/cph_fetch.py` 新增 `summarize(html, limit=160)`：
+  把题面正文压成一行纯文本，供 `cph_extras.py` 在状态栏兜底显示。以前抓完题只有
+  「已抓取」这类通用提示，题面抓歪了（动态 OJ 的登录墙、内嵌脚本渲染）得点开才知道。
+  它取代了此前没有任何调用者的 `first_lines()`——那个函数只切行不剥标签，
+  留着也没法用。
+- **包根多了两个守卫断言** —— Sublime 会把包根下每个 `.py` 当作独立插件加载，
+  所以放在那里的文件不是惰性的：它要么在 import 时就炸（已删除的
+  `cph_stress_tmp_section.py` 死于 `name 're' is not defined`），要么悄悄注册出
+  第二份同名命令。`tests/run_tests.py` 现在固定包根的模块名单
+  （多一个少一个都会红），并拒绝 `.pyc` / `.orig` / `.rej` / `~` / `.bak` 这类
+  编辑器与补丁残留。
+- **显示名有了单一来源** —— `core/cph_settings.py` 新增 `PACKAGE_NAME` 常量，
+  医生报告、对拍状态栏等处的 `'Algorithm Competition Assistant'` 字面量改用它；
+  注释同时写明「不要拿它拼 `Packages/` 路径」——磁盘上的目录名仍可能是仓库名
+  `cph-by-chenkx`，路径必须走 `base_name`。`cph_language.py` 与 `cph_stress.py`
+  加载设置文件时也不再各自硬编码文件名，统一走 `settings_file`。
+- 发布脚本 `.workbuddy/publish_api.py` 的凭据改从环境变量 `GITHUB_TOKEN` 读取：
+  以前它在模块加载时就打开本机的明文凭据文件用正则抠 token，缺文件时连 `plan`
+  都跑不起来（直接 traceback）；现在缺变量时打印一段修复指引
+  （含 Windows 的 `setx` 写法与 PowerShell 写法）后以退出码 2 结束。
+  同时 `ROOT` 不再写死本机路径，改由 `__file__` 逐级 `dirname` 推导。
+
+## 说明
+
+- README 的「已知限制」补了一条关于抓题与题面转换的体积限制。抓题现在有两道闸门，
+  都在设置里：`max_fetch_bytes`（默认 8MB，`core/cph_fetch.py` 按 64KB 分块下载，
+  累计超限立即停止）与 `fetch_timeout_seconds`（默认 25 秒，原先硬编码在
+  `fetch(url, timeout=25)` 的签名里，慢的 OJ 和挂掉的 OJ 因此长得一样）。
+  题面本身不做任何长度裁剪，上限内放得下的样例、标题、题面正文有多长就写多长。
+- **清理了一批没有任何调用方的函数与文案** —— 九个函数
+  （`first_lines`、`record_unused_stress`、`get_listener_port`、`quote_argv`、
+  `signal_name`、`group_of`、`is_lang_view`、`get_folder_tests_file_path`、
+  `build_mode.forget`）与 32 条 i18n 文案在整棵树里都找不到调用方，已删除。
+  `tests/run_tests.py` 把九个函数名固定进黑名单（加回来会红），并且新增一条守卫：
+  每个 `STRINGS` 键都必须能追到一次 `t('key')` 调用，或出现在显式的白名单里
+  （少数键的调用点在运行时才拼出来，另有一组统计键由渲染层间接使用）。
+- 回归测试 469 项。本轮新增的守卫包括：统计日志上限、截断后「已解决」不回退、
+  三条静默失败必须带原因、包根模块名单、导入目录必须被识别成目录而不是文件、
+  i18n 死键检查、以及上面九个死函数的黑名单。
+- `.github/workflows/tests.yml` 在 `check_py33` / `run_tests` / `compileall` 之外
+  增加了 `python tests/check_messages.py`，以及两个新的独立脚本：
+  `tests/check_import_dir.py`（导入路径必须拒绝目录，且报错文本要说明该怎么办）
+  与 `tests/check_perf.py`（量一下插件宿主跑这个插件的真实开销：import 时间、
+  空闲成本、热路径成本——它只打印数字、不做门禁，用来回答「是不是该改写成 C++」
+  这种问题）。
+- 上面「2.1.1 与 1.4.7 从来没有升级提示文件」与「这类缺口 CI 抓不到」两项其实早已
+  随 v2.3.0（2026-10-05 的提交里补上两个 `messages/*.txt` 与两个 json 键）和
+  v2.4.3（新增 `tests/check_messages.py`）发布，只是当时都没有写进各自的更新说明，
+  这里补记。以前这些「不属于任何版本」的条目记在文件末尾的附录里，本次一并折进本节：
+  `publish_api.py` 的 `release_body()` 只取版本标题之间的内容，留在版本节之外的
+  改动永远不会出现在 Release 正文里，所以每积一批就固化一次。
+
+---
+
 # v2.4.5
 
 ## 修复
@@ -35,22 +191,22 @@
 
 # v2.4.4
 
-## 新增与改进
-
-- **发布名改为 Algorithm Competition Assistant，并在包内统一**：
-  - 默认设置文件 `cph-by-chenkx.sublime-settings` →
-    `Algorithm Competition Assistant.sublime-settings`
-  - 命令面板的两条设置项改为 `Preferences: Algorithm Competition Assistant Settings`
-    与 `Preferences: Algorithm Competition Assistant TestSyntax Settings`
-  - `Main.sublime-menu` 补上对应的 `Package Settings` 入口
-  - 所有 `${packages}/...` 路径改指向安装后的包名（此前指向的是仓库名）
-- 频道条目从 `repository/c.json` 移到 `repository/a.json`（跟随新名字的首字母）。
-
 ## 说明
 
-- 仓库地址不变（`chenmoulaile/cph-by-chenkx`）：Package Control 允许条目里的
-  `name` 与仓库名不同，旧链接不会失效。
-- `Packages/User/` 下的机器校准系数与练习统计文件名保持原样，已有数据不受影响。
+- **包的显示名改为「Algorithm Competition Assistant」**，除此之外没有任何功能改动：
+  没有新特性、没有修 bug、没有动任何快捷键与命令名。具体改名范围：
+  - 设置文件 `cph-by-chenkx.sublime-settings` → `Algorithm Competition Assistant.sublime-settings`。
+    你写在 `Packages/User/` 里的个人覆盖**不受影响**，依旧生效；
+  - 命令面板全部 caption 由 `cph-by-chenkx: ...` 改为 `Algorithm Competition Assistant: ...`，
+    两条 Preferences 项改为 `Preferences: Algorithm Competition Assistant Settings` /
+    `... TestSyntax Settings`；
+  - `Main.sublime-menu` 的菜单条目同步改名；
+  - 所有 `${packages}/...` 的 `base_file` 路径现在指向**安装后的包名**而不是仓库名，
+    于是 Preferences > Package Settings 与 Key Bindings 在每台机器上都能打开自带的默认设置，
+    而不只是恰好在用仓库名当目录名的那台。
+- **数据文件名刻意没改**：命令名（`cph_*`）、类名、以及所有 `Packages/User/` 下的数据文件名
+  都保持原样。练习统计仍写在 `Packages/User/cph-by-chenkx-stats.json`、机器校准仍写在
+  `cph-by-chenkx-machine.json` —— 改名不会动你攒了几个月的记录。
 
 ---
 
@@ -1143,47 +1299,3 @@ Package Control 的[审查规范](https://docs.sublimetext.io/reference/package-
 - 本插件基于开源项目 [FastOlympicCoding](https://github.com/Jatana/FastOlympicCoding)
   的源码构建，并参考 [cph-ng](https://github.com/langningchen/cph-ng) 的评测结果显示方式。
 
----
-
-## 附录：v2.2.0 发布之后做的维护（不属于任何版本）
-
-这一节记的是 v2.2.0 发布（2026-10-05）之后才做的改动，只影响仓库与工具链，
-用户可见行为不变。它**刻意放在所有 `# vX` 版本节之外**：`publish_api.py` 的
-`release_body()` 会把某个版本标题到下一个 `# v` 之间的全部内容当作该版本
-Release 的正文，写在版本节里面就会被日后的一次 `apply` 固化进已发布的
-v2.2.0 Release 里。
-
-### 修复
-
-- **2.1.1 与 1.4.7 从来没有升级提示文件** —— 这两个版本都打了 tag、也都有 GitHub
-  Release（`v1.4.7` 于 2026-10-02、`v2.1.1` 于 2026-10-04 发布），但 `messages/`
-  下既没有 `1.4.7.txt` 也没有 `2.1.1.txt`，`messages.json` 里也没有对应的键，
-  于是从旧版本升级的用户永远看不到这两版的更新说明。现已补上
-  `messages/1.4.7.txt`、`messages/2.1.1.txt` 与两个 json 键，
-  内容按各自 Release 里已发布的正文整理。
-- **这类缺口 CI 抓不到** —— `tests/run_tests.py` 只验「`messages.json` 引用的文件
-  都存在」，是单向检查；而 `messages/` 与 `messages.json` 两边恰好同缺，
-  互相比对永远是空的。真正的缺口源是本文件的版本标题，因此新增零依赖脚本
-  `tests/check_messages.py`（只用标准库）做双向比对：解析 `# vX` 标题与 json 键，
-  对 **1.4.5 及以后**的版本查差集，并维护别名表（`2.0` ↔ `2.0.0` /
-  `messages/2.0.txt`；Package Control 不接受两段版本号，这正是 v2.1.1 修的那件事），
-  因此 `2.0` 不会每次都误报。脚本放在 `tests/` 而不是 `.workbuddy/`：
-  后者在 `.gitattributes` 里是 `export-ignore`、也被发布脚本的 `SKIP_DIRS` 跳过，
-  根本不会上传，CI 指向那里必然报「文件不存在」。
-
-### 新增与改进
-
-- 发布脚本 `.workbuddy/publish_api.py` 的凭据改从环境变量 `GITHUB_TOKEN` 读取：
-  以前它在模块加载时就打开本机的明文凭据文件用正则抠 token，缺文件时连 `plan`
-  都跑不起来（直接 traceback）；现在缺变量时打印一段修复指引
-  （含 Windows 的 `setx` 写法与 PowerShell 写法）后以退出码 2 结束。
-  同时 `ROOT` 不再写死本机路径，改由 `__file__` 逐级 `dirname` 推导。
-
-### 说明
-
-- README 的「已知限制」补了一条关于抓题与题面转换的体积限制，数值取自
-  `core/cph_fetch.py` 的实际常量：`response.read()` 不按字节截断，唯一的闸门是
-  `fetch(url, timeout=25)` 的 25 秒；题面本身不裁剪，模块里的
-  `first_lines(text, limit=200)` 目前没有任何调用方。
-- `.github/workflows/tests.yml` 在 `check_py33` / `run_tests` / `compileall` 之外
-  增加了 `python tests/check_messages.py` 一步。

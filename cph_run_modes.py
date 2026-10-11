@@ -88,15 +88,22 @@ class CphRunParallelCommand(_RunModeMixin, sublime_plugin.TextCommand):
 class CphToggleBuildModeCommand(sublime_plugin.TextCommand):
 	"""Switch the compile command between release (-O2) and debug.
 
-	Debug mode adds ``-g -fsanitize=address,undefined -D_GLIBCXX_ASSERTIONS``
-	and drops the optimisation, so a crash prints ``file:line`` and the detail
-	view can jump straight to it. The assertion macro is what catches
-	out-of-bounds ``std::vector`` access: that is undefined behaviour rather
-	than a crash, so at ``-O2`` it prints garbage and exits 0 and the judge can
-	only report WA. Release mode guarantees ``-O2`` and removes the sanitizer
-	and assertion flags again, so local timings mean something. The mode is
-	remembered per source file in memory only - the user's settings file is
-	never touched.
+	Debug mode adds ``-g -fsanitize=undefined -fsanitize-trap=undefined
+	-fno-omit-frame-pointer -D_GLIBCXX_ASSERTIONS`` and drops the
+	optimisation, so a crash prints ``file:line`` and the detail view can jump
+	straight to it. The trap form is deliberate: plain ``-fsanitize=undefined``
+	needs libubsan at link time and ``-fsanitize=address,undefined`` needs both
+	runtimes, so on toolchains that ship neither (MSYS2 mingw gcc: "ld.exe:
+	cannot find -lubsan/-lasan") every debug build would fail once and fall
+	back to a build with no UB detection. Trapping needs no runtime and still
+	turns signed overflow and out-of-bounds array access into a non-zero exit
+	code, and core/cph_gdb_trace.py recovers the line from the SIGILL. The
+	assertion macro is what catches out-of-bounds ``std::vector`` access: that
+	is undefined behaviour rather than a crash, so at ``-O2`` it prints garbage
+	and exits 0 and the judge can only report WA. Release mode guarantees
+	``-O2`` and removes the sanitizer and assertion flags again, so local
+	timings mean something. The mode is remembered per source file in memory
+	only - the user's settings file is never touched.
 	"""
 
 	def run(self, edit):
@@ -107,8 +114,8 @@ class CphToggleBuildModeCommand(sublime_plugin.TextCommand):
 			return
 		mode = toggle_build_mode(file_name)
 		if mode == MODE_DEBUG:
-			detail = ('debug (-O0 -g -fsanitize -D_GLIBCXX_ASSERTIONS) - '
-			          'crash lines are clickable, UB is caught')
+			detail = ('debug (-O0 -g -fsanitize=undefined -fsanitize-trap=undefined '
+			          '-D_GLIBCXX_ASSERTIONS) - crash lines are clickable, UB is caught')
 		else:
 			detail = 'release (-O2) - timings match the judge'
 		sublime.status_message('[Algorithm Competition Assistant] build mode: %s  |  %s' % (mode, detail))

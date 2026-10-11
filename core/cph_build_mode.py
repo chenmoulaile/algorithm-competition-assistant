@@ -6,16 +6,25 @@ README 里一直写着"想要 RE 行号请手动给 compile_cmd 加 -fsanitize"�
 这里把两种编译命令做成**一个开关**，按源文件记忆（不写用户设置文件）：
 
 - ``release``（默认）：保证带 ``-O2``，去掉 sanitizer 与断言宏。计时用。
-- ``debug``：去掉优化、加上 ``-g -fsanitize=address,undefined
-  -fno-omit-frame-pointer -D_GLIBCXX_ASSERTIONS``。崩溃时 sanitizer 会打印
-  ``文件:行:列``，``find_crash_location`` 能解析出来，详情视图里可以直接点着跳过去。
+- ``debug``：去掉优化、加上 ``-g -fsanitize=undefined -fsanitize-trap=undefined
+  -fno-omit-frame-pointer -D_GLIBCXX_ASSERTIONS``。
 
-  ``-D_GLIBCXX_ASSERTIONS`` 是这里的关键一环：它不是 sanitizer，不需要运行库，
-  所以在 ``ld.exe: cannot find -lubsan`` 的机器上也照样生效。而未定义行为最常见
-  的形态就是 ``std::vector`` 越界读 —— 那种程序在 ``-O2`` 下读到堆垃圾、打印一个
-  随机数、``exit 0``，插件只能判 WA，全流程没有任何一处会告诉你越界了。断言编进去
-  之后同一个程序会中止（rc=3）并打印 ``Assertion '__n < this->size()' failed``，
-  判定为 RE，详情里还能点回出问题的文件:行。
+  这个 sanitizer 形态是**为链接不上的工具链挑的**。``-fsanitize=undefined``
+  单独用要在链接期解析 libubsan（本机 MSYS2 mingw gcc 15.2 报
+  ``ld.exe: cannot find -lubsan``），而 ``-fsanitize=address,undefined`` 会连带把
+  undefined 一起拖死：链接器一轮就得把两个运行库都找到。``-fsanitize-trap=undefined``
+  把每条 UBSan 检查换成一条 ``ud2`` 指令，**不需要任何运行库**，却仍然把两类最常见的
+  比赛 bug（有符号溢出、数组越界）变成非零退出码（``0xC000001D`` / SIGILL），判定为
+  RE；行号由 ``core/cph_gdb_trace.py`` 的 gdb 回放给出，它认 SIGILL 和认 SIGSEGV 一样。
+
+  ``-D_GLIBCXX_ASSERTIONS`` 补上 sanitizer 覆盖不到的那一类：``std::vector`` 的
+  ``operator[]`` 越界在 ``-O2`` 下读到堆垃圾、打印一个随机数、``exit 0``，插件只能判
+  WA，全流程没有任何一处会告诉你越界了。断言编进去之后同一个程序会中止（rc=3）并打印
+  ``Assertion '__n < this->size()' failed``，判定为 RE，详情里还能点回出问题的文件:行。
+
+  AddressSanitizer 是**按命令行 opt-in**：工具链能链接 libasan 时（glibc gcc、clang）
+  它能多查堆越界与 use-after-free 并给出 ``文件:行:列``，所以用户自己写进
+  ``compile_cmd`` 的 ``-fsanitize=address`` 会被保留；默认形态里没有它。
 
 模式在内存里按文件记录，插件重载即回到 release；这样既不改用户的
 ``run_settings``（项目约定：不主动写用户设置），也不会让"上次开过 debug"
@@ -47,8 +56,15 @@ MODE_RELEASE = 'release'
 MODE_DEBUG = 'debug'
 MODES = (MODE_RELEASE, MODE_DEBUG)
 
-#: Flags that make the program slow; only debug mode keeps them.
-_SANITIZE = '-fsanitize=address,undefined'
+#: The sanitizer form debug mode adds when the command has none of its own.
+#: -fsanitize-trap=undefined turns every UBSan check into a ud2 instruction, so
+#: the linker never has to resolve libubsan; the plain -fsanitize=undefined form
+#: does, and -fsanitize=address,undefined drags undefined down with it (one link
+#: step has to find both runtimes). MSYS2 mingw gcc 15.2 ships neither
+#: ("ld.exe: cannot find -lubsan/-lasan"), so the old default made every debug
+#: compile fail once and fall back (Modules/ProcessManager.compile) to a build
+#: with no UB detection beyond the assertion macro.
+_DEFAULT_SANITIZE = '-fsanitize=undefined -fsanitize-trap=undefined'
 #: -D_GLIBCXX_ASSERTIONS is not a sanitizer and needs no runtime library, so
 #: it survives the "-fsanitize cannot be linked" fallback (see
 #: Modules/ProcessManager.compile). That fallback used to leave debug mode
@@ -61,10 +77,15 @@ _SANITIZE = '-fsanitize=address,undefined'
 #: "Assertion '__n < this->size()' failed", which find_crash_location turns
 #: into a clickable file:line.
 _ASSERTIONS = '-D_GLIBCXX_ASSERTIONS'
-_DEBUG_FLAGS = ('-g ' + _SANITIZE + ' -fno-omit-frame-pointer ' + _ASSERTIONS)
+_FRAME_POINTER_FLAG = '-fno-omit-frame-pointer'
 
 _OPT = re.compile(r'-O[0-3sg]\b')
-_SANITIZER = re.compile(r'-fsanitize=\S+')
+#: Every flag that begins with -fsanitize, so that both halves of the default
+#: pair (-fsanitize=undefined and -fsanitize-trap=undefined) are removed whole.
+#: The old r'-fsanitize=\S+' left "-fsanitize-trap=undefined" behind as an
+#: orphan, which compiles fine but silently turns UB into ud2 in release mode.
+#: -fno-sanitize=... is not matched (it does not contain "-fsanitize").
+_SANITIZER = re.compile(r'-fsanitize\S*')
 _FRAME_POINTER = re.compile(r'-fno-omit-frame-pointer\b')
 _DEBUG_SYM = re.compile(r'(?:^|\s)-g\b')
 #: Both are opt-in UB detection rather than compiler flags; they change
@@ -109,10 +130,6 @@ def toggle(file):
 	return set_mode(file, new)
 
 
-def forget(file):
-	_modes.pop(_norm(file), None)
-
-
 def _norm(file):
 	try:
 		return file.replace('\\', '/').lower()
@@ -133,14 +150,20 @@ def transform(cmd, mode):
 		if not _OPT.search(out):
 			out = out.rstrip() + ' -O2'
 		return _tidy(out)
-	# debug: no optimisation, plus the sanitizer + debug symbols
+	# debug: no optimisation, plus the sanitizer, debug symbols and assertions
 	out = _OPT.sub('', cmd)
-	out = _SANITIZER.sub('', out)
+	# A sanitizer the user wrote by hand wins over the default pair: on a
+	# toolchain that ships libasan, -fsanitize=address catches heap errors the
+	# default cannot see, and the user asked for it explicitly. On a toolchain
+	# that lacks the runtime the compile fails and Modules/ProcessManager
+	# retries without any -fsanitize, which leaves the assertion macro below.
+	if not _SANITIZER.search(out):
+		out = out.rstrip() + ' ' + _DEFAULT_SANITIZE
 	out = _FRAME_POINTER.sub('', out)
 	out = _ASSERT_FLAG.sub('', out)
 	if not _DEBUG_SYM.search(out):
 		out = out.rstrip() + ' -g'
-	out = out.rstrip() + ' ' + _DEBUG_FLAGS
+	out = out.rstrip() + ' ' + _FRAME_POINTER_FLAG + ' ' + _ASSERTIONS
 	return _tidy(out)
 
 def label(file):

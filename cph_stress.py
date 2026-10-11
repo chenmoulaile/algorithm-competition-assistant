@@ -14,7 +14,9 @@ import tempfile
 import threading
 import time
 
-from .core.cph_settings import get_settings, load_all_tests, save_tests
+from .core.cph_settings import (get_settings, load_all_tests, save_tests,
+                                PACKAGE_NAME, settings_file)
+from .core.cph_stats import record_stress
 from .core.cph_tests_merge import merge_tests
 from .core.cph_state import (set_stress_running, register_stress_view,
                              unregister_stress_view)
@@ -482,7 +484,7 @@ def _start_flow(view, choose=False):
     window = view.window()
     if window is None:
         return
-    settings = sublime.load_settings('Algorithm Competition Assistant.sublime-settings')
+    settings = sublime.load_settings(settings_file)
     src_dir = os.path.dirname(user_file)
 
     # Look next to the file under test first: that is where the std and the
@@ -504,7 +506,7 @@ def _start_flow(view, choose=False):
             return
         settings.set('stress_std_file', std_file)
         settings.set('stress_generator_file', gen_file)
-        sublime.save_settings('Algorithm Competition Assistant.sublime-settings')
+        sublime.save_settings(settings_file)
 
         try:
             time_limit = float(get_settings().get('stress_time_limit_seconds', 2) or 2)
@@ -519,11 +521,11 @@ def _start_flow(view, choose=False):
             ask_limits(window, user_file, std_file, gen_file, time_limit,
                        max_rounds, view)
             return
-        sublime.status_message('Algorithm Competition Assistant: %s / %s'
-                               % (os.path.basename(std_file),
+        sublime.status_message('%s: %s / %s'
+                               % (PACKAGE_NAME,
+                                  os.path.basename(std_file),
                                   os.path.basename(gen_file)))
         _launch(view, user_file, std_file, gen_file, time_limit, max_rounds)
-
     if choose or len(std_hits) != 1 or len(gen_hits) != 1:
         def pick_gen(std_file):
             _pick_file(window, src_dir, t('choose_generator_file'),
@@ -618,7 +620,7 @@ def _hidden_startupinfo():
 
 def _lang_entry(file):
     """run_settings entry matching this file, or None."""
-    run_settings = sublime.load_settings('Algorithm Competition Assistant.sublime-settings') \
+    run_settings = sublime.load_settings(settings_file) \
         .get('run_settings') or []
     ext = os.path.splitext(file)[1][1:]
     for entry in run_settings:
@@ -990,6 +992,24 @@ def _finish_stress(sess):
     _stop_stress(sess)
 
 
+def _record_stress_rounds(user_file, rounds):
+    """Count a finished stress run into the practice statistics.
+
+    ``core.cph_stats.record_stress`` exists since the very first stats schema
+    but nothing ever called it, so the "stress_rounds" field of every problem
+    stayed 0 and the statistics page under-reported how much work was done.
+    The module is defensive by contract ("never raises"), and a broken stats
+    file must not take a stress run down with it, so the call is wrapped once
+    more here instead of trusting that.
+    """
+    if not rounds:
+        return
+    try:
+        record_stress(user_file, rounds)
+    except Exception:
+        pass
+
+
 def _run_stress_loop(sess):
     user_file = sess['user_file']
     std_file = sess['std_file']
@@ -1248,6 +1268,19 @@ def _run_stress_loop(sess):
                     lambda: _append_stress(sess, 
                         '\n[Algorithm Competition Assistant] ' + t('stress_all_timeout') + '\n'
                     ), 0)
+        # Feed the practice statistics. `round_count` is the number of rounds
+        # the loop actually attempted; a run that stopped at the wall limit or
+        # on Stop is still work the user did, so it is counted too. The write
+        # is best effort: statistics must never be able to fail a stress run.
+        _record_stress_rounds(user_file, round_count)
+        # "Passed: N rounds" alone does not say how much of the run actually
+        # compared anything: a run where 90 of 100 rounds timed out prints the
+        # same sentence as one where all 100 did real work. One summary line
+        # makes the difference visible without reading the whole panel.
+        sublime.set_timeout(
+            lambda r=round_count, c=compared, gt=gen_timeouts: _append_stress(sess, 
+                '[Algorithm Competition Assistant] ' + t('stress_summary', rounds=r, compared=c, timeouts=gt) + '\n'
+            ), 0)
         # Always say the run is over: a panel that just stopped growing is
         # what "it never ends" looked like.
         elapsed = time.time() - wall_start
@@ -1379,7 +1412,14 @@ def _on_stress_failed(round_count, inp, user_out, std_out, checker_message='',
                         text += '\n[Algorithm Competition Assistant] ' + \
                             t('stress_counterexample_added', total=len(merged)) + '\n'
     except Exception as e:
+        # The counterexample was already printed above, so the user has seen
+        # it. A failure to *persist* it is different: the message used to go
+        # to print_safe() only, which lands in the Sublime console nobody
+        # opens, so a silently-unsaved counterexample looked exactly like a
+        # saved one. It now appears in the stress page as well.
         print_safe('[Algorithm Competition Assistant] failed to save counterexample: %s' % e)
+        text += '\n[Algorithm Competition Assistant] ' + \
+            t('stress_counterexample_save_failed', reason=str(e)[:200]) + '\n'
 
     _append_stress(sess, text)
     _stop_stress(sess)

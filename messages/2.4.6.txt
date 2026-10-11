@@ -1,0 +1,68 @@
+Algorithm Competition Assistant 2.4.6
+=====================================
+
+A pass over the things that were slow, silent or wrong when you were not
+looking. Nothing here changes how a run is started.
+
+Fixed:
+
+* Debug mode failed to link once on every single compile. The default flags
+  were `-fsanitize=address,undefined`, and this toolchain has neither runtime
+  library, so the first attempt always ended in `ld.exe: cannot find -lubsan`
+  before the retry dropped the flag and rebuilt. The default is now
+  `-fsanitize=undefined -fsanitize-trap=undefined`: trapping needs no runtime
+  library, and an out-of-bounds write, a signed overflow or a division by zero
+  still turns into a non-zero exit code that is judged RE, with the line number
+  coming from the gdb replay. AddressSanitizer is still honoured if you put it
+  in `compile_cmd` yourself.
+* A crash after the program had already printed the right answer was judged AC.
+  Programs that abort in a destructor or a signal handler, and sanitizers that
+  call `_exit(0)`, all leave exit code 0 - the crash text on stdout is the only
+  witness, and it is now read before the output comparison.
+* The detail view could freeze the editor on a large WA. Building the line diff
+  is quadratic and runs on the UI thread; two thousand lines of `0`/`1` output
+  with twenty changed lines took 56 seconds. The identical head and tail are now
+  trimmed first, and anything past a million comparison cells falls back to a
+  linear scan. The detail view also lists at most 200 differing spots and says
+  how many it left out; the expected/actual panes and the run view stay whole.
+* The practice statistics log grew without bound - one read of the whole file,
+  one append, one write, forever, on the UI thread (4000 entries: 18 ms each and
+  636 KB). The log now keeps the newest 5000 entries; the per-problem counters
+  remain the permanent ledger, so a problem you solved stays solved.
+* Turning the problem statement into Markdown was quadratic in the number of
+  blocks (8000 blocks: 2.4 seconds, on the UI thread). It is one regex pass now.
+* Importing test data from a folder path reported `[Errno 13] Permission denied`
+  - which is what Windows raises for a directory, not a permission problem. All
+  four import paths now say what to do instead, and a folder is no longer
+  accepted as a candidate `.out` file.
+* A batch import that lost some pairs only said so in the console. It now
+  reports how many of how many were read.
+* Subtask scoring counted a group as passed when a test in it had never been
+  judged.
+* Saving the counterexample, auto-creating the file for a listener, writing the
+  statistics and clearing the test files all failed silently in some path. Each
+  one now names the reason and the consequence.
+
+Added:
+
+* The stress summary at the end of a run: how many rounds ran, how many were
+  actually compared, how many generator timeouts. `Passed: N rounds` never said
+  how much was verified.
+* Stress rounds now reach the practice statistics; `record_stress` had existed
+  since the first schema and was never called, so every problem reported zero.
+* The statistics report follows the interface language.
+* `max_fetch_bytes` (8 MB, downloaded in 64 KB chunks) and
+  `fetch_timeout_seconds` (25 s) are settings instead of hardcoded values.
+* Fetching a problem now shows a one-line summary of the statement in the
+  status bar, so a login wall or a script-rendered page is visible at a glance.
+* A WA in Release mode now hints once per file that undefined behaviour is
+  invisible at -O2 and that Ctrl+Alt+G reruns it in Debug.
+
+Notes:
+
+* Nine functions and 32 i18n strings that no code path could reach were
+  removed, and a guard now fails the build if a string is added without a
+  caller.
+* tests/run_tests.py: 469 checks. New guards cover the log cap (and that
+  "solved" survives it), the three silent failures, the package root module
+  list, directory imports, dead strings and dead functions.

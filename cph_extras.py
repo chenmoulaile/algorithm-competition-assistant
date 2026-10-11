@@ -15,10 +15,11 @@ import sublime_plugin
 from .core.cph_calibrate import (format_report as calibrate_report,
 								 load_factor, measure as calibrate_measure)
 from .core.cph_fetch import (describe_samples, fetch, looks_like_url, samples,
-							 statement, title_of)
+							 statement, summarize, title_of)
 from .core.cph_i18n import t
 from .core.cph_settings import get_settings
-from .core.cph_stats import record_run, reset as stats_reset, summary as stats_summary
+from .core.cph_stats import (record_run, reset as stats_reset,
+							 summary_localized as stats_summary_localized)
 from .core.cph_tests_merge import merge_tests
 from .core.cph_settings import load_all_tests, save_tests
 
@@ -105,9 +106,19 @@ class CphFetchProblemCommand(sublime_plugin.TextCommand):
 					_add_samples_to(view, pairs)
 				else:
 					sublime.status_message('[Algorithm Competition Assistant] ' + t('fetch_no_samples'))
-				if title:
+				# A page with no <title> and no <h1> leaves problem_title() empty,
+				# so the status bar would stay at the bare URL from
+				# fetch_and_add() and say nothing about what was fetched. Fall
+				# back to one line of the statement itself - the longest visible
+				# line, because nav and sample blocks are short and prose is not.
+				label = title
+				if not label:
+					line = summarize(html)
+					if line:
+						label = t('statement_summary', text=line)
+				if label:
 					sublime.status_message('[Algorithm Competition Assistant] %s | %s'
-										   % (title, describe_samples(pairs)))
+										   % (label, describe_samples(pairs)))
 				if open_statement:
 					_open_markdown(statement(html, url))
 			sublime.set_timeout(apply, 0)
@@ -205,7 +216,7 @@ class CphStatsCommand(sublime_plugin.TextCommand):
 			days = int(days or _settings().get('stats_days', 7) or 7)
 		except (TypeError, ValueError):
 			days = 7
-		report = stats_summary(days)
+		report = stats_summary_localized(days)
 		if not report or not report.strip():
 			sublime.status_message('[Algorithm Competition Assistant] ' + t('stats_empty'))
 			return
@@ -215,8 +226,7 @@ class CphStatsCommand(sublime_plugin.TextCommand):
 		view = window.new_file()
 		view.set_scratch(True)
 		view.set_name('practice stats')
-		view.run_command('append', {
-			'characters': t('stats_title', days=days) + '\n\n' + report})
+		view.run_command('append', {'characters': report})
 
 
 class CphContestTimerCommand(sublime_plugin.TextCommand):

@@ -141,6 +141,11 @@ def get_verdict_by_name(name):
 # jump link pointed at a path that does not exist.
 _CRASH_PATTERNS = (
     # gcc/clang -fsanitize=address,undefined:  main.cpp:12:5: runtime error: ...
+    # The plugin's own debug mode uses the trap form
+    # (-fsanitize=undefined -fsanitize-trap=undefined), which prints NOTHING:
+    # the check is a ud2 instruction, so the process dies on 0xC000001D and
+    # this pattern never fires. That is the case core/cph_gdb_trace.py exists
+    # for - it replays the crash under gdb and reads the frame instead.
     re.compile(r'([A-Za-z0-9_./\\:+-]+?\.(?:c|cc|cpp|cxx|h|hpp)):(\d+):\d+:\s*'
                r'(?:runtime error|AddressSanitizer|ERROR|SUMMARY)'),
     # libstdc++ / glibc assertions (-D_GLIBCXX_ASSERTIONS, C assert()):
@@ -170,6 +175,16 @@ def find_crash_location(text, source_file=None):
     program's own output gives us: a Python traceback, a Java stack trace,
     gcc/clang -fsanitize diagnostics or a gdb backtrace. A location matching
     the source file being tested wins over the first unrelated one.
+
+    This parses TEXT. When there is no text to parse - the trap form of ubsan
+    dies on ud2 with an empty stderr, and a bare segfault prints nothing -
+    the caller replays the program under gdb instead
+    (``core/cph_gdb_trace.py``, whose ``find_crash`` is the text-parsing twin
+    of this function: same ``(file, line)`` contract, same ``source_file``
+    preference). The two are deliberately separate modules - one is pure
+    string work, the other spawns a debugger - and the callers in
+    ``test_manager.py`` / ``core/cph_parallel.py`` chain them: try this, and
+    if the result does not name the source file, replay.
     """
     if not text:
         return None
@@ -271,6 +286,15 @@ def get_verdict_by_code(rtcode, runtime, time_limit_ms, memory_limit_mb,
     # Real MLE: only reachable once the peak memory was actually measured
     if memory_limit_mb and memory_used_mb and memory_used_mb > float(memory_limit_mb):
         return get_verdict('memory_limit_exceed')
+
+    # A program that died on its own still exits 0 when the abort happens
+    # inside a destructor, a signal handler, or a sanitizer that calls
+    # _exit(0). The crash text is the only witness, so it is checked before
+    # the output comparison, not after: otherwise a program that printed the
+    # right answer first and crashed after the last write scored AC on a
+    # sanitizer report. ignore_error=True can suppress stderr, never this.
+    if stdout is not None and stdout is not expected_output and looks_like_crash(stdout):
+        return get_verdict('runtime_error')
 
     if not expected_output or not expected_output.strip():
         # 没有设置正确答案时,不能判定为 AC,返回未评判
@@ -397,6 +421,15 @@ def normalize_lines(s):
     return [line.rstrip() for line in s.split('\n')]
 
 
+#: SequenceMatcher is quadratic in the worst case and this runs on the UI
+#: thread every time a detail view opens. Measured before the guards below:
+#: 20k lines of 0/1 output with 20 changed lines took 56s to diff; 8k
+#: identical lines with one changed line took 11.8s. Both froze Sublime.
+#: Trimming removes the common shape (output that matches except somewhere
+#: in the middle), and this cell budget bounds what is left at ~0.15s.
+_DIFF_CELL_BUDGET = 1000000
+
+
 def build_line_diff(expected, actual):
     """Line-by-line diff between expected and actual output.
 
@@ -418,21 +451,54 @@ def build_line_diff(expected, actual):
     if exp == act:
         return None, total
 
+    # Only the region between the first and the last difference can produce
+    # a non-equal opcode, so SequenceMatcher is handed just that window.
+    # Line numbers below are offset back by `head`.
+    limit = min(len(exp), len(act))
+    head = 0
+    while head < limit and exp[head] == act[head]:
+        head += 1
+    tail = 0
+    while (tail < limit - head
+           and exp[len(exp) - 1 - tail] == act[len(act) - 1 - tail]):
+        tail += 1
+    we = exp[head:len(exp) - tail]
+    wa = act[head:len(act) - tail]
+
     ops = []
-    sm = difflib.SequenceMatcher(a=exp, b=act, autojunk=False)
+    if len(we) * len(wa) > _DIFF_CELL_BUDGET:
+        # Still too big to align without freezing the editor. Fall back to a
+        # straight line-by-line scan of the window: it never invents a
+        # difference (an identical line at the same position is skipped) and
+        # it is O(n). autojunk=True would be fast as well, but it merges runs
+        # of repeated lines into one giant replace block, so a single changed
+        # line in 10k identical ones comes back as "10k lines differ".
+        # A shift makes every following position differ, which is what a
+        # positional diff looks like anywhere else too.
+        shared = min(len(we), len(wa))
+        for off in range(shared):
+            if we[off] != wa[off]:
+                ops.append(('!=', head + off + 1, we[off], wa[off]))
+        for off in range(shared, len(we)):
+            ops.append(('-', head + off + 1, we[off], ''))
+        for off in range(shared, len(wa)):
+            ops.append(('+', head + off + 1, '', wa[off]))
+        return ops, total
+
+    sm = difflib.SequenceMatcher(a=we, b=wa, autojunk=False)
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == 'equal':
             continue
         if tag == 'replace':
             span = max(i2 - i1, j2 - j1)
             for off in range(span):
-                e = exp[i1 + off] if i1 + off < i2 else ''
-                a = act[j1 + off] if j1 + off < j2 else ''
-                ops.append(('!=', i1 + off + 1, e, a))
+                e = we[i1 + off] if i1 + off < i2 else ''
+                a = wa[j1 + off] if j1 + off < j2 else ''
+                ops.append(('!=', head + i1 + off + 1, e, a))
         elif tag == 'delete':
             for k in range(i1, i2):
-                ops.append(('-', k + 1, exp[k], ''))
+                ops.append(('-', head + k + 1, we[k], ''))
         elif tag == 'insert':
             for k in range(j1, j2):
-                ops.append(('+', k + 1, '', act[k]))
+                ops.append(('+', head + k + 1, '', wa[k]))
     return ops, total

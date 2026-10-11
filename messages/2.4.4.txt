@@ -1,22 +1,27 @@
 Algorithm Competition Assistant 2.4.4
 =====================================
 
-The package is now published as **Algorithm Competition Assistant**. The
-repository keeps its existing URL, so old links keep working.
+The package display name is now "Algorithm Competition Assistant". Nothing
+else changed: no feature, no fix, no key binding, no command name.
 
-Changed:
+What was renamed:
 
-* The default settings file moved from `cph-by-chenkx.sublime-settings` to
-  `Algorithm Competition Assistant.sublime-settings`.
-* The two palette entries now read `Preferences: Algorithm Competition
-  Assistant Settings` and `Preferences: Algorithm Competition Assistant
-  TestSyntax Settings`.
-* `Main.sublime-menu` gained the matching `Package Settings` entry.
-* Every path reaching into the package (`${packages}/...`) now points at the
-  installed package name instead of the repository name.
+* cph-by-chenkx.sublime-settings -> Algorithm Competition Assistant.sublime-settings
+  (the package's own settings default; your overrides in Packages/User are
+  untouched and still win)
+* every command-palette caption "cph-by-chenkx: ..." ->
+  "Algorithm Competition Assistant: ...", and both Preferences entries now read
+  "Preferences: Algorithm Competition Assistant Settings" /
+  "... TestSyntax Settings"
+* Main.sublime-menu entries follow the same name
+* every ${packages}/... base_file path now points at the installed package
+  name instead of the repository name, so Preferences > Package Settings and
+  Key Bindings open the shipped defaults on every machine, not only where the
+  folder happens to be named after the repository
 
-Notes:
+What deliberately did NOT change:
 
-* Settings you customised live under `Packages/User/` and are untouched.
-* The machine-calibration and practice-statistics files under `Packages/User/`
-  keep their previous names, so existing data is preserved.
+* command names (cph_*), classes and every Packages/User data file name. Your
+  practice statistics still live in Packages/User/cph-by-chenkx-stats.json and
+  machine calibration in cph-by-chenkx-machine.json - months of history survive
+  the rename untouched.

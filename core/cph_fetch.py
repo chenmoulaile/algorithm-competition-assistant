@@ -16,6 +16,7 @@ import urllib.error
 
 from .cph_html import extract_samples, html_to_markdown, problem_title, strip_tags
 from .cph_i18n import t
+from .cph_settings import get_settings
 
 #: Some judges (Codeforces in particular) serve a challenge page to unknown
 #: clients, so send a normal browser UA.
@@ -24,22 +25,115 @@ USER_AGENT = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
 
 URL_RE = re.compile(r'^https?://\S+$', re.I)
 
+#: Pages heavier than this are refused instead of buffered (the
+#: max_fetch_bytes setting, in bytes; the shipped settings file carries the
+#: same default). It bounds how big a PROBLEM PAGE may be - it is unrelated
+#: to max_output_bytes, which bounds how much of a program's own output the
+#: run panel keeps.
+DEFAULT_MAX_FETCH_BYTES = 8388608
+
+#: Seconds before a problem page is declared unreachable (the
+#: fetch_timeout_seconds setting; the shipped settings file carries the same
+#: default). A slow judge used to be indistinguishable from a dead one: the
+#: value was a hard-coded 25 in the signature, so a page that legitimately
+#: needs 40s on a bad connection could never be fetched at all.
+DEFAULT_FETCH_TIMEOUT = 25
+
+#: The body is read in chunks of this size and discarded (with an error) as
+#: soon as the next chunk would push the total past the cap, so an oversized
+#: page is never fully downloaded, let alone silently truncated.
+CHUNK_SIZE = 65536
+
+
+class _ResponseTooLarge(Exception):
+	"""Raised by _read_capped() when the body outgrows max_fetch_bytes."""
+	pass
+
+
+def _max_fetch_bytes():
+	"""The configured page-size cap, always a sane positive int."""
+	try:
+		value = get_settings().get('max_fetch_bytes', DEFAULT_MAX_FETCH_BYTES)
+	except Exception:
+		return DEFAULT_MAX_FETCH_BYTES
+	try:
+		value = int(value)
+	except (TypeError, ValueError):
+		return DEFAULT_MAX_FETCH_BYTES
+	return value if value > 0 else DEFAULT_MAX_FETCH_BYTES
+
+
+def _fetch_timeout():
+	"""The configured per-request timeout in seconds, always a sane positive int.
+
+	A slow judge is not a dead judge, so this is a setting rather than the
+	hard-coded 25 the signature used to carry. Values that are not a positive
+	number fall back to the default instead of raising inside a download.
+	"""
+	try:
+		value = get_settings().get('fetch_timeout_seconds',
+								   DEFAULT_FETCH_TIMEOUT)
+	except Exception:
+		return DEFAULT_FETCH_TIMEOUT
+	try:
+		value = int(value)
+	except (TypeError, ValueError):
+		return DEFAULT_FETCH_TIMEOUT
+	return value if value > 0 else DEFAULT_FETCH_TIMEOUT
+
+
+def _read_capped(response, limit):
+	"""Read the body in chunks, refusing pages heavier than limit bytes.
+
+	Raises _ResponseTooLarge as soon as one more byte would blow the cap:
+	nothing past it is downloaded or buffered, and the caller reports a
+	failure instead of handing back a truncated page.
+	"""
+	chunks = []
+	total = 0
+	while True:
+		chunk = response.read(CHUNK_SIZE)
+		if not chunk:
+			break
+		total += len(chunk)
+		if total > limit:
+			raise _ResponseTooLarge()
+		chunks.append(chunk)
+	return b''.join(chunks)
+
+
+def _format_bytes(n):
+	if n >= 1048576:
+		return '%.1f MB' % (n / 1048576.0)
+	if n >= 1024:
+		return '%.1f KB' % (n / 1024.0)
+	return '%d B' % n
+
 
 def looks_like_url(text):
 	return bool(text) and bool(URL_RE.match(text.strip()))
 
 
-def fetch(url, timeout=25):
-	"""Download a page. Returns (html, error_message)."""
+def fetch(url, timeout=None):
+	"""Download a page. Returns (html, error_message).
+
+	``timeout`` overrides the fetch_timeout_seconds setting; callers that do
+	not care pass nothing and get the configured value.
+	"""
 	url = (url or '').strip()
 	if not looks_like_url(url):
 		return '', t('fetch_bad_url', url=url)
 	request = urllib.request.Request(url)
 	request.add_header('User-Agent', USER_AGENT)
 	request.add_header('Accept-Language', 'zh-CN,zh;q=0.9,en;q=0.8')
+	limit = _max_fetch_bytes()
+	if timeout is None:
+		timeout = _fetch_timeout()
 	try:
 		with urllib.request.urlopen(request, timeout=timeout) as response:
-			raw = response.read()
+			raw = _read_capped(response, limit)
+	except _ResponseTooLarge:
+		return '', t('fetch_response_too_large', limit=_format_bytes(limit))
 	except urllib.error.HTTPError as e:
 		return '', t('fetch_http_error', code=e.code, url=url)
 	except Exception as e:
@@ -95,7 +189,24 @@ def describe_samples(pairs):
 	return t('fetch_found_samples', n=len(pairs))
 
 
-def first_lines(text, limit=200):
-	"""Short preview used in messages."""
-	flat = ' '.join(strip_tags(text or '').split())
-	return flat[:limit]
+def summarize(html, limit=160):
+	"""One line of prose from the statement, for the status bar.
+
+	A page without a <title> and without an <h1> leaves `problem_title()`
+	empty, and the status bar then shows the bare URL - which says nothing
+	about whether the right problem was fetched. The longest visible line is
+	a decent stand-in: navigation and sample blocks are short, problem
+	statements are not. Returns '' when the page has no text at all.
+	"""
+	try:
+		text = strip_tags(html or '')
+	except Exception:
+		return ''
+	best = ''
+	for line in text.split('\n'):
+		line = line.strip()
+		if len(line) > len(best):
+			best = line
+	if len(best) > limit:
+		best = best[:limit - 3].rstrip() + '...'
+	return best

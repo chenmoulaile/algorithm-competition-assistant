@@ -36,13 +36,21 @@
 跑一次，输出不参与答案比较，结论以日志解析为准。找不到用户帧就退化成原有的 libstdc++
 断言位置，绝不凭空编造行号。
 
-为什么不用 sanitizer
---------------------
-本机 g++ 与 clang++ 的 sanitizer 运行库都不存在：g++ 报
-``cannot find -lubsan/-lasan``，clang++ 报
-``cannot find .../libclang_rt.asan_dynamic.dll.a``（``D:\\MSYS2\\mingw64\\lib`` 下
-``libasan*`` / ``libubsan*`` / ``libclang_rt.asan*`` 全部 NONE），且 clang 21 的 rt
-目录只有 include、没有 lib。gdb 是唯一在这台机器上开箱可用的定位手段。
+为什么 sanitizer 之外还要 gdb
+-----------------------------
+debug 构建模式（``core/cph_build_mode.py``）用的 ubsan 形态是
+``-fsanitize=undefined -fsanitize-trap=undefined``：它把每条 UBSan 检查换成一条 ``ud2``
+指令，**链接期不需要 libubsan**，所以在本机（``libasan*`` / ``libubsan*`` 都不存在，
+g++ 报 ``cannot find -lubsan/-lasan``）也能编过并真的抓到有符号溢出、栈数组越界、除零。
+代价是它**没有诊断文本**——命中即 ``ud2``，进程以 ``0xC000001D``（SIGILL）退出，stderr
+一个字节都没有，所以 ``core/cph_verdict.py`` 只能判出 RE，说不出在哪一行。gdb 回放就是
+补这一步：把 SIGILL 和 SIGSEGV 一视同仁地接住，从回溯里读回用户帧的行号。
+
+AddressSanitizer（堆越界、use-after-free，带 ``文件:行:列``）在本机链接不上，只能由用户
+在 ``compile_cmd`` 里 opt-in；``-D_GLIBCXX_ASSERTIONS`` 覆盖 ``std::vector`` 越界，
+它的断言文本自带 libstdc++ 的 ``bits/stl_vector.h:1263``（不是用户那行），
+``core/cph_verdict.py`` 的 ``_CRASH_PATTERNS`` 第二条负责把它读出来，gdb 再把它换成
+用户帧。三条链各管一段，互不替代。
 
 回溯解析
 --------
@@ -286,6 +294,12 @@ def split_log(text):
 def find_crash(text, source_file=None):
     """One-call helper: gdb log text -> (file, line) or None.
 
+    The gdb-log twin of ``core/cph_verdict.py``'s ``find_crash_location``:
+    same ``(file, line)`` contract and the same "prefer the frame that names
+    ``source_file``" rule, but it reads a gdb log rather than the program's own
+    stderr. Callers try ``find_crash_location`` first and fall back to a replay
+    here, so this one may return None freely.
+
     Returns None when the program did not crash under gdb, or when the
     backtrace has no user frame. An unreachable gdb therefore degrades to the
     existing libstdc++ assertion location instead of reporting nothing.
@@ -294,12 +308,6 @@ def find_crash(text, source_file=None):
     if not crashed:
         return None
     return parse_frames(body, source_file)
-
-
-def signal_name(text):
-    """The fatal signal name in a gdb log ('SIGSEGV', 'SIGABRT', ...)."""
-    m = _HIT_SIGNAL.search(text or '')
-    return m.group(1) if m else None
 
 
 def _kill_tree(proc):

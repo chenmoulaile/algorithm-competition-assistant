@@ -59,6 +59,8 @@ def store_path():
 			os.makedirs(base)
 	except Exception:
 		base = tempfile.gettempdir()
+	# Deliberately the old data-file name: v2.4.4 renamed the package, not the
+	# files a user already has on disk.
 	return os.path.join(base, 'cph-by-chenkx-machine.json')
 
 

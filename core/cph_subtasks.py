@@ -48,14 +48,6 @@ def parse(raw):
 	return groups
 
 
-def group_of(index, groups):
-	"""Index of the group a 0-based test index belongs to, or None."""
-	for position, group in enumerate(groups):
-		if group['from'] - 1 <= index <= group['to'] - 1:
-			return position
-	return None
-
-
 def evaluate(verdicts, groups):
 	"""Score a run.
 
@@ -75,9 +67,8 @@ def evaluate(verdicts, groups):
 			else:
 				collected.append(None)
 		judged = [v for v in collected if v]
-		passed = bool(judged) and all(v == 'AC' for v in collected if v)
-		# A group counts as passed only when every test in it was judged AC -
-		# an unjudged test is not a pass.
+		# A group counts as passed only when every test in it was judged and
+		# judged AC - an unjudged test is not a pass.
 		passed = bool(collected) and all(v == 'AC' for v in collected)
 		score = group['score'] if passed else 0
 		result['total'] += score

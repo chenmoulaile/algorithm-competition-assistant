@@ -1,8 +1,54 @@
 # Algorithm Competition Assistant — Package Control Submission Notes
 
-Package version: v2.4.5
+Package version: v2.4.6
 Repository: https://github.com/chenmoulaile/cph-by-chenkx
 Channel entry file: `repository/a.json` (see snippet at the bottom)
+
+## v2.4.6 notes
+
+A correctness and responsiveness pass over paths that failed quietly. No change
+to how a run is started or judged, apart from the two verdict fixes below.
+
+- **Debug mode no longer fails its first compile.** The default flags were
+  `-fsanitize=address,undefined`; this toolchain ships neither `libasan` nor
+  `libubsan`, so every switch to Debug first produced
+  `ld.exe: cannot find -lubsan` and then relied on the retry that strips
+  `-fsanitize`. The default is now
+  `-fsanitize=undefined -fsanitize-trap=undefined`, which needs no runtime
+  library: a trap turns each UBSan check into `ud2`, still a non-zero exit code
+  (RE), with the source line coming from the existing gdb replay. A user-written
+  `-fsanitize=address` in `compile_cmd` is still honoured. The sanitizer-stripping
+  regex was also widened from `-fsanitize=\S+` to `-fsanitize\S*`, because the
+  old form left `-fsanitize-trap=undefined` behind as an orphan and silently
+  turned undefined behaviour into `ud2` in Release builds.
+- **A crash that still exits 0 is now judged RE.** Aborting in a destructor or a
+  signal handler, and sanitizers that call `_exit(0)`, all leave exit code 0, so
+  "prints the right answer, then crashes" was AC. The crash-text check now runs
+  before the output comparison.
+- **Subtask scoring** no longer counts a group as passed when one of its tests
+  was never judged.
+- **Two quadratic paths on the UI thread were fixed.** The line diff in the
+  detail view trims the common head/tail first and falls back to a linear scan
+  past a cell budget (2000 lines of `0`/`1` output with 20 edits took 56 s);
+  the detail view lists at most 200 differing spots and states how many were
+  omitted. `html_to_markdown()` replaces its per-block `str.replace()` loop with
+  a single regex pass (8000 blocks: 2.44 s → 0.246 s).
+- **The practice-statistics log is capped** at the newest 5000 entries; the
+  per-problem counters stay permanent, so "solved" cannot regress when an old
+  AC entry is dropped.
+- **Silent failures now say so:** auto-creating a file for a listener when the
+  directory is not writable, saving the statistics file, clearing the test
+  files, saving the stress counterexample, and a partial batch import.
+- **Importing a directory as test data** reported `[Errno 13] Permission denied`
+  (what Windows raises for `open()` on a directory); all four import paths now
+  name the problem, and a directory is no longer a candidate `.out` file.
+- Added: the stress run summary (rounds / compared / generator timeouts), stress
+  rounds in the statistics, a localized statistics report, `max_fetch_bytes`
+  (8 MB, read in 64 KB chunks) and `fetch_timeout_seconds` as settings, a
+  one-line statement summary after fetching a problem, and a once-per-file hint
+  that a WA in Release mode may be invisible undefined behaviour.
+- Removed nine functions and 32 i18n strings that no code path could reach,
+  with a guard that fails when a string is added without a caller.
 
 ## v2.4.5 notes
 
@@ -353,9 +399,11 @@ commands against real buffers):
   forwarded to `create_opd()`.
 - **Runtime errors are located**: when a crashed program's output names a
   position (Python traceback, Java stack trace, gcc/clang `-fsanitize`
-  diagnostic) the card/detail and the status bar show `file:line`. A bare C++
-  segfault carries no line - the README documents adding
-  `-fsanitize=address,undefined -g`.
+  diagnostic, libstdc++ assertion) the card/detail and the status bar show
+  `file:line`. A bare C++ segfault carries no line of its own, so the plugin
+  replays it under gdb (`core/cph_gdb_trace.py`) and reads the frame out of
+  the backtrace; that needs `-g`, which the debug build mode
+  (`Ctrl+Alt+G`) adds - see the README for the measured difference.
 - **`ProcessManager`**: the stdin-closed handler called `t()` without importing
   it (`NameError`); `cph_stress` leaked the `except ... as e` variable into a
   deferred lambda (same class of bug); a stress run whose every round timed out

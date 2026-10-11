@@ -139,6 +139,15 @@
 	// 单次运行保留的输出上限（字节），超出部分丢弃并在控制台提示，
 	// 防止程序在时间限制内疯狂输出把编辑器卡死。默认 8MB。
 	"max_output_bytes": 8388608,
+	// 抓题时允许下载的页面体积上限（字节）。页面按 64KB 分块读取，累计一超过
+	// 该上限就停止下载并提示，不会把超大页面整页读进内存，也不会静默截断。
+	// 默认 8MB。注意它与上面的 max_output_bytes 不是一回事：那个限制的是运行
+	// 期间保留多少程序输出，这个限制的是题目页面本身有多大。
+	"max_fetch_bytes": 8388608,
+	// 抓题单次请求的超时（秒）。默认 25。慢的 OJ 和挂掉的 OJ 在界面上
+	// 原本长得一样（都是"抓取失败"），所以这里给了你把它调大的余地：
+	// 网络差的时候 40 秒才出题面的站点，以前永远抓不下来。
+	"fetch_timeout_seconds": 25,
 	// 逐字符同步输出（只有交互式程序需要）。开启后输出量大时会明显变慢，
 	// 因为每个字符都要刷新一次视图。默认关闭。
 	"sync_output": false,
@@ -191,26 +200,33 @@
 	// 新打开的文件用哪种编译模式；随时可用 Ctrl+Alt+G 切换（按文件记忆，
 	// 不会写进这个设置文件）。
 	//   release：保证带 -O2，去掉 sanitizer 与断言参数 —— 计时用，速度与评测机可比
-	//   debug  ：去掉优化，加 -g -fsanitize=address,undefined
-	//            -D_GLIBCXX_ASSERTIONS
-	//            —— 崩溃时输出 文件:行:列，详情视图里可以直接点着跳过去
+	//   debug  ：去掉优化，加 -g -fsanitize=undefined -fsanitize-trap=undefined
+	//            -fno-omit-frame-pointer -D_GLIBCXX_ASSERTIONS
+	//            —— 越界/溢出/除零会变成非零退出码并判 RE，行号由 gdb 回放给出，
+	//               详情视图里可以直接点着跳过去
 	//   ⚠ 未定义行为为什么必须在 debug 下查（这才是 RE 最常见的样子）：
 	//      越界访问不是崩溃，是未定义行为。-O2 下 std::vector 的
 	//      operator[] 越界往往读到堆里的垃圾，打印出一个随机数然后 exit 0 ——
 	//      插件只能判 WA，全流程没有一处提示你越界了。-D_GLIBCXX_ASSERTIONS
 	//      让同一个程序中止（rc=3）并打印 Assertion '__n < this->size()' failed，
 	//      判定为 RE，详情里还能点回出问题的文件:行。
-	//   ⚠ 工具链限制（整型溢出 / 崩溃行号）：
-	//      -fsanitize 的运行期定位（UBSan）需要带 sanitizer 运行库的工具链。本机
-	//      MSYS2 mingw gcc 实测链接失败（ld.exe: cannot find -lubsan/-lasan），
-	//      插件遇到这种链接失败时会自动去掉 -fsanitize 参数重试一次并提示。
-	//      debug 模式因此在本机仍然可用：-D_GLIBCXX_ASSERTIONS 不依赖那个运行库，
-	//      越界照样能查出来（只是拿不到 UBSan 那种 行:列）。想要更细的行:列，用
-	//      -D_GLIBCXX_DEBUG（会连容器迭代器一起检查，报错更啰嗦但信息更全），
-	//      或 -Woverflow 拿编译期常量溢出的 行:列 警告（运行期变量溢出属于未定义
-	//      行为，编译器报不了，只能靠 debug 模式）。编译成功但带警告时，编译条会
-	//      显示为黄色「编译警告」chip 并列出可点击的 文件:行:列 —— 警告不再只在
-	//      编译失败时顺带出现。
+	//   ⚠ 为什么默认 sanitizer 是 trap 形态而不是 -fsanitize=address,undefined：
+	//      后者要在链接期解析 libasan / libubsan。本机 MSYS2 mingw gcc 实测两个
+	//      运行库都不存在（ld.exe: cannot find -lasan / -lubsan），而且 address
+	//      与 undefined 写在一起时，链接失败会把 undefined 一起拖死 —— 每次
+	//      debug 编译都要先失败一次、再靠插件去掉 -fsanitize 重试才成功。
+	//      -fsanitize-trap=undefined 把每条检查换成一条 ud2 指令，不需要运行库，
+	//      整数溢出 / 数组越界 / 除零照样变成非零退出码（Windows 上是
+	//      0xC000001D），插件判 RE，再交给 gdb 回放取 文件:行。代价是它不打印
+	//      UBSan 那种诊断文本，位置信息只能靠回放拿。
+	//   ⚠ 想要 ASan 时怎么办：自己在 compile_cmd 里写 -fsanitize=address 即可，
+	//      debug 模式会原样保留你写的 sanitizer、不会叠加默认那对；用不了的
+	//      工具链仍会在链接失败后自动去掉 -fsanitize 重试一次并提示。
+	//      更啰嗦但更全的容器检查用 -D_GLIBCXX_DEBUG；编译期常量溢出的
+	//      行:列 用 -Woverflow（运行期变量溢出属于未定义行为，编译器报不了，
+	//      只能靠 debug 模式）。编译成功但带警告时，编译条会显示为黄色
+	//      「编译警告」chip 并列出可点击的 文件:行:列 —— 警告不再只在编译失败
+	//      时顺带出现。
 	"build_mode": "release",
 
 	// ================= 编译缓存 =================
