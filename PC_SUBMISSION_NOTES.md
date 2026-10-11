@@ -1,8 +1,40 @@
 # Algorithm Competition Assistant — Package Control Submission Notes
 
-Package version: v2.4.9
+Package version: v2.4.10
 Repository: https://github.com/chenmoulaile/cph-by-chenkx
 Channel entry file: `repository/a.json` (see snippet at the bottom)
+
+## v2.4.10 notes
+
+Four defects found by auditing the previous two releases against the code they
+changed and against platforms other than the one they were developed on. Three
+of the four are invisible from a Chinese Windows machine, which is what CI's
+Linux and macOS legs are for.
+
+- Doctor's version probe passed a list with `shell=True`, so on POSIX the shell
+  received only the executable and ran a bare `g++` - reporting FAIL for a
+  working toolchain. List commands now run without a shell; string commands
+  (a user's own compile line) keep one.
+- The next-test chain called `update_configs()` from the async worker, building
+  `PhantomSet`s off the main thread - the same class of bug the previous release
+  claimed to have removed from the panel, on the path every interactive or
+  pasted test takes.
+- The Companion listener's new origin check split `Host: [::1]:12345` on its
+  first colon and refused its own IPv6 loopback - a regression introduced while
+  closing a cross-site hole. Bracketed hosts are parsed properly now.
+- The doctor probes ran on Sublime's single shared async worker while compiling
+  and running a real program per language, queueing every other plugin behind
+  them for seconds. They own a thread now.
+
+Also fixed in the tooling: `check_messages.py` compared version numbers as text,
+so `max(['2.4.9', '2.4.10'])` was `'2.4.9'` and the guard that keeps the startup
+banner honest would have demanded an older build from the first two-digit patch
+number onwards.
+
+551 checks, 0 failures, on two CPython builds across cp1252 / utf-8 / gbk. One
+deliberate non-fix is documented in the release notes: a run that finishes in
+the instant between the stop check and the kill still reports SKIPPED, because
+the alternative is a killed run occasionally judged AC.
 
 ## v2.4.9
 

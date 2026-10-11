@@ -171,6 +171,25 @@ def main():
     return check_plugin_version(keys)
 
 
+def _version_key(version):
+    """Sort key that reads '2.4.10' as newer than '2.4.9'.
+
+    Numeric components, with any non-numeric tail (never expected here, but a
+    'v' prefix or an 'rc1' would crash int()) compared as text so the sort is
+    total and never raises.
+    """
+    parts = []
+    for chunk in str(version).split('.'):
+        digits = ''
+        for ch in chunk:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        parts.append((int(digits) if digits else -1, chunk))
+    return tuple(parts)
+
+
 def check_plugin_version(keys):
     """`plugin_init.VERSION` must be the newest key in messages.json.
 
@@ -188,7 +207,10 @@ def check_plugin_version(keys):
               'name nothing')
         return 1
     declared = m.group(1)
-    newest = max(keys)
+    # Numeric, not lexical: max(['2.4.9', '2.4.10']) is '2.4.9', so a string
+    # compare would have this guard insist the banner names an older build the
+    # moment a two-digit patch number ships.
+    newest = max(keys, key=_version_key)
     if declared != newest:
         print('plugin_init.VERSION is %s but messages.json newest is %s - '
               'the banner would name a build that was never loaded'

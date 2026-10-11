@@ -1,0 +1,49 @@
+Algorithm Competition Assistant 2.4.10
+======================================
+
+Four defects found by auditing the last two releases against the code they
+changed, rather than against the platform this plugin is developed on. Three of
+them were invisible from a Chinese Windows machine.
+
+Fixed:
+
+* Doctor's compiler version probe dropped its own argument on Linux and macOS.
+  `Popen([exe, '--version'], shell=True)` gives the shell only the first item
+  and treats the rest as arguments to the shell itself, so the probe ran a bare
+  `g++` - which exits non-zero with "no input files" - and reported FAIL for a
+  perfectly working toolchain. Windows joins the list, which is why nobody
+  noticed. List commands now run without a shell; string commands (the user's
+  own compile line, which may legitimately contain shell syntax) still use one.
+  A quoted compiler path with spaces was broken by the same shell and works now.
+* The next-test chain built test cards on a worker thread. `update_configs()`
+  creates `PhantomSet`s and reads view settings, and the chain callback reached
+  it straight from `set_timeout_async` - the same off-thread view work v2.4.9
+  said it had removed from the panel, in the path that runs after every
+  interactive or pasted test. It is deferred to the main thread now, like the
+  output and the verdict.
+* The Companion listener refused its own IPv6 loopback. `Host: [::1]:12345`
+  was split on the first colon, leaving `[`, so a browser that resolved
+  `localhost` to `::1` got 403 on every import - a rejection this release
+  introduced while trying to close a cross-site hole. Bracketed hosts are parsed
+  properly now; a bracketed non-loopback host is still refused.
+* The doctor probes no longer occupy Sublime's single shared async worker. They
+  compile and run a real program per language, seconds each on a cold toolchain,
+  and while they ran, auto-run-on-save and every other plugin's async callbacks
+  were queued behind them. They have their own thread now. This is the mistake
+  the previous release diagnosed for the run panel, repeated in code added in
+  the same burst of work.
+* tests/check_messages.py compared version numbers as text, so
+  `max(['2.4.9', '2.4.10'])` is `'2.4.9'`: the guard that keeps the startup
+  banner honest would have demanded the banner name an older build from the
+  first two-digit patch number onwards. Versions are compared numerically now.
+
+Not changed, on purpose: stopping a run that finished in the microsecond
+between the check and the kill still reports SKIPPED rather than its verdict.
+Closing that window means un-stamping "the user asked for this" once the child
+is dead, and the result would be a killed run occasionally judged AC. A local
+result that is too pessimistic costs a re-run; one that is too optimistic costs
+a submission penalty.
+
+Tests: 544 -> 551 checks, 0 failures, verified on two CPython builds across
+cp1252 / utf-8 / gbk. The new list-command check only fails on POSIX, which is
+the point of running the suite on Linux and macOS in CI.

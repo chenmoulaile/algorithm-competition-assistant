@@ -14,6 +14,7 @@ Algorithm Competition Assistant - 环境自检 (doctor)
 import os
 import re
 import sys
+import threading
 
 import sublime
 import sublime_plugin
@@ -89,12 +90,21 @@ def _startupinfo():
 
 
 def _run_capture(args, cwd=None, timeout=90):
-	"""Run one probe command. Returns (returncode, decoded output)."""
+	"""Run one probe command. Returns (returncode, decoded output).
+
+	A list runs directly: with shell=True on POSIX the shell gets only the first
+	item and the rest become arguments to the shell itself, so `[exe,
+	'--version']` silently ran a bare `g++` there and reported FAIL for a working
+	toolchain - Windows joins the list, which is why this only showed up on Linux
+	and macOS. A string command is the user's own compile line, which may
+	legitimately carry shell syntax, so that one keeps a shell.
+	"""
 	import subprocess
 	try:
-	 proc = subprocess.Popen(args, shell=True, stdout=subprocess.PIPE,
-							 stderr=subprocess.STDOUT, cwd=cwd,
-							 startupinfo=_startupinfo())
+		proc = subprocess.Popen(args, shell=isinstance(args, str),
+							stdout=subprocess.PIPE,
+							stderr=subprocess.STDOUT, cwd=cwd,
+							startupinfo=_startupinfo())
 	except Exception as e:
 		return None, '%s' % e
 	try:
@@ -471,11 +481,16 @@ class CphDoctorCommand(sublime_plugin.TextCommand):
 		window.focus_view(view)
 		print(report)
 
-		# A probe really compiles and runs a program per language, which costs
-		# seconds on a cold toolchain. On the UI thread that is an editor
-		# freeze, so the report goes on screen first and the results stream in.
-		sublime.set_timeout_async(
-			lambda: self._probe_tools(view, run_settings), 0)
+		# A probe compiles and runs a real program per language: seconds each on
+		# a cold toolchain. Sublime shares ONE async worker between every plugin,
+		# so running them there would stall auto-run-on-save and everyone else
+		# for as long as the probes take - the same mistake the run panel pump
+		# used to make. They get their own thread; the report is already on
+		# screen and the results stream in.
+		probe = threading.Thread(target=self._probe_tools,
+								 args=(view, run_settings))
+		probe.daemon = True
+		probe.start()
 
 	def _emit(self, view, lines):
 		"""Append probe output on the main thread, where views live."""

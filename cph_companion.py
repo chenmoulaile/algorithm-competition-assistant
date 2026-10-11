@@ -99,6 +99,19 @@ def _origin_host(origin):
     return rest.split(':')[0]
 
 
+def _host_name(host):
+    """The hostname of a Host header, port removed, brackets kept.
+
+    A bracketed IPv6 literal cannot be split on ':': `[::1]:12345` would come
+    out as `[`, and every loopback request would be refused - which is what the
+    old code's '[::1]' entry was there to allow.
+    """
+    if host.startswith('['):
+        name, _, _rest = host[1:].partition(']')
+        return '[' + name + ']'
+    return host.split(':')[0]
+
+
 def request_allowed(get_header):
     """True when this request may drive the plugin.
 
@@ -113,7 +126,7 @@ def request_allowed(get_header):
     still accepted: this listener is a local automation endpoint.
     """
     host = (get_header('Host') or '').strip().lower()
-    if host and host.split(':')[0] not in _LOOPBACK_HOSTS:
+    if host and _host_name(host) not in _LOOPBACK_HOSTS:
         return False
 
     origin = (get_header('Origin') or '').strip().lower()

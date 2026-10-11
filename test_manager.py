@@ -1119,7 +1119,11 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				self.insert_test()
 				if type(self.process_manager) == ProcessManager:
 					self._start_pump()
-				cb()
+				# The chain callback rebuilds the test cards - PhantomSets and
+				# view settings - and this closure runs on a worker thread, so
+				# the callback has to be handed over like everything else that
+				# touches a view.
+				post_to_ui(cb)
 
 			sublime.set_timeout_async(go, 10)
 

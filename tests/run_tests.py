@@ -570,6 +570,9 @@ def main():
         def write(self, s):
             pass
 
+        def close_stdin(self):
+            pass
+
         def is_stopped(self):
             return 0
 
@@ -3928,6 +3931,57 @@ def main():
         stress._popen_capture = _keep_capture
         stress.resolve_artifact = _keep_resolve
         stress._lang_entry = _keep_lang_entry
+
+    # ---- the audit round: what a Windows-only machine cannot see ----------
+    # Popen(list, shell=True) drops every argument after the first on POSIX
+    # (the rest become arguments to the shell itself), so the version probes
+    # ran a bare `g++` there and reported FAIL for a working toolchain. Windows
+    # joins the list, which is why this only shows up on Linux and macOS.
+    rc, out = doc._run_capture([sys.executable, '-c', 'print(4242)'])
+    check('a list command reaches the child with all its arguments',
+          rc == 0 and '4242' in out, 'rc=%s out=%r' % (rc, out[:120]))
+    rc, out = doc._run_capture('echo shellstring')
+    check('a string command still goes through a shell',
+          rc == 0 and 'shellstring' in out, 'rc=%s out=%r' % (rc, out[:120]))
+
+    # The probes compile and run real programs (seconds each), so they must not
+    # sit on Sublime's one shared async worker.
+    check('the doctor probes run on a private thread',
+          'set_timeout_async(\n\t\t\tlambda: self._probe_tools' not in doc_src
+          and 'target=self._probe_tools' in doc_src,
+          'probes still occupy the shared async worker')
+
+    # A bracketed IPv6 loopback Host must not be split at its own colon.
+    check('a bracketed IPv6 loopback Host is still allowed',
+          comp.request_allowed(lambda k, d='': {'Host': '[::1]:12345'}.get(k, d))
+          and comp.request_allowed(lambda k, d='': {
+              'Host': '[::1]:12345', 'Origin': 'http://[::1]:12345'}.get(k, d)))
+    check('a bracketed non-loopback Host is still refused',
+          not comp.request_allowed(lambda k, d='': {
+              'Host': '[::2]:12345'}.get(k, d)))
+
+    # The next-test chain handed its callback to the async worker, which then
+    # built PhantomSets off the main thread - the exact crash class v2.4.8 said
+    # it had removed from the panel.
+    _keep_st_async, _keep_st = _sub.set_timeout_async, _sub.set_timeout
+    try:
+        queued = []
+        _sub.set_timeout = lambda fn, delay=0: queued.append(fn)
+        _sub.set_timeout_async = lambda fn, delay=0: fn()   # run the worker now
+        chain = make_tester([tm.CphTestManagerCommand.Test('a\n')])
+        ran_inline = []
+        chain.next_test(0, lambda: ran_inline.append('update_configs'))
+        # insert_test queues its own view work too; what matters is that the
+        # chain callback is not among the calls made inline on the worker.
+        check('the next-test chain does not touch views on the worker thread',
+              ran_inline == [] and len(queued) >= 1,
+              'inline=%s queued=%d' % (ran_inline, len(queued)))
+        for fn in queued:
+            fn()
+        check('and the deferred chain callback does run on the main thread',
+              ran_inline == ['update_configs'], repr(ran_inline))
+    finally:
+        _sub.set_timeout, _sub.set_timeout_async = _keep_st, _keep_st_async
 
     print('')
     print('%d checks, %d failures' % (CHECKS[0], len(FAILURES)))
