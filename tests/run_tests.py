@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import sys
+import subprocess
 import tempfile
 import time
 import types
@@ -2216,8 +2217,11 @@ def main():
             os.environ['CPH_STATS_PATH'] = old_env
 
     # --- the new commands must be reachable ---
+    # Names here are checked against Default.sublime-commands as text; the
+    # deep-audit check further down also proves each one is really registered
+    # by a *Command class, which is what caught cph_stats_report.
     for command in ('cph_fetch_problem', 'cph_view_statement', 'cph_benchmark',
-                    'cph_contest_timer', 'cph_stats_report', 'cph_calibrate_machine',
+                    'cph_contest_timer', 'cph_stats', 'cph_calibrate_machine',
                     'cph_stress_replay', 'cph_run_parallel', 'cph_toggle_build_mode'):
         check('%s is in the command palette' % command, command in commands_text)
     check('the new settings keys ship',
@@ -3175,6 +3179,229 @@ def main():
             os.environ.pop('CPH_STATS_PATH', None)
         else:
             os.environ['CPH_STATS_PATH'] = old_env
+
+    # ------------------------------------------------------------------
+    # Deep-audit regressions (2.4.7). Every case below reproduces a problem
+    # that was confirmed by hand against the 2.4.6 tree; each one failed
+    # before its fix, so a green run here is evidence the fix works.
+    # ------------------------------------------------------------------
+    print('== Deep audit: command surfaces, verdict fidelity, threading ==')
+
+    _sub = sys.modules['sublime']
+
+    def _snake(case_cls):
+        """Sublime's convention: CphStatsCommand registers as cph_stats."""
+        stem = case_cls[:-len('Command')]
+        return re.sub(r'(?<!^)(?=[A-Z])', '_', stem).lower()
+
+    registered = set()
+    for _py in _plugin_py_files():
+        with open(os.path.join(ROOT, _py), encoding='utf-8') as f:
+            _tree = ast.parse(f.read(), _py)
+        for _node in _tree.body:
+            if isinstance(_node, ast.ClassDef) and _node.name.endswith('Command'):
+                registered.add(_snake(_node.name))
+
+    referenced = []
+
+    def _collect_cmds(obj, where):
+        if isinstance(obj, dict):
+            _c = obj.get('command')
+            if isinstance(_c, str) and _c.startswith('cph_'):
+                referenced.append((_c, where))
+            for _v in obj.values():
+                _collect_cmds(_v, where)
+        elif isinstance(obj, list):
+            for _v in obj:
+                _collect_cmds(_v, where)
+
+    for _name in ('Default.sublime-commands', 'Main.sublime-menu',
+                  'Context.sublime-menu') + DEFAULTS + EXAMPLES:
+        with open(os.path.join(ROOT, _name), encoding='utf-8') as f:
+            _collect_cmds(json.load(f), _name)
+    # Not a string-in-file check: the command name a *Command class actually
+    # registers is derived from the class, so a typo like cph_stats_report is
+    # caught instead of passing because the text exists in the JSON.
+    unknown_cmds = sorted(set(c for c, w in referenced if c not in registered))
+    check('every cph_ command the UI references is registered by a class',
+          not unknown_cmds, 'no such command: %s' % ', '.join(unknown_cmds))
+
+    dup_defs = []
+    for _py in _plugin_py_files():
+        with open(os.path.join(ROOT, _py), encoding='utf-8') as f:
+            _tree = ast.parse(f.read(), _py)
+        _seen = set()
+        for _node in _tree.body:
+            if isinstance(_node, (ast.FunctionDef, ast.ClassDef)):
+                if _node.name in _seen:
+                    dup_defs.append('%s: %s' % (_py, _node.name))
+                _seen.add(_node.name)
+    check('no module redefines a top-level name it already defined',
+          not dup_defs, '; '.join(dup_defs))
+
+    def _settings_json():
+        raw = open(os.path.join(ROOT, 'Algorithm Competition Assistant.sublime-settings'),
+                   encoding='utf-8').read()
+        return json.loads(re.sub(r'^\s*//.*$', '', raw, flags=re.M))
+
+    _sj = _settings_json()
+    _no_fmt = [e.get('name') for e in _sj.get('run_settings', [])
+               if set(e.get('extensions') or []) & {'cpp', 'c'}
+               and not (e.get('format_cmd') or '').strip()]
+    check('auto_format_on_save has a format_cmd to run for the C/C++ entries',
+          not _no_fmt, 'no format_cmd for: %s' % ', '.join(_no_fmt))
+
+    def _judge(actual, expected):
+        return verdict.get_verdict_by_code(
+            rtcode=0, runtime=5, time_limit_ms=1000, memory_limit_mb=256,
+            stderr='', stdout=actual, expected_output=expected)['name']
+
+    # compress() collapsed every whitespace difference, so a program whose
+    # token boundaries are wrong ("1 23" for "12 3") was reported as a mere
+    # presentation error instead of a wrong answer - actively misleading,
+    # because it tells the user their answer is fine.
+    for _act, _exp in (('1 23', '12 3'), ('1 2 3', '1 23'),
+                       ('hello world', 'hellow orld')):
+        check('a token-boundary mistake (%s vs %s) is WA, not PE' % (_act, _exp),
+              _judge(_act, _exp) == 'WA', 'got %s' % _judge(_act, _exp))
+    # The cases that really are presentation/format-only must not change.
+    for _act, _exp in (('1  2', '1 2'), ('12\n3', '12 3')):
+        check('a formatting-only difference (%s vs %s) stays PE' % (_act, _exp),
+              _judge(_act, _exp) == 'PE', 'got %s' % _judge(_act, _exp))
+    check('an exact match still judges AC', _judge('1 2', '1 2') == 'AC')
+
+    _clamp = getattr(tm, 'clamp_output', None)
+    check('the output cap clamps a chunk instead of appending it whole',
+          _clamp is not None
+          and _clamp('', 'x' * 100, 10) == 'x' * 10
+          and _clamp('abcde', 'xyz', 7) == 'xy'
+          and _clamp('abcde', 'xyz', 8) == 'xyz'
+          and _clamp('abcdefghij', 'xyz', 10) == ''
+          and _clamp('', 'y' * 50, 0) == 'y' * 50,
+          'clamp_output missing' if _clamp is None else 'clamps wrongly')
+
+    _post = getattr(tm, 'post_to_ui', None)
+    _keep_timeout = _sub.set_timeout
+    try:
+        _queued, _ran = [], []
+        _sub.set_timeout = lambda fn, delay=0: _queued.append(fn)
+        if _post is not None:
+            _post(lambda: _ran.append(1))
+        check('a reader-thread UI mutation is deferred, not run inline',
+              _post is not None and len(_queued) == 1 and _ran == [],
+              'post_to_ui missing or ran inline' if _post is None
+              else 'queued=%d ran=%d' % (len(_queued), len(_ran)))
+        if _queued:
+            _queued[0]()
+        check('the deferred callback is the one the main thread runs',
+              _ran == [1])
+    finally:
+        _sub.set_timeout = _keep_timeout
+
+    # The blocking pump must not sit on Sublime's shared async worker, and it
+    # must not read the pipe with an unbounded read-to-EOF. These two are
+    # structural properties of the run path that no headless call can drive,
+    # so they are guarded against the source of the listener itself.
+    check('the serial output pump runs on a private thread, not the shared async worker',
+          'set_timeout_async(self.__process_listener)' not in _tm_src
+          and 'target=self.__process_listener' in _tm_src,
+          'listener is still scheduled through set_timeout_async')
+    check('the serial output pump reads the pipe in bounded chunks',
+          '= proc.read()\n' not in _tm_src)
+
+    class _DeadProc(object):
+        pid = 4242
+
+        def poll(self):
+            return 0
+
+        def kill(self):
+            raise AssertionError('killed a pid that already exited')
+
+    _pm = pm_mod.ProcessManager(os.path.join(tempfile.mkdtemp(), 'a.cpp'), 'C++')
+    _pm.process = _DeadProc()
+    _pm.terminate()
+    check('stopping a run that already finished is not marked terminated',
+          _pm.terminated is False and _pm.is_run is False,
+          'terminated=%r is_run=%r' % (_pm.terminated, _pm.is_run))
+
+    # The UI now stops a run through terminate_async, so the same rule has to
+    # hold there or the fix above would be bypassed by the stop button.
+    _pm2 = pm_mod.ProcessManager(os.path.join(tempfile.mkdtemp(), 'b.cpp'), 'C++')
+    _pm2.process = _DeadProc()
+    _pm2.is_run = True
+    _pm2.terminate_async()
+    check('an async stop of a finished run keeps its verdict too',
+          _pm2.terminated is False and _pm2.is_run is False,
+          'terminated=%r is_run=%r' % (_pm2.terminated, _pm2.is_run))
+
+    _req_ok = getattr(comp, 'request_allowed', None)
+    check('a cross-origin POST from any web page is refused',
+          _req_ok is not None
+          and not _req_ok(lambda k, d='': {'Host': 'localhost:12345',
+                                           'Origin': 'http://evil.example'}.get(k, d)))
+    check('a browser page that is not this origin is refused even without Origin',
+          _req_ok is not None
+          and not _req_ok(lambda k, d='': {'Host': 'localhost:12345',
+                                           'Sec-Fetch-Site': 'cross-site'}.get(k, d)))
+    check('a request that arrived under another hostname is refused',
+          _req_ok is not None
+          and not _req_ok(lambda k, d='': {'Host': 'evil.example:12345',
+                                           'Origin': 'http://evil.example'}.get(k, d)))
+    check('same-origin and non-browser clients are still accepted',
+          _req_ok is not None
+          and _req_ok(lambda k, d='': {'Host': 'localhost:12345',
+                                       'Origin': 'http://localhost:12345'}.get(k, d))
+          and _req_ok(lambda k, d='': {'Host': '127.0.0.1:12345',
+                                       'Origin': 'http://[::1]:8080'}.get(k, d))
+          and _req_ok(lambda k, d='': {}))
+
+    _hard = []
+    for _name in ('Default.sublime-commands', 'Main.sublime-menu', 'Context.sublime-menu'):
+        with open(os.path.join(ROOT, _name), encoding='utf-8') as f:
+            if '${packages}/Algorithm Competition Assistant/' in f.read():
+                _hard.append(_name)
+    check('menus do not hardcode the installed folder name', not _hard,
+          'breaks a manual install: %s' % ', '.join(_hard))
+    check('a command opens package files through the real directory',
+          'cph_open_package_file' in registered, 'no such command')
+
+    _lazy_src = '\n'.join([
+        'import sys, os, json, types, importlib.util as u',
+        's = types.ModuleType("sublime")',
+        's.status_message = s.error_message = lambda *a, **k: None',
+        's.set_timeout = s.set_timeout_async = lambda f, d=0: None',
+        's.Settings = object',
+        's.load_settings = lambda n: s.Settings({})',
+        's.version = lambda: "4213"',
+        's.platform = lambda: "linux"',
+        's.packages_path = lambda: os.getcwd()',
+        's.windows = lambda: []',
+        's.decode_value = json.loads',
+        's.encode_value = lambda v, p=False: json.dumps(v)',
+        'sys.modules["sublime"] = s',
+        'p = types.ModuleType("sublime_plugin")',
+        'p.TextCommand = p.WindowCommand = p.ApplicationCommand = object',
+        'p.EventListener = object',
+        'sys.modules["sublime_plugin"] = p',
+        'root = sys.argv[1]',
+        'sp = u.spec_from_file_location("cphpkg", os.path.join(root, "__init__.py"),',
+        '                             submodule_search_locations=[root])',
+        'mod = u.module_from_spec(sp)',
+        'sys.modules["cphpkg"] = mod',
+        'sp.loader.exec_module(mod)',
+        'import cphpkg.cph_companion',
+        'import cphpkg.core.cph_fetch',
+        'print("http.server" in sys.modules or "urllib.request" in sys.modules)',
+    ])
+    _lazy_py = os.path.join(tempfile.mkdtemp(), 'lazy_probe.py')
+    with open(_lazy_py, 'w', encoding='utf-8') as f:
+        f.write(_lazy_src)
+    _lazy = subprocess.check_output(
+        [sys.executable, '-B', _lazy_py, ROOT],
+        stderr=subprocess.STDOUT).decode().strip()
+    check('starting up does not drag http.server / urllib into memory',
+          _lazy == 'False', 'stdlib web modules imported at startup: %s' % _lazy)
 
     print('')
     print('%d checks, %d failures' % (CHECKS[0], len(FAILURES)))

@@ -73,17 +73,19 @@
 	},
 	{
 		"caption": "Preferences: Algorithm Competition Assistant Settings",
-		"command": "edit_settings",
+		"command": "cph_open_package_file",
 		"args": {
-			"base_file": "${packages}/Algorithm Competition Assistant/Algorithm Competition Assistant.sublime-settings",
+			"file": "Algorithm Competition Assistant.sublime-settings",
+			"edit_base": true,
 			"default": "{\n\t$0\n}\n"
 		}
 	},
 	{
 		"caption": "Preferences: Algorithm Competition Assistant TestSyntax Settings",
-		"command": "edit_settings",
+		"command": "cph_open_package_file",
 		"args": {
-			"base_file": "${packages}/Algorithm Competition Assistant/TestSyntax.sublime-settings",
+			"file": "TestSyntax.sublime-settings",
+			"edit_base": true,
 			"default": "{\n\t$0\n}\n"
 		}
 	},
@@ -164,11 +166,11 @@
 	},
 	{
 		"caption": "Algorithm Competition Assistant: Show practice statistics",
-		"command": "cph_stats_report"
+		"command": "cph_stats"
 	},
 	{
 		"caption": "Algorithm Competition Assistant: Reset practice statistics",
-		"command": "cph_stats_report",
+		"command": "cph_stats",
 		"args": {
 			"reset": true
 		}

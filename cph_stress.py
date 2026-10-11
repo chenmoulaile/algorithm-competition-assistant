@@ -8,7 +8,6 @@ import os
 import random
 import re
 import shlex
-import shutil
 import subprocess
 import tempfile
 import threading
@@ -982,6 +981,7 @@ def _finish_stress(sess):
     root = sess.get('build_root')
     if root:
         try:
+            import shutil
             shutil.rmtree(root, ignore_errors=True)
         except Exception:
             pass

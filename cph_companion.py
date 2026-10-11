@@ -14,7 +14,6 @@ Algorithm Competition Assistant - Competitive Companion 持久监听器
 
 import sublime
 import sublime_plugin
-from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
 import re
@@ -81,118 +80,164 @@ def remember_limits(file_name, time_limit_ms, memory_limit_mb):
     set_problem_limits(file_name, time_limit_ms, memory_limit_mb)
 
 
-class _CompanionHandler(BaseHTTPRequestHandler):
+#: Host names a companion request may arrive on. Anything else means the
+#: caller resolved our port under a different name (DNS rebinding).
+_LOOPBACK_HOSTS = ('localhost', '127.0.0.1', '::1', '[::1]')
 
-    def log_message(self, format, *args):
-        pass
 
-    def _host_allowed(self):
-        """Block DNS-rebinding attempts from random web pages.
+def _origin_host(origin):
+    """Host part of an http(s) origin.
 
-        A malicious page could otherwise POST to localhost:12345 and make
-        the plugin write test files and compile/run code.
-        """
-        host = (self.headers.get('Host') or '').strip().lower()
-        if not host:
-            return True   # non-browser clients (curl/scripts) usually omit it
-        port = _listener.get('port') or ''
-        allowed = {
-            'localhost', '127.0.0.1', '[::1]',
-            'localhost:%s' % port, '127.0.0.1:%s' % port, '[::1]:%s' % port,
-        }
-        return host in allowed
+    Parsed by hand instead of urllib.parse because this module is imported on
+    every Sublime start and must not drag the urllib package in for it.
+    """
+    rest = origin.split('://', 1)[-1]
+    rest = rest.split('/', 1)[0]
+    if rest.startswith('['):        # IPv6 literal, e.g. [::1]:12345
+        rest = rest[1:]
+        return rest.split(']', 1)[0]
+    return rest.split(':')[0]
 
-    def _deny(self, code=403):
-        try:
-            self.send_response(code)
-            self.end_headers()
-            self.wfile.write(b'forbidden')
-        except Exception:
+
+def request_allowed(get_header):
+    """True when this request may drive the plugin.
+
+    Checking Host alone only stopped DNS rebinding: a page on any other site
+    that posts to http://localhost:12345 arrives with Host: localhost, so it
+    could still merge attacker-chosen test data into the user's __tests file,
+    rewrite the time and memory limits, create a source file and start a
+    compile that executes it. Origin and Sec-Fetch-Site say which page sent
+    the request, and a browser script cannot set either one.
+
+    Callers with no trace of a browser (curl, a local script, an OJ tool) are
+    still accepted: this listener is a local automation endpoint.
+    """
+    host = (get_header('Host') or '').strip().lower()
+    if host and host.split(':')[0] not in _LOOPBACK_HOSTS:
+        return False
+
+    origin = (get_header('Origin') or '').strip().lower()
+    if origin:
+        return _origin_host(origin) in _LOOPBACK_HOSTS
+
+    fetch_site = (get_header('Sec-Fetch-Site') or '').strip().lower()
+    if fetch_site:
+        return fetch_site in ('same-origin', 'same-site', 'none')
+
+    return True
+
+
+def build_handler():
+    """Build the request handler class, importing http.server on first use.
+
+    `http.server` pulls in socket, http.client and email.parser: measured at
+    ~145 ms of the package's cold import, paid by every Sublime start even
+    though only the opt-in Companion listener ever uses it. So the class is
+    created when the listener starts rather than when the module loads.
+    """
+    from http.server import BaseHTTPRequestHandler
+
+    class _CompanionHandler(BaseHTTPRequestHandler):
+
+        def log_message(self, format, *args):
             pass
 
-    def do_POST(self):
-        if not self._host_allowed():
-            self._deny()
-            return
+        def _host_allowed(self):
+            return request_allowed(self.headers.get)
 
-        try:
-            content_length = int(self.headers.get('Content-Length', 0))
-        except (TypeError, ValueError):
-            content_length = 0
-        if content_length > MAX_BODY_BYTES:
-            self._deny(413)
-            return
-        if content_length <= 0:
-            # A negative Content-Length used to slip past the check above and
-            # make rfile.read(-1) block until EOF, hanging the handler.
-            self._deny(400)
-            return
+        def _deny(self, code=403):
+            try:
+                self.send_response(code)
+                self.end_headers()
+                self.wfile.write(b'forbidden')
+            except Exception:
+                pass
 
-        try:
-            raw = self.rfile.read(content_length) if content_length else b''
-            data = json.loads(raw.decode('utf-8'))
-        except Exception:
-            self._deny(400)
-            return
+        def do_POST(self):
+            if not self._host_allowed():
+                self._deny()
+                return
 
-        # Everything below touches the Sublime API -> main thread only
-        sublime.set_timeout(lambda data=data: self._handle_on_main(data), 0)
+            try:
+                content_length = int(self.headers.get('Content-Length', 0))
+            except (TypeError, ValueError):
+                content_length = 0
+            if content_length > MAX_BODY_BYTES:
+                self._deny(413)
+                return
+            if content_length <= 0:
+                # A negative Content-Length used to slip past the check above
+                # and make rfile.read(-1) block until EOF, hanging the handler.
+                self._deny(400)
+                return
 
-        try:
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b'ok')
-        except Exception:
-            pass
-        # 保持服务器运行, 不 shutdown —— 浏览器扩展可以反复点击
+            try:
+                raw = self.rfile.read(content_length) if content_length else b''
+                data = json.loads(raw.decode('utf-8'))
+            except Exception:
+                self._deny(400)
+                return
 
-    def _handle_on_main(self, data):
-        try:
-            tests = data.get('tests', []) or []
-            problem_name = data.get('name', '')
-            time_limit_ms = _as_int(data.get('timeLimit'))
-            memory_limit_mb = _as_int(data.get('memoryLimit'))
+            # Everything below touches the Sublime API -> main thread only
+            sublime.set_timeout(lambda data=data: self._handle_on_main(data), 0)
 
-            incoming = []
-            for test in tests:
-                output = (test.get('output') or '').strip()
-                incoming.append({
-                    'test': test.get('input', ''),
-                    'correct_answers': [output] if output else [],
+            try:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'ok')
+            except Exception:
+                pass
+            # 保持服务器运行, 不 shutdown —— 浏览器扩展可以反复点击
+
+        def _handle_on_main(self, data):
+            try:
+                tests = data.get('tests', []) or []
+                problem_name = data.get('name', '')
+                time_limit_ms = _as_int(data.get('timeLimit'))
+                memory_limit_mb = _as_int(data.get('memoryLimit'))
+
+                incoming = []
+                for test in tests:
+                    output = (test.get('output') or '').strip()
+                    incoming.append({
+                        'test': test.get('input', ''),
+                        'correct_answers': [output] if output else [],
+                    })
+
+                view = _find_view(_listener.get('view_id'))
+                if view is not None and not view.file_name():
+                    # Auto-create: an untitled view is the normal state when a
+                    # problem arrives before any file was opened, and asking
+                    # the user to save first defeats the point of the listener.
+                    view = _auto_create_file(view, problem_name) or view
+                if view is None or not view.file_name():
+                    sublime.status_message(t('listener_no_target'))
+                    return
+
+                file_name = view.file_name()
+                merged = merge_tests(file_name, incoming)
+                if not save_tests(file_name, merged):
+                    sublime.status_message(t('import_save_failed'))
+                    return
+                remember_limits(file_name, time_limit_ms, memory_limit_mb)
+                print('[Algorithm Competition Assistant] %s' % t('new_test_file_path', path=file_name))
+
+                count = len(incoming)
+                tl = time_limit_ms if time_limit_ms is not None else '-'
+                ml = memory_limit_mb if memory_limit_mb is not None else '-'
+
+                view.run_command('cph_view_tester', {
+                    'action': 'make_opd',
+                    'time_limit_ms': time_limit_ms,
+                    'memory_limit_mb': memory_limit_mb,
                 })
+                sublime.status_message(t('tests_received',
+                                         name=problem_name or '?',
+                                         count=count, time=tl, memory=ml))
+            except Exception as e:
+                print(t('error_handling_post', error=str(e)))
 
-            view = _find_view(_listener.get('view_id'))
-            if view is not None and not view.file_name():
-                # Auto-create: an untitled view is the normal state when a
-                # problem arrives before any file was opened, and asking the
-                # user to save first defeats the point of the listener.
-                view = _auto_create_file(view, problem_name) or view
-            if view is None or not view.file_name():
-                sublime.status_message(t('listener_no_target'))
-                return
-
-            file_name = view.file_name()
-            merged = merge_tests(file_name, incoming)
-            if not save_tests(file_name, merged):
-                sublime.status_message(t('import_save_failed'))
-                return
-            remember_limits(file_name, time_limit_ms, memory_limit_mb)
-            print('[Algorithm Competition Assistant] %s' % t('new_test_file_path', path=file_name))
-
-            count = len(incoming)
-            tl = time_limit_ms if time_limit_ms is not None else '-'
-            ml = memory_limit_mb if memory_limit_mb is not None else '-'
-
-            view.run_command('cph_view_tester', {
-                'action': 'make_opd',
-                'time_limit_ms': time_limit_ms,
-                'memory_limit_mb': memory_limit_mb,
-            })
-            sublime.status_message(t('tests_received',
-                                     name=problem_name or '?',
-                                     count=count, time=tl, memory=ml))
-        except Exception as e:
-            print(t('error_handling_post', error=str(e)))
+    return _CompanionHandler
 
 
 
@@ -284,7 +329,8 @@ def _start_listener(view):
         try:
             port = int(sublime.load_settings(settings_file)
                        .get('companion_port', 12345) or 12345)
-            server = HTTPServer(('localhost', port), _CompanionHandler)
+            from http.server import HTTPServer
+            server = HTTPServer(('localhost', port), build_handler())
         except Exception as e:
             sublime.status_message(t('listener_port_error', port=port, error=str(e)))
             return

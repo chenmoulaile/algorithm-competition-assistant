@@ -1,0 +1,71 @@
+Algorithm Competition Assistant 2.4.7
+=====================================
+
+A deep pass over the parts that were quietly not working. Two features had
+been shipping broken without ever saying so, one verdict was lying about what
+it meant, and the run panel was doing its work on the wrong thread.
+
+Fixed:
+
+* "Show practice statistics" and "Reset practice statistics" did nothing at
+  all. The command palette called `cph_stats_report`, while the class that is
+  registered is `CphStatsCommand`, i.e. `cph_stats`. It had been like that
+  since the command was added, and the regression test that was supposed to
+  catch it only checked that the text "cph_stats_report" appeared in the
+  palette file - which it did, in the two entries that were wrong. There is
+  now a test that derives the command name from every `*Command` class in the
+  package and checks the palette, both menus and all six keymaps against it.
+* `auto_format_on_save` did nothing. It reads a per-language `format_cmd`,
+  and no shipped language entry defined one, so turning the setting on ran
+  no formatter and reported no error. The C++ and C entries now ship
+  `clang-format -i {source_file}`.
+* A wrong answer was reported as a presentation error. Answers were compared
+  by joining every whitespace-separated piece into one string, so `1 23`
+  matched the expected `12 3` - the token boundaries were wrong, but the
+  characters were not. The run then fell through to the formatting check and
+  told you your answer was correct but badly laid out, which is the opposite
+  of what you needed to hear. Comparison is now token by token, so those runs
+  are WA; genuine formatting differences (`1  2` against `1 2`) still report
+  PE, and anything that used to reach AC still reaches AC.
+* `max_output_bytes` was a suggestion, not a limit. The output pump asked the
+  pipe for "everything until EOF", so a program that stays silent and then
+  floods got its entire output handed over in one read - past the cap, into
+  the view, into the stored test, and on every later load with it. Reads are
+  chunked now and the cap is applied to the chunk before it is appended.
+* Closing the run panel, or re-running over a live process, could freeze the
+  editor for up to three seconds: both paths killed the child synchronously
+  on the main thread and waited for it to die. The stop now marks the run
+  ended and reaps the process on a worker thread.
+* A Stop pressed a moment after the program finished rewrote its verdict to
+  SKIPPED. "The user killed this" was set before checking whether there was
+  anything left to kill.
+* A timed-out compile left the compiler running. Compiles go through a shell,
+  and the timeout killed only the shell, so `g++` carried on in the background
+  holding the output file open. The whole process group is taken down now.
+* The Companion listener's origin check stopped DNS rebinding and nothing
+  else: a page on any other site that posts to `http://localhost:12345`
+  arrives with `Host: localhost`, so it could merge test data into your
+  `__tests` file, change the time and memory limits, create a source file and
+  start a compile that executes it. `Origin` and `Sec-Fetch-Site` are checked
+  as well now; curl and local scripts keep working.
+* Preferences > Package Settings > Algorithm Competition Assistant opened
+  files that did not exist after a manual install. The menu and palette paths
+  were spelled `${packages}/Algorithm Competition Assistant/...`, which only
+  resolves when the installed folder carries the display name - Package
+  Control renames it on install, a git clone does not. The path is now built
+  from the directory the package actually lives in, and a `$platform` in a
+  file name is expanded to the spelling the shipped keymaps use.
+
+Improved:
+
+* Sublime starts noticeably faster with this package installed: loading it
+  cost ~415 ms and now costs ~221 ms, because it no longer imports
+  `http.server`, `urllib`, `difflib`, `shutil` or `socket` until a feature
+  that needs them runs. 51 fewer modules are pulled in on every start.
+* The output pump runs on its own thread. It used to sit on Sublime's shared
+  async worker for the whole run, which stalled auto-run-on-save and every
+  other plugin while your program was running.
+* Output and verdict rendering now happen on the main thread. They ran on the
+  worker before, touching views from outside the thread that owns them - the
+  package already had this rule written down for its parallel runner, and the
+  serial path was not following it.

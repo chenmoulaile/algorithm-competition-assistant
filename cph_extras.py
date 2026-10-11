@@ -17,6 +17,7 @@ from .core.cph_calibrate import (format_report as calibrate_report,
 from .core.cph_fetch import (describe_samples, fetch, looks_like_url, samples,
 							 statement, summarize, title_of)
 from .core.cph_i18n import t
+from .core.cph_resources import package_resource_path
 from .core.cph_settings import get_settings
 from .core.cph_stats import (record_run, reset as stats_reset,
 							 summary_localized as stats_summary_localized)
@@ -311,3 +312,35 @@ class CphBenchmarkCommand(sublime_plugin.TextCommand):
 					other.run_command('cph_test_manager', {'action': 'benchmark'})
 					return
 		sublime.status_message('[Algorithm Competition Assistant] ' + t('benchmark_no_test'))
+
+
+#: Spellings Sublime itself uses for the per-platform files.
+_PLATFORM_FILE = {'windows': 'Windows', 'linux': 'Linux', 'osx': 'OSX'}
+
+
+class CphOpenPackageFileCommand(sublime_plugin.WindowCommand):
+	"""Open one of this package's own files (settings, README, keymaps).
+
+	The Preferences entries used to spell their paths as
+	${packages}/Algorithm Competition Assistant/..., which only resolves when
+	the installed folder carries the display name. Package Control renames it
+	on install; a manual install under the repository name opened a file that
+	does not exist. Building the path from the directory the package actually
+	lives in works for both, and reading through Packages/... keeps working
+	when the package ships as a .sublime-package zip.
+	"""
+
+	def run(self, file, edit_base=False, default=None):
+		name = file
+		if '$platform' in name:
+			platform = sublime.platform()
+			name = name.replace('$platform', _PLATFORM_FILE.get(platform, platform))
+		target = package_resource_path(name)
+		if edit_base:
+			self.window.run_command('edit_settings', {
+				'base_file': target,
+				'default': default or '{\n\t$0\n}\n',
+			})
+		else:
+			self.window.run_command('open_file', {'file': target})
+

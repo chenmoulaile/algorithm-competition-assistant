@@ -35,6 +35,38 @@ from .core.cph_gdb_trace import names_source as _names_source_impl
 from .core.cph_i18n import t
 
 
+# ------------------------------------------------------ output pump plumbing
+#: Bytes taken from the program's stdout per read. The pump must ask for a
+#: bounded chunk: read() without a size blocks until EOF and hands back the
+#: entire output as one string, which is how a silent-then-flood program got
+#: past max_output_bytes and dumped megabytes into a view and the test store.
+_OUT_CHUNK = 65536
+
+
+def clamp_output(current, chunk, limit):
+	"""Return the part of chunk that still fits, so current stays <= limit.
+
+	limit <= 0 means unlimited. current is the text already collected, so the
+	rule is applied before the append instead of only after it.
+	"""
+	if limit <= 0:
+		return chunk
+	room = limit - len(current)
+	if room <= 0:
+		return ''
+	return chunk[:room]
+
+
+def post_to_ui(fn):
+	"""Run fn on the main thread.
+
+	Sublime's view API is only safe there; the parallel path bounces for the
+	same reason (see core/cph_parallel.py). Called from the main thread this
+	just defers by one loop iteration, which keeps FIFO ordering.
+	"""
+	sublime.set_timeout(fn, 0)
+
+
 # --------------------------------------------------------------- compile cache
 # Ctrl+Alt+B used to recompile synchronously (up to 30s) on every run even
 # when nothing had changed, which made iterating on one sample painful.
@@ -801,36 +833,60 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			if self.running_new:
 				self.test_iter += 1
 
-			if type(self.process_manager) == ProcessManager:
-				self.on_status_change('STOPPED')
+			# State above is updated inline; everything below touches views and
+			# must run on the main thread. This callback arrives from the pump
+			# thread, and building the verdict cards / phantoms off-thread is
+			# what made the panel crash at random.
+			def deliver(self=self, rtcode=rtcode, runtime=runtime,
+						crash_line=crash_line):
+				if type(self.process_manager) == ProcessManager:
+					self.on_status_change('STOPPED')
+				self.on_stop(rtcode, runtime, crash_line=crash_line, epoch=self.epoch)
 
-			self.on_stop(rtcode, runtime, crash_line=crash_line, epoch=self.epoch)
+			post_to_ui(deliver)
 
 		def __on_out(self, s, gen=None):
 			if gen is not None and gen != self._active_gen:
 				return
+			if not s:
+				return
 			n = self.running_test
-			if s and s.strip():
+			if s.strip():
 				# The program is doing something: the run clock is running
 				# even if it never reads the input we sent.
 				self.note_activity()
 			limit = get_settings().get('max_output_bytes', 0) or 0
-			if limit > 0 and len(self.prog_out[n]) >= limit:
-				# Drop the rest of the output but keep draining the pipe so
-				# the program is never blocked on a full pipe buffer.
-				if not self.output_truncated:
-					self.output_truncated = True
-					# Make the truncation visible instead of silently showing a
-					# mysterious WA: a marker in the output plus the detail
-					# view's message section.
-					marker = '\n' + t('output_truncated_warn') + '\n'
-					self.prog_out[n] += marker
-					self.tests[n].message = t('output_truncated_warn')
-					self.on_out(marker, epoch=self.epoch)
-					print('[Algorithm Competition Assistant] %s' % t('output_truncated_warn'))
-				return
-			self.prog_out[n] += s
-			self.on_out(s, epoch=self.epoch)
+			kept = clamp_output(self.prog_out[n], s, limit)
+			if kept:
+				self.prog_out[n] += kept
+				self.post_out(kept)
+			if len(kept) < len(s) and not self.output_truncated:
+				# The cap is now reached. Keep draining the pipe so the program
+				# is never blocked on a full pipe buffer, but say so instead of
+				# silently showing a mysterious WA: a marker in the output plus
+				# the detail view's message section.
+				self.output_truncated = True
+				marker = '\n' + t('output_truncated_warn') + '\n'
+				self.prog_out[n] += marker
+				self.tests[n].message = t('output_truncated_warn')
+				self.post_out(marker)
+				print('[Algorithm Competition Assistant] %s' % t('output_truncated_warn'))
+
+		def post_out(self, text):
+			"""Hand one output chunk to the main thread for display."""
+			post_to_ui(lambda: self.on_out(text, epoch=self.epoch))
+
+		def _start_pump(self):
+			"""Drain the running program on a private thread.
+
+			Sublime shares one worker between every set_timeout_async callback
+			in every plugin, and this pump blocks for the whole run, so running
+			it there stalls auto-run-on-save and every other plugin for as long
+			as the program takes.
+			"""
+			pump = threading.Thread(target=self.__process_listener)
+			pump.daemon = True
+			pump.start()
 
 		def __process_listener(self):
 			proc = self.process_manager
@@ -861,11 +917,17 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					if self.sync_out:
 						s = proc.read(bfsize=1)
 					else:
-						s = proc.read()
+						s = proc.read(_OUT_CHUNK)
 					self.__on_out(s, gen)
+				# Final drain. The process is gone so whatever is left is
+				# already in the pipe, but a single bounded read would drop
+				# everything past the first chunk: keep going until EOF.
 				try:
-					s = proc.read()
-					self.__on_out(s, gen)
+					while True:
+						s = proc.read(_OUT_CHUNK)
+						if not s:
+							break
+						self.__on_out(s, gen)
 				except Exception:
 					pass
 			except Exception as e:
@@ -924,8 +986,14 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				id = self.test_iter
 			tests = self.tests
 
-			if type(self.process_manager) == ProcessManager:
-				self.on_status_change('RUNNING')
+			# Both callers reach this on a worker thread (the process spawn
+			# and the stdin write below block, which is why they do not belong
+			# on the main thread), so the two view touches are handed over.
+			def set_running(self=self):
+				if type(self.process_manager) == ProcessManager:
+					self.on_status_change('RUNNING')
+
+			post_to_ui(set_running)
 
 			self.proc_run = True
 			self.tle_killed = False
@@ -949,7 +1017,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				self.process_manager.close_stdin()
 			if self._clock_start is None and input_text and input_text.strip():
 				self._clock_start = time()
-			self.on_insert(input_text)
+			post_to_ui(lambda: self.on_insert(input_text))
 
 		def next_test(self, tie_pos, cb):
 			n = self.test_iter
@@ -990,7 +1058,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			def go(self=self, cb=cb):
 				self.insert_test()
 				if type(self.process_manager) == ProcessManager:
-					sublime.set_timeout_async(self.__process_listener)
+					self._start_pump()
 				cb()
 
 			sublime.set_timeout_async(go, 10)
@@ -1021,7 +1089,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				def start():
 					if cmp_data is not None and cmp_data[0] != 0:
 						# do not run a stale binary after a failed compile
-						self.on_status_change('STOPPED')
+						post_to_ui(lambda: self.on_status_change('STOPPED'))
 						sublime.status_message(t('compile_error'))
 						return
 					self.running_test = id
@@ -1032,9 +1100,12 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					self.prog_out[id] = ''
 					self.insert_test(id)
 					if type(self.process_manager) == ProcessManager:
-						sublime.set_timeout_async(self.__process_listener)
+						self._start_pump()
 
-				sublime.set_timeout(start, 0)
+				# Spawning the process and pushing the whole sample into its
+				# stdin both block; on the main thread that was an editor
+				# freeze for as long as the program took to read.
+				sublime.set_timeout_async(start, 0)
 
 			self.on_status_change('COMPILING')
 			sublime.set_timeout_async(compile_worker, 10)
@@ -1088,6 +1159,19 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 		def terminate(self):
 			self.process_manager.terminate()
+
+		def terminate_async(self):
+			"""Stop the program without blocking the caller.
+
+			Every UI path that stops a run (closing the panel, re-running over
+			a live process, the stop button) reaches this from the main thread,
+			where the real kill would freeze the editor for up to 3 seconds.
+			"""
+			pm = self.process_manager
+			if type(pm) == ProcessManager:
+				pm.terminate_async()
+			else:
+				pm.terminate()
 
 	def insert_text(self, edit, text=None):
 		v = self.view
@@ -1748,7 +1832,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		elif event == 'test-edit':
 			self.open_test_edit(i)
 		elif event == 'test-stop':
-			tester.terminate()
+			tester.terminate_async()
 		elif event == 'test-run':
 			if not tester.tests[i].fold:
 				self.toggle_fold(i)
@@ -2799,7 +2883,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				# spurious new_test between here and the rerun).
 				self.tester_epoch = getattr(self, 'tester_epoch', 0) + 1
 				try:
-					tester.terminate()
+					tester.terminate_async()
 				except Exception:
 					pass
 				pm = tester.process_manager
@@ -3308,7 +3392,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			# here so closing the run view silently left the process alive.
 			try:
 				if self.tester is not None:
-					self.tester.terminate()
+					self.tester.terminate_async()
 			except Exception:
 				print('[Algorithm Competition Assistant] process terminating error')
 
@@ -3348,7 +3432,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				sublime.status_message(t('no_running_process'))
 				return
 			try:
-				tester.terminate()
+				tester.terminate_async()
 			except Exception as e:
 				print('[Algorithm Competition Assistant] terminate failed: %s' % e)
 				sublime.status_message(t('no_running_process'))

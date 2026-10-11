@@ -13,8 +13,6 @@ Algorithm Competition Assistant - 环境自检 (doctor)
 
 import os
 import re
-import shutil
-import socket
 import sys
 
 import sublime
@@ -70,6 +68,9 @@ def _check_command(cmd):
 		return True, '%s (template)' % exe
 	if os.path.isabs(exe) or os.sep in exe:
 		return (os.path.exists(exe), exe)
+	# shutil and socket are only needed by the diagnostics run, not by every
+	# Sublime start: together they were ~70 ms of the package's cold import.
+	import shutil
 	found = shutil.which(exe)
 	return (bool(found), found or exe)
 
@@ -80,6 +81,7 @@ def _check_port(port):
 	Returns False both when another program holds it and when this plugin's
 	own listener is already running, so report that distinction upstream.
 	"""
+	import socket
 	sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 	try:
 		sock.bind(('localhost', port))

@@ -123,32 +123,35 @@
 						"children": [
 							{
 								"caption": "Settings",
-								"command": "edit_settings",
+								"command": "cph_open_package_file",
 								"args": {
-									"base_file": "${packages}/Algorithm Competition Assistant/Algorithm Competition Assistant.sublime-settings",
+									"file": "Algorithm Competition Assistant.sublime-settings",
+									"edit_base": true,
 									"default": "{\n\t$0\n}\n"
 								}
 							},
 							{
 								"caption": "README / 使用说明",
-								"command": "open_file",
+								"command": "cph_open_package_file",
 								"args": {
-									"file": "${packages}/Algorithm Competition Assistant/README.md"
+									"file": "README.md"
 								}
 							},
 							{
 								"caption": "Key Bindings",
-								"command": "edit_settings",
+								"command": "cph_open_package_file",
 								"args": {
-									"base_file": "${packages}/Algorithm Competition Assistant/Default ($platform).sublime-keymap",
-									"default": "[\n\t// Algorithm Competition Assistant ships no key bindings by default.\n\t// Suggested bindings live in Packages/Algorithm Competition Assistant/Example ($platform).sublime-keymap;\n\t// copy the ones you want here, e.g.\n\t// { \"keys\": [\"ctrl+alt+b\"], \"command\": \"cph_view_tester\", \"args\": {\"action\": \"make_opd\"} },\n\t// { \"keys\": [\"ctrl+alt+s\"], \"command\": \"cph_start_stress_test\" },\n\t$0\n]\n"
+									"file": "Default ($platform).sublime-keymap",
+									"edit_base": true,
+									"default": "[\n\t// Algorithm Competition Assistant ships its bindings inside the package keymap,\n\t// gated behind \"enable_keybindings\". Put your own copy here to override them,\n\t// e.g.\n\t// { \"keys\": [\"ctrl+alt+b\"], \"command\": \"cph_view_tester\", \"args\": {\"action\": \"make_opd\"} },\n\t// { \"keys\": [\"ctrl+alt+s\"], \"command\": \"cph_start_stress_test\" },\n\t$0\n]\n"
 								}
 							},
 							{
 								"caption": "Syntax-Specific Settings (TestSyntax)",
-								"command": "edit_settings",
+								"command": "cph_open_package_file",
 								"args": {
-									"base_file": "${packages}/Algorithm Competition Assistant/TestSyntax.sublime-settings",
+									"file": "TestSyntax.sublime-settings",
+									"edit_base": true,
 									"default": "{\n\t$0\n}\n"
 								}
 							}

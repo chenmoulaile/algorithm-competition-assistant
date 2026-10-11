@@ -9,6 +9,7 @@ import shlex
 import signal
 import sublime
 import tempfile
+import threading
 import time
 import codecs
 import locale
@@ -53,21 +54,9 @@ def _sanitizer_fallback_note():
 	fires for a sanitizer the user wrote into compile_cmd themselves - hence
 	the hint line, which says so instead of leaving them to wonder why the
 	plugin's own debug mode suddenly lost its sanitizer.
-
-	t() returns the key itself while the string is not in core/cph_i18n.py
-	yet, so a literal fallback keeps the message meaningful in the meantime
-	(the canonical text lands there via i18nKeysNeeded).
 	"""
-	msg = t('sanitizer_fallback')
-	if msg == 'sanitizer_fallback':
-		msg = ('本机工具链缺少 sanitizer 运行库 (ld: cannot find -lubsan/-lasan), '
-			   '已自动去掉 -fsanitize 参数重新编译一次; debug 模式的 -D_GLIBCXX_ASSERTIONS '
-			   '不依赖该运行库, 越界等未定义行为仍会中止并判 RE')
-	hint = t('sanitizer_fallback_hint')
-	if hint == 'sanitizer_fallback_hint':
-		hint = ('（这条只会在你自己往 compile_cmd 里写了 -fsanitize=address 之类时才出现；'
-				'插件默认用的 -fsanitize=undefined -fsanitize-trap=undefined 不需要运行库）')
-	return '[Algorithm Competition Assistant] %s %s\n' % (msg, hint)
+	return '[Algorithm Competition Assistant] %s %s\n' % (
+		t('sanitizer_fallback'), t('sanitizer_fallback_hint'))
 
 
 _SHELL_METACHARS = set('|&;<>()`$\n*?[]{}~')
@@ -464,14 +453,49 @@ class ProcessManager(object):
 		else:
 			return -1
 
+	def _kill_tree(self, p):
+		"""Kill a shell-spawned child *and* whatever that shell started.
+
+		Compiles always go through a shell, so p.kill() alone reaped only sh /
+		cmd.exe and left a live g++ holding the output file open (Windows) or
+		still burning CPU (POSIX). On POSIX the child leads its own session
+		(setsid below), so a group kill reaches it.
+		"""
+		if sublime.platform() == 'windows':
+			try:
+				subprocess.Popen(
+					['taskkill', '/F', '/T', '/PID', str(p.pid)],
+					stdout=subprocess.DEVNULL,
+					stderr=subprocess.DEVNULL,
+					startupinfo=_hidden_startupinfo()
+				).wait(timeout=3)
+				return
+			except Exception:
+				pass
+		else:
+			try:
+				os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+				return
+			except Exception:
+				pass
+		try:
+			p.kill()
+		except Exception:
+			pass
+
 	def _popen_compile(self, cmd):
 		"""Run one compile command; return (returncode, decoded output)."""
 		PIPE = subprocess.PIPE
 		# Windows: hide console window to avoid flashing
 		startupinfo = None
+		preexec_fn = None
 		if sublime.platform() == 'windows':
 			startupinfo = subprocess.STARTUPINFO()
 			startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+		else:
+			# Own session so _kill_tree() can take the shell and the compiler
+			# down together instead of orphaning the compiler.
+			preexec_fn = os.setsid
 		p = subprocess.Popen(
 			cmd,
 			shell=True,
@@ -479,16 +503,14 @@ class ProcessManager(object):
 			stdout=PIPE,
 			stderr=subprocess.STDOUT,
 			cwd=os.path.split(self.file)[0],
-			startupinfo=startupinfo
+			startupinfo=startupinfo,
+			preexec_fn=preexec_fn
 		)
 		# Timeout so a hanging compiler doesn't freeze the plugin forever
 		try:
 			compile_result = _decode_output(p.communicate(timeout=30)[0])
 		except subprocess.TimeoutExpired:
-			try:
-				p.kill()
-			except Exception:
-				pass
+			self._kill_tree(p)
 			return (1, '[Algorithm Competition Assistant] compile timed out after 30s\n(cmd: %s)' % cmd)
 		unknown = sorted(getattr(self, 'unknown_placeholders', ()) or ())
 		if unknown:
@@ -780,9 +802,36 @@ class ProcessManager(object):
 			return self._normalize_newlines(decoded)
 		return decoded
 
-	def terminate(self):
-		self.terminated = True
+	def terminate_async(self):
+		"""Ask for a stop without blocking the caller.
+
+		terminate() waits for the child to actually die (taskkill, then the
+		SIGTERM -> SIGKILL escalation), up to about 3 s. Called from a UI
+		handler - closing the panel tab, or re-running over a live process -
+		that wait froze the editor for the same length of time. The markers are
+		set here and the kill continues on a private thread.
+		"""
 		proc = getattr(self, 'process', None)
+		if proc is None:
+			self.is_run = False
+			return
+		try:
+			if proc.poll() is not None:
+				# The run ended on its own a moment before the click: saying
+				# "the user killed this" here would rewrite its verdict to
+				# SKIPPED, exactly the bug terminate() guards against.
+				self.is_run = False
+				return
+		except Exception:
+			pass
+		self.terminated = True
+		self.is_run = False
+		thread = threading.Thread(target=lambda: self.terminate(proc))
+		thread.daemon = True
+		thread.start()
+
+	def terminate(self, target=None):
+		proc = target if target is not None else getattr(self, 'process', None)
 		pid = getattr(proc, 'pid', None)
 		if pid is None:
 			self.is_run = False
@@ -802,6 +851,13 @@ class ProcessManager(object):
 			self.is_run = False
 			return
 
+		# Only a real kill counts as "terminated": a stop clicked a moment
+		# after the program finished must not rewrite its verdict to SKIPPED.
+		self.terminated = True
+
+		# Everything below works on `proc`, not on self.process: terminate_async
+		# hands us the process it meant to kill, and a new run may already have
+		# replaced self.process while this thread was still queueing.
 		if sublime.platform() == 'windows':
 			# The evaluated program can be a child of the shell, so a plain
 			# kill(pid) would leave it running: kill the whole tree.
@@ -814,14 +870,16 @@ class ProcessManager(object):
 				).wait(timeout=3)
 			except Exception:
 				try:
-					self.process.kill()
+					proc.kill()
 				except Exception:
 					pass
 		else:
 			# linux AND osx: the child leads its own session (setsid), so
 			# killing the process group is the only way to reach the real
 			# program. Escalate to SIGKILL if SIGTERM is ignored.
-			pgid = getattr(self, 'pgid', None)
+			# self.pgid belongs to whichever process is current, so it may only
+			# be used when this call targets that one.
+			pgid = getattr(self, 'pgid', None) if proc is getattr(self, 'process', None) else None
 			if not pgid:
 				try:
 					pgid = os.getpgid(pid)
@@ -832,21 +890,24 @@ class ProcessManager(object):
 					if pgid:
 						os.killpg(pgid, sig)
 					else:
-						self.process.kill()
+						proc.kill()
 				except Exception:
 					try:
-						self.process.kill()
+						proc.kill()
 					except Exception:
 						pass
 				if grace:
 					waited = 0.0
-					while self.process.poll() is None and waited < grace:
+					while proc.poll() is None and waited < grace:
 						time.sleep(0.05)
 						waited += 0.05
-					if self.process.poll() is not None:
+					if proc.poll() is not None:
 						break
 
 		# The process is being killed: clear the running marker right here
 		# so a follow-up run_file() never trips over the stale flag even
-		# if the listener thread's __on_stop has not fired yet.
-		self.is_run = False
+		# if the listener thread's __on_stop has not fired yet. Only when this
+		# still is the current process - a late thread for an older run must
+		# not mark a fresh run as idle.
+		if proc is getattr(self, 'process', None):
+			self.is_run = False

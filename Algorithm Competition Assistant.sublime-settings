@@ -30,6 +30,9 @@
 			"compile_cmd": "g++ \"{source_file}\" {extra_sources} {include_dirs} -std=c++17 -O2 -o \"{file_name}.exe\"",
 			// 运行命令（编译产物在源代码目录下）
 			"run_cmd": "\"{source_file_dir}/{file_name}.exe\" {args}",
+			// 保存后自动格式化的命令（需开启 auto_format_on_save）。{source_file}
+			// 会替换成带引号的绝对路径；clang-format 不在 PATH 时留空即可。
+			"format_cmd": "clang-format -i {source_file}",
 			// 单个测试的时间限制(毫秒) / 内存限制(MB)，超限判 TLE / MLE
 			"time_limit_ms": 2000,
 			"memory_limit_mb": 256,
@@ -85,6 +88,7 @@
 			"extensions": ["c"],
 			"compile_cmd": "gcc \"{source_file}\" {extra_sources} {include_dirs} -std=c17 -O2 -o \"{file_name}.exe\"",
 			"run_cmd": "\"{source_file_dir}/{file_name}.exe\" {args}",
+			"format_cmd": "clang-format -i {source_file}",
 			"time_limit_ms": 2000,
 			"memory_limit_mb": 256,
 			"extra_sources": [],

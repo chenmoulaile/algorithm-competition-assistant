@@ -11,8 +11,6 @@
 """
 
 import re
-import urllib.request
-import urllib.error
 
 from .cph_html import extract_samples, html_to_markdown, problem_title, strip_tags
 from .cph_i18n import t
@@ -123,6 +121,11 @@ def fetch(url, timeout=None):
 	url = (url or '').strip()
 	if not looks_like_url(url):
 		return '', t('fetch_bad_url', url=url)
+	# Imported here instead of at the top: urllib.request costs ~150 ms of the
+	# package's cold start (ssl, http.client, email) and only fetching a
+	# problem page ever needs it.
+	import urllib.request
+	import urllib.error
 	request = urllib.request.Request(url)
 	request.add_header('User-Agent', USER_AGENT)
 	request.add_header('Accept-Language', 'zh-CN,zh;q=0.9,en;q=0.8')

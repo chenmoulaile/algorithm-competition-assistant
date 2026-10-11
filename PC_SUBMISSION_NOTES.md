@@ -1,8 +1,44 @@
 # Algorithm Competition Assistant — Package Control Submission Notes
 
-Package version: v2.4.6
+Package version: v2.4.7
 Repository: https://github.com/chenmoulaile/cph-by-chenkx
 Channel entry file: `repository/a.json` (see snippet at the bottom)
+
+## v2.4.7 notes
+
+Every item here was reproduced on disk before it was fixed, and each fix has a
+regression test that failed beforehand (491 checks, 0 failures).
+
+Two shipped features were silently dead: the practice-statistics palette
+entries called a command name no class registers, and `auto_format_on_save`
+read a per-language `format_cmd` that no default entry defines. One verdict was
+wrong in a way that misleads the user: answers were compared as one
+whitespace-stripped blob, so `1 23` matched the expected `12 3` and the run was
+reported as a presentation error instead of a wrong answer. `max_output_bytes`
+was not a limit at all, because the output pump asked the pipe for everything
+until EOF and the cap was then checked against the length before that read.
+
+Responsiveness and thread safety: closing the panel or re-running over a live
+process killed the child synchronously on the main thread (up to 3 s frozen);
+the output pump occupied Sublime's shared async worker for the whole run; and
+both the output and the verdict rendering touched views from that worker,
+against the rule this package already documents for its parallel runner. A
+timed-out compile also left the real compiler alive, because only the shell it
+was started through was killed.
+
+Security: the Companion listener validated only the `Host` header, which stops
+DNS rebinding but not an ordinary cross-origin POST, so any page the user
+visited could write test data, change the limits, create a source file and
+trigger a compile. `Origin` and `Sec-Fetch-Site` are validated as well now,
+while curl and local scripts keep working.
+
+Startup cost is down from ~415 ms to ~221 ms measured, with 51 fewer modules
+loaded, by deferring `http.server`, `urllib`, `difflib`, `shutil` and `socket`
+to the features that use them.
+
+No new dependencies, no binary files, no keybindings outside the package's own
+syntax and its own state gate, and nothing is written to the user's settings
+file from a background callback.
 
 ## v2.4.6 notes
 

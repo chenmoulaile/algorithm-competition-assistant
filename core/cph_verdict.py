@@ -2,7 +2,6 @@
 Algorithm Competition Assistant - 评判系统 (类似 cph-ng)
 """
 
-import difflib
 import re
 
 VERDICT_NAME = {
@@ -314,17 +313,16 @@ def get_verdict_by_code(rtcode, runtime, time_limit_ms, memory_limit_mb,
     if ole_size and fixed_actual and fixed_expected and len(fixed_actual) > len(fixed_expected) * ole_size:
         return get_verdict('output_limit_exceed')
 
-    def compress(s):
-        if not s:
-            return ''
-        return ''.join(s.split())
-
     if float_tolerance and float_tolerance > 0:
         if not outputs_equal(stdout, expected_output, float_tolerance):
             return get_verdict('wrong_answer')
         return get_verdict('accepted')
 
-    if compress(stdout) != compress(expected_output):
+    # Compare the token sequence, not a whitespace-stripped blob: joining
+    # every split() made "1 23" match the answer "12 3", so a wrong answer
+    # fell through to the presentation-error rule below and told the user
+    # their numbers were right.
+    if not outputs_equal(stdout, expected_output, 0):
         return get_verdict('wrong_answer')
 
     if fixed_actual != fixed_expected and not regard_pe_as_ac:
@@ -485,6 +483,9 @@ def build_line_diff(expected, actual):
             ops.append(('+', head + off + 1, '', wa[off]))
         return ops, total
 
+    # Imported here: difflib costs ~29 ms of cold import and is only reached
+    # when a mismatch is being explained in the detail view, not on a clean AC.
+    import difflib
     sm = difflib.SequenceMatcher(a=we, b=wa, autojunk=False)
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == 'equal':

@@ -94,11 +94,6 @@ def _read_text(file_path):
         return f.read()
 
 
-def _strip_input_suffix(stem):
-    """"1.in" -> "1" so "1.out.txt" pairs correctly with "1.in.txt"."""
-    return re.sub(r'(?i)\.in$', '', stem)
-
-
 from .core.cph_target import visible as context_menu_visible
 
 
