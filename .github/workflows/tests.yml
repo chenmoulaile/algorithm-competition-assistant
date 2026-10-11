@@ -52,7 +52,24 @@ jobs:
         run: python tests/check_messages.py
 
       - name: Regression tests (no Sublime required)
-        run: python tests/run_tests.py
+        shell: bash
+        # The suite prints one line per check, so a red job said nothing more
+        # than "exit code 1" unless someone opened the log - and the log needs
+        # repo admin rights to fetch, which is exactly when a platform-only
+        # failure (it passed on Linux and macOS, failed only on Windows) is
+        # worth reading. Echo the failing check labels as annotations: they show
+        # up on the check run itself and via the public annotations API.
+        run: |
+          set +e
+          python tests/run_tests.py 2>&1 | tee run_tests.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            echo "::error::run_tests.py failed on $RUNNER_OS (exit $code)"
+            grep -E '^  - ' run_tests.log | head -40 | while IFS= read -r line; do
+              echo "::error::failed check: ${line#  - }"
+            done
+          fi
+          exit "$code"
 
       # A directory handed to the import dialog produced
       # `[Errno 13] Permission denied` on Windows, which reads like a real
