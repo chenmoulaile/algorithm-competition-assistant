@@ -515,27 +515,36 @@ class CphDoctorCommand(sublime_plugin.TextCommand):
 		out = ['', t('doctor_probe_title'), '-' * 46]
 		for entry in run_settings:
 			name = entry.get('name', '?')
-			exe = _first_token(entry.get('compile_cmd'))
-			if not exe:
-				exe = _first_token(entry.get('run_cmd'))
-			ok, detail = probe_compiler_version(exe)
-			if ok is None:
-				out.append('    --   %s: %s' % (name, detail))
-				continue
-			if not ok:
-				# On PATH but refuses to execute: the missing-DLL, wrong-bitness
-				# and blocked-by-antivirus class that which() cannot see.
-				out.append('    FAIL %s: %s %s' % (name, exe, detail))
-				continue
-			build_ok, build_detail = probe_build(entry)
-			if build_ok is None:
-				out.append('    ok   %s: %s (%s)' % (name, detail, build_detail))
-			elif build_ok:
-				out.append('    ok   %s: %s; %s' % (name, detail, build_detail))
-			else:
-				out.append('    FAIL %s: %s; %s' % (name, detail, build_detail))
+			# One entry must not take the whole section down: a toolchain that
+			# makes the probe itself raise (a locked temp dir, an unreadable
+			# setting) would otherwise end the loop silently, because this runs
+			# on a worker thread where an exception goes no further than the
+			# console.
+			try:
+				out.append(self._probe_entry(entry, name))
+			except Exception as e:
+				out.append('    WARN %s: probe failed: %s: %s'
+						   % (name, type(e).__name__, e))
 		out.append('')
 		self._emit(view, out)
+
+	def _probe_entry(self, entry, name):
+		exe = _first_token(entry.get('compile_cmd'))
+		if not exe:
+			exe = _first_token(entry.get('run_cmd'))
+		ok, detail = probe_compiler_version(exe)
+		if ok is None:
+			return '    --   %s: %s' % (name, detail)
+		if not ok:
+			# On PATH but refuses to execute: the missing-DLL, wrong-bitness
+			# and blocked-by-antivirus class that which() cannot see.
+			return '    FAIL %s: %s %s' % (name, exe, detail)
+		build_ok, build_detail = probe_build(entry)
+		if build_ok is None:
+			return '    ok   %s: %s (%s)' % (name, detail, build_detail)
+		if build_ok:
+			return '    ok   %s: %s; %s' % (name, detail, build_detail)
+		return '    FAIL %s: %s; %s' % (name, detail, build_detail)
 
 	def is_enabled(self):
 		return True

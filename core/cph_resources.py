@@ -23,6 +23,23 @@ def package_resource_path(rel_path):
 	return 'Packages/%s/%s' % (base_name, rel_path)
 
 
+def package_file_path(rel_path):
+	"""A path `edit_settings` / `open_file` can actually resolve.
+
+	`Packages/<pkg>/<file>` is a *resource* path: load_resource accepts it,
+	edit_settings does not - it hands the string to the OS and answers "The
+	settings file ... could not be opened". Sublime's own menus therefore
+	always pass an absolute path under the Packages directory, and that form
+	covers both layouts: installed as a loose folder it is a real file, and
+	inside a .sublime-package the resource layer resolves the same path to the
+	zip entry.
+	"""
+	try:
+		return path.join(sublime.packages_path(), base_name, rel_path)
+	except Exception:
+		return package_resource_path(rel_path)
+
+
 def read_resource(rel_path, use_cache=True):
 	"""Return the text content of a package resource (zip-safe).
 

@@ -1,8 +1,42 @@
 # Algorithm Competition Assistant — Package Control Submission Notes
 
-Package version: v2.4.8
+Package version: v2.4.9
 Repository: https://github.com/chenmoulaile/cph-by-chenkx
 Channel entry file: `repository/a.json` (see snippet at the bottom)
+
+## v2.4.9
+
+A regression from v2.4.7 that only shows up when the user clicks the menu, plus
+the test gap that let it ship with a green suite.
+
+The Preferences submenu entries (Settings, Key Bindings, TestSyntax Settings,
+README) answered "The settings file
+`Packages/cph-by-chenkx/Algorithm Competition Assistant.sublime-settings`
+could not be opened". v2.4.7 replaced the hardcoded folder name with a command
+that resolves the path from the directory the package actually lives in - the
+right fix, wrong form: it passed a `Packages/<pkg>/<file>` resource path, which
+`sublime.load_resource()` accepts and `edit_settings` does not. Sublime's own
+packages always pass an absolute path under the Packages directory, and that
+single form works for both a loose-folder install and a `.sublime-package` zip.
+Also: one toolchain probe failing no longer silently suppresses the whole doctor
+probe section, which runs on a worker thread where an exception leaves nothing
+but a console line.
+
+The suite was fully green when this shipped, because the only assertion covering
+it grepped the source for the command name and never executed it. The new checks
+run the command for every file the menus and palette reference and require an
+absolute, OS-resolvable path - verified against a folder install and a simulated
+zip install - and reverting the fix turns exactly those three checks red with the
+string from the dialog. Doctor's probe section, the language-switch commands, the
+run-panel status label with and without a calibration factor, the practice report
+in both languages, and the Companion handler class built through its lazy factory
+are now executed too. A separate sweep compared every argument the menus and
+keymaps pass to a `cph_` command against that command's `run()` signature: no
+mismatches.
+
+542 checks, 0 failures, verified on two CPython builds across three host code
+pages (cp1252, utf-8, gbk); still Python 3.3 compatible. No new dependencies, no
+binaries, no keybindings outside the package's own syntax and its own gate.
 
 ## v2.4.8 notes
 

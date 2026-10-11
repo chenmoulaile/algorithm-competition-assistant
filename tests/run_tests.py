@@ -3647,6 +3647,288 @@ def main():
           and i18n.STRINGS.get('lang_switched_en', {}).get('zh')
           and i18n.STRINGS.get('lang_switched_en', {}).get('en'))
 
+    print('== v2.4.9: the code paths a source-grep test could not see ==')
+
+    class _RecWindow(object):
+        def __init__(self):
+            self.calls = []
+
+        def run_command(self, command, args=None):
+            self.calls.append((command, dict(args or {})))
+
+    class _RecView(object):
+        def __init__(self):
+            self.appended = []
+
+        def is_valid(self):
+            return True
+
+        def run_command(self, command, args=None):
+            if command == 'append':
+                self.appended.append((args or {}).get('characters', ''))
+
+    ex = importlib.import_module(pkg + '.cph_extras')
+
+    # Every file the Preferences entries name must exist in the package, and
+    # the command must hand edit_settings / open_file something the OS can
+    # resolve. The v2.4.7 version passed a `Packages/<folder>/<file>` resource
+    # path, which edit_settings rejects with "The settings file ... could not
+    # be opened" - and no test had ever executed the command.
+    refs = []
+
+    def _collect_refs(obj):
+        if isinstance(obj, dict):
+            if obj.get('command') == 'cph_open_package_file':
+                args = obj.get('args') or {}
+                refs.append((args.get('file'), bool(args.get('edit_base'))))
+            for value in obj.values():
+                _collect_refs(value)
+        elif isinstance(obj, list):
+            for value in obj:
+                _collect_refs(value)
+
+    for _name in ('Main.sublime-menu', 'Default.sublime-commands'):
+        with open(os.path.join(ROOT, _name), encoding='utf-8') as f:
+            _collect_refs(json.load(f))
+    check('the Preferences entries name a file each',
+          len(refs) >= 4 and all(name for name, _ in refs), repr(refs))
+    unresolved = []
+    for name, _edit in refs:
+        if '$platform' in name:
+            stem = name.replace('$platform', '')
+            head, tail = name.split('$platform')
+            if not any(os.path.exists(os.path.join(ROOT, head + p + tail))
+                       for p in ('Windows', 'Linux', 'OSX', 'windows', 'linux', 'osx')):
+                unresolved.append(name)
+        elif not os.path.exists(os.path.join(ROOT, name)):
+            unresolved.append(name)
+    check('no menu entry points at a file that is not in the package',
+          not unresolved, repr(unresolved))
+
+    _keep_pp = getattr(_sub, 'packages_path', None)
+    _sub.packages_path = lambda: os.path.dirname(ROOT)
+    try:
+        opener = ex.CphOpenPackageFileCommand.__new__(ex.CphOpenPackageFileCommand)
+
+        win = _RecWindow()
+        opener.window = win
+        opener.run(file='Algorithm Competition Assistant.sublime-settings',
+                   edit_base=True)
+        base = win.calls[-1][1].get('base_file', '')
+        check('edit_settings gets an OS-resolvable path, never Packages/...',
+              win.calls[-1][0] == 'edit_settings'
+              and not base.startswith('Packages/')
+              and os.path.isabs(base) and os.path.exists(base), repr(base))
+
+        win = _RecWindow()
+        opener.window = win
+        opener.run(file='README.md')
+        target = win.calls[-1][1].get('file', '')
+        check('open_file gets a readable path too',
+              win.calls[-1][0] == 'open_file'
+              and os.path.isabs(target) and os.path.exists(target), repr(target))
+
+        win = _RecWindow()
+        opener.window = win
+        opener.run(file='Default ($platform).sublime-keymap', edit_base=True)
+        keymap = win.calls[-1][1].get('base_file', '')
+        check('the $platform keymap name expands to a file that exists',
+              '$platform' not in keymap and os.path.exists(keymap), repr(keymap))
+
+        # Installed as a .sublime-package the file is not on disk at all, and
+        # Sublime still resolves the absolute path to the zip entry - so the
+        # answer must stay absolute and must never degrade to a resource path
+        # or an unexpanded ${packages} template.
+        _sub.packages_path = lambda: os.path.join(os.path.dirname(ROOT), 'nowhere')
+        win = _RecWindow()
+        opener.window = win
+        opener.run(file='README.md')
+        zipped = win.calls[-1][1].get('file', '')
+        check('a zip install still gets an absolute path, not a resource path',
+              os.path.isabs(zipped) and not zipped.startswith('Packages/')
+              and '${' not in zipped, repr(zipped))
+    finally:
+        if _keep_pp is None:
+            del _sub.packages_path
+        else:
+            _sub.packages_path = _keep_pp
+
+    # Doctor's probe section: it runs on a worker thread, where a raise would
+    # end the section without any visible cause.
+    doctor_cmd = doc.CphDoctorCommand.__new__(doc.CphDoctorCommand)
+    line = doctor_cmd._probe_entry({'name': 'C++', 'extensions': ['cpp'],
+                                    'compile_cmd': 'no-such-compiler-xyz {source_file}',
+                                    'run_cmd': 'x'}, 'C++')
+    check('a compiler that is not on PATH is reported, not raised',
+          isinstance(line, str) and line.startswith('    '), repr(line))
+    line = doctor_cmd._probe_entry({'name': 'Python', 'extensions': ['py'],
+                                    'compile_cmd': None,
+                                    'run_cmd': 'python {source_file}'}, 'Python')
+    check('an interpreted language still gets a probe line',
+          isinstance(line, str) and line.startswith('    '), repr(line))
+
+    class _ExplodingEntry(dict):
+        def get(self, key, default=None):
+            if key == 'compile_cmd':
+                raise RuntimeError('boom')
+            return dict.get(self, key, default)
+
+    _keep_st = _sub.set_timeout
+    emitted = []
+    _sub.set_timeout = lambda fn, delay=0: fn()
+    try:
+        rec_view = _RecView()
+        doctor_cmd._probe_tools(rec_view, [{'name': 'C++', 'extensions': ['cpp'],
+                                            'compile_cmd': 'no-such-compiler-xyz'},
+                                           _ExplodingEntry(name='Broken')])
+        text = ''.join(rec_view.appended)
+        check('one failing probe cannot take the whole section down',
+              'C++' in text and 'Broken' in text and 'probe failed' in text,
+              repr(text[:200]))
+        check('the probe results reach the report view',
+              bool(rec_view.appended), repr(rec_view.appended))
+    finally:
+        _sub.set_timeout = _keep_st
+
+    # The language switch: it used to print a hardcoded English literal.
+    lang = importlib.import_module(pkg + '.cph_language')
+    _keep_status = _sub.status_message
+    said = []
+    _sub.status_message = lambda msg: said.append(msg)
+    try:
+        for entry_lang, key in ((i18n.LANG_ZH, 'lang_switched_zh'),
+                                (i18n.LANG_EN, 'lang_switched_en')):
+            setter = lang.CphLanguageSetLanguageCommand.__new__(
+                lang.CphLanguageSetLanguageCommand)
+            setter.run(None, language=entry_lang)
+            text = said[-1] if said else ''
+            check('switching to %s answers in %s' % (entry_lang, entry_lang),
+                  i18n.STRINGS[key][entry_lang] in text and key not in text,
+                  repr(text))
+        toggle = lang.CphLanguageToggleLanguageCommand.__new__(
+            lang.CphLanguageToggleLanguageCommand)
+        before = i18n.get_lang()
+        toggle.run(None)
+        check('the toggle really changes the language',
+              i18n.get_lang() != before, '%s -> %s' % (before, i18n.get_lang()))
+    finally:
+        _sub.status_message = _keep_status
+        i18n.set_lang('zh')
+
+    # The calibration and verdict lines, executed rather than grepped.
+    _keep_get_settings = tm.get_settings
+    cal = importlib.import_module(pkg + '.core.cph_calibrate')
+    _keep_factor = cal._cache.get('factor')
+    try:
+        tm.get_settings = lambda: {'run_settings': [
+            {'name': 'C++', 'extensions': ['cpp'],
+             'time_limit_ms': 2000, 'memory_limit_mb': 256}]}
+        cal._cache['factor'] = 1.5
+        label = tm.run_view_status_label('x.cpp', 2000, 256)
+        check('the run panel label carries the calibrated equivalent limit',
+              'TL 2000ms' in label and '1.50' in label and '3000' in label,
+              repr(label))
+        cal._cache.pop('factor')
+        label = tm.run_view_status_label('x.cpp', 2000, 256)
+        check('an uncalibrated machine shows no calibration text',
+              '1.50' not in label and 'TL 2000ms' in label, repr(label))
+    finally:
+        tm.get_settings = _keep_get_settings
+        if _keep_factor:
+            cal._cache['factor'] = _keep_factor
+        else:
+            cal._cache.pop('factor', None)
+
+    info = {'days': 7, 'problems': 2, 'runs': 9, 'solved': 1, 'per_day': [],
+            'needs': [{'file': 'q.cpp', 'attempts': 40}],
+            'verdicts': {'WA': 3, 'AC': 1}, 'stress_rounds': 0, 'span': 0}
+    english = stats_mod.render_summary(info)
+    check('the English report renders the verdict distribution',
+          'Verdicts: WA 3  AC 1' in english, repr(english))
+    i18n.set_lang('zh')
+    chinese = stats_mod.render_summary(info, translate=i18n.t)
+    check('the Chinese report renders the verdict distribution',
+          '判题分布' in chinese and 'WA 3' in chinese, repr(chinese))
+    i18n.set_lang('en')
+    check('a report with no verdicts recorded says nothing about them',
+          'Verdicts' not in stats_mod.render_summary(
+              dict(info, verdicts={})))
+    i18n.set_lang('zh')
+
+    # The Companion handler class is built by a factory now (so http.server is
+    # not imported at startup), which means its whole body only ever runs when
+    # the listener starts. Execute that path here: a NameError inside it used to
+    # be invisible to every test.
+    handler = comp.build_handler()
+    check('the lazily built request handler really constructs',
+          handler.__name__ == '_CompanionHandler'
+          and all(callable(getattr(handler, m, None))
+                  for m in ('do_POST', '_host_allowed', '_deny',
+                            '_handle_on_main', 'log_message')),
+          repr(handler))
+
+    class _FakeRequest(object):
+        def __init__(self, headers):
+            self.headers = headers
+
+        def send_response(self, *args):
+            pass
+
+        def end_headers(self):
+            pass
+
+        class _W(object):
+            def write(self, *args):
+                pass
+        wfile = _W()
+
+    check('the built handler rejects a cross-origin request',
+          handler._host_allowed(_FakeRequest(
+              {'Host': 'localhost:12345', 'Origin': 'http://evil.example'})) is False)
+    check('the built handler accepts a same-origin request',
+          handler._host_allowed(_FakeRequest(
+              {'Host': 'localhost:12345',
+               'Origin': 'http://localhost:12345'})) is True)
+
+    # Stress built from the raw compile_cmd, so a solution toggled to Debug was
+    # stress-tested without the sanitizer flags: the counterexample came from a
+    # binary the user never runs. Capture the command it really hands g++.
+    stress = importlib.import_module(pkg + '.cph_stress')
+    mode_mod = importlib.import_module(pkg + '.core.cph_build_mode')
+    _keep_capture = stress._popen_capture
+    _keep_resolve = stress.resolve_artifact
+    _keep_lang_entry = stress._lang_entry
+    built = []
+    try:
+        def fake_capture(cmd, *args, **kwargs):
+            built.append(cmd)
+            return 0, '', ''
+        stress._popen_capture = fake_capture
+        stress.resolve_artifact = lambda wanted, d, started: wanted
+        src = os.path.join(tempfile.mkdtemp(), 'sol.cpp')
+        with open(src, 'w', encoding='utf-8') as f:
+            f.write('int main(){return 0;}\n')
+        stress._lang_entry = lambda f: {
+            'name': 'C++', 'extensions': ['cpp'],
+            'compile_cmd': 'g++ "{source_file}" -std=c++17 -O2 -o "{file_name}.exe"'}
+        mode_mod.set_mode(src, 'debug')
+        ok_dbg = stress._compile_program(src)[0]
+        debug_cmd = built[-1] if built else ''
+        built[:] = []
+        mode_mod.set_mode(src, 'release')
+        ok_rel = stress._compile_program(src)[0]
+        release_cmd = built[-1] if built else ''
+        check('a Debug stress build carries the sanitizer flags',
+              ok_dbg and '-fsanitize' in debug_cmd
+              and '_GLIBCXX_ASSERTIONS' in debug_cmd, repr(debug_cmd))
+        check('a Release stress build is optimised and unsanitized',
+              ok_rel and '-O2' in release_cmd and '-fsanitize' not in release_cmd,
+              repr(release_cmd))
+    finally:
+        stress._popen_capture = _keep_capture
+        stress.resolve_artifact = _keep_resolve
+        stress._lang_entry = _keep_lang_entry
+
     print('')
     print('%d checks, %d failures' % (CHECKS[0], len(FAILURES)))
     if FAILURES:

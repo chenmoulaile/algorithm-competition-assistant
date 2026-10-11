@@ -22,6 +22,8 @@ from .core.cph_state import (set_stress_running, register_stress_view,
 from .core.cph_target import context_menu_enabled, visible as context_menu_visible
 from .core.cph_i18n import t
 from .core.cph_verdict import normalize_lines, outputs_equal
+from .core.cph_build_mode import (get_mode as _build_mode,
+                                  transform as _apply_build_mode)
 from .core import cph_checker
 from .Modules.ProcessManager import _LenientFormat
 from .Modules.build_artifact import (output_path_from_compile_cmd,
@@ -698,6 +700,12 @@ def _compile_program(file, time_limit=30, sess=None):
 
     cmd = _format_cmd(template, file)
     cmd = _strip_local_define(cmd)
+    # The panel's Debug/Release switch has to be the last word here as well:
+    # stress used to build from the raw command, so a solution toggled to Debug
+    # was stress-tested without the sanitizer and the assertion flags. A
+    # counterexample then came out of a binary the user never actually runs, and
+    # the undefined behaviour that produced it stayed invisible in the panel.
+    cmd = _apply_build_mode(cmd, _build_mode(file))
     # Build into a scratch directory: the same .exe is the one the user
     # rebuilds by hand, and running it for thousands of rounds made that
     # rebuild fail with "Permission denied" until the run was over.

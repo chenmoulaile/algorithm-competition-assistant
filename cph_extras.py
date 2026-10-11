@@ -17,7 +17,7 @@ from .core.cph_calibrate import (format_report as calibrate_report,
 from .core.cph_fetch import (describe_samples, fetch, looks_like_url, samples,
 							 statement, summarize, title_of)
 from .core.cph_i18n import t
-from .core.cph_resources import package_resource_path
+from .core.cph_resources import package_file_path
 from .core.cph_settings import get_settings
 from .core.cph_stats import (record_run, reset as stats_reset,
 							 summary_localized as stats_summary_localized)
@@ -325,9 +325,10 @@ class CphOpenPackageFileCommand(sublime_plugin.WindowCommand):
 	${packages}/Algorithm Competition Assistant/..., which only resolves when
 	the installed folder carries the display name. Package Control renames it
 	on install; a manual install under the repository name opened a file that
-	does not exist. Building the path from the directory the package actually
-	lives in works for both, and reading through Packages/... keeps working
-	when the package ships as a .sublime-package zip.
+	does not exist. The path is built from the directory the package really
+	lives in instead, through package_file_path - edit_settings rejects a
+	`Packages/...` resource path outright and answers "The settings file ...
+	could not be opened", so it needs an OS-resolvable one.
 	"""
 
 	def run(self, file, edit_base=False, default=None):
@@ -335,7 +336,7 @@ class CphOpenPackageFileCommand(sublime_plugin.WindowCommand):
 		if '$platform' in name:
 			platform = sublime.platform()
 			name = name.replace('$platform', _PLATFORM_FILE.get(platform, platform))
-		target = package_resource_path(name)
+		target = package_file_path(name)
 		if edit_base:
 			self.window.run_command('edit_settings', {
 				'base_file': target,

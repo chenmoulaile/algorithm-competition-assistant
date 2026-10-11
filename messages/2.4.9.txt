@@ -1,0 +1,48 @@
+Algorithm Competition Assistant 2.4.9
+====================================
+
+A regression fix, and the test gap that let it through.
+
+Fixed:
+
+* Preferences > Package Settings > Algorithm Competition Assistant > Settings
+  (and Key Bindings, TestSyntax Settings, README) answered
+  "The settings file "Packages/cph-by-chenkx/..." could not be opened".
+  v2.4.7 replaced the hardcoded folder name in those menu entries with a
+  command that builds the path from the directory the package really lives in -
+  the right fix, wrong form: it passed a `Packages/<pkg>/<file>` *resource*
+  path, which `sublime.load_resource()` accepts but `edit_settings` does not.
+  Sublime's own menus always hand that command an absolute path under the
+  Packages directory, and that form works for both a loose-folder install and a
+  .sublime-package zip. The command now does the same.
+* One failing toolchain probe can no longer take the whole doctor probe section
+  down. The section runs on a worker thread, where an exception leaves nothing
+  but a console line, so a locked temp dir or an unreadable setting used to make
+  the results simply never appear.
+
+Tests: 539 -> 542 checks. The bug above shipped with a fully green suite, so the
+new checks do not grep the source any more - they execute the code:
+
+* `cph_open_package_file` is run for every file the menus and the palette name,
+  and the resulting path must be absolute, must not start with `Packages/`, and
+  must not be an unexpanded `${packages}` template. Verified against a folder
+  install and against a simulated zip install. Reverting the fix makes exactly
+  these three checks fail with the string from the dialog, which is the proof
+  they would have caught it.
+* Every file referenced by `Main.sublime-menu` / `Default.sublime-commands` must
+  exist in the package.
+* `doctor`'s probe section is executed, including an entry whose probe raises.
+* The language switch commands are run and their status message is compared
+  against the translation table in the language that was switched to.
+* The run panel status label is built with a calibration factor set, and again
+  without one.
+* The practice report is rendered in both languages with a verdict distribution.
+* The Companion request handler class is built through its lazy factory - the
+  whole class body used to run only when the listener started - and the origin
+  guard is exercised through the real class.
+
+A separate sweep checked every argument the menus and keymaps pass to a `cph_`
+command against that command's `run()` signature: no mismatches.
+
+Verified on two CPython builds and three host code pages (cp1252, utf-8, gbk):
+542 checks, 0 failures. Still Python 3.3 compatible.

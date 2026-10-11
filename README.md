@@ -68,7 +68,7 @@ copy-paste reference if you want to change one.
 | 中英文双语界面 | ❌ | ✅ |
 | 测试面板自适应宽度 | ❌ | ✅ 卡片放不下时自动加宽 |
 
-工程上还有：**Python 3.3 兼容**（Sublime 插件宿主）、四平台 CI（Linux 3.8/3.12 + Windows + macOS）、**520 项回归测试**。
+工程上还有：**Python 3.3 兼容**（Sublime 插件宿主）、四平台 CI（Linux 3.8/3.12 + Windows + macOS）、**542 项回归测试**。
 
 ---
 
