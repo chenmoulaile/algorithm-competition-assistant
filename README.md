@@ -68,7 +68,7 @@ copy-paste reference if you want to change one.
 | 中英文双语界面 | ❌ | ✅ |
 | 测试面板自适应宽度 | ❌ | ✅ 卡片放不下时自动加宽 |
 
-工程上还有：**Python 3.3 兼容**（Sublime 插件宿主）、四平台 CI（Linux 3.8/3.12 + Windows + macOS）、**551 项回归测试**。
+工程上还有：**Python 3.3 兼容**（Sublime 插件宿主）、四平台 CI（Linux 3.8/3.12 + Windows + macOS）、**555 项回归测试**。
 
 ---
 
@@ -171,10 +171,25 @@ copy-paste reference if you want to change one.
 
 ## 安装
 
-1. 克隆或下载本仓库
-2. 把仓库文件夹复制到 Sublime Text 的 `Packages` 目录（显示名为 Algorithm Competition Assistant，
-   安装目录名沿用仓库名 `cph-by-chenkx` 即可，功能与数据文件名都不变）
+**推荐：Package Control（已收录进官方市场）**
+
+1. `Ctrl+Shift+P` → `Package Control: Install Package`
+2. 搜 `Algorithm Competition Assistant` 回车
+
+装完即生效，无需重启。日后升级用 `Package Control: Upgrade Package`。
+注意它会以 `Installed Packages/Algorithm Competition Assistant.sublime-package`（zip）的形式安装，
+而不是一个独立文件夹——这是 Package Control 的默认打包方式，v2.4.11 之前该形式下所有资源路径都是坏的。
+
+**手动安装**
+
+1. 克隆或下载本仓库（`chenmoulaile/algorithm-competition-assistant`）
+2. 把仓库文件夹放进 Sublime Text 的 `Packages` 目录，目录名随你——v2.4.11 起路径按插件真实所在目录
+   （或 zip 名）推导并去掉 `.sublime-package` 后缀，所以叫什么都一样；数据文件名也保持不变
 3. 重启 Sublime Text
+
+⚠️ 两种方式**不要同时用**：`Packages/` 下放着一份源码、`Installed Packages/` 下又有一个同名 zip，
+Sublime 会把两份都当插件加载，命令与快捷键会重复注册。用 Package Control 装的话，请把源码检出目录
+移出 `Packages/`（放到别处当开发用即可）。
 
 ## 使用方法
 

@@ -9,7 +9,7 @@ save 按钮同时保存两者; 相比旧的 "------ answer ------" 分隔行,
 import sublime, sublime_plugin
 from sublime import Region, Phantom, PhantomSet
 
-from .core.cph_settings import base_name
+from .core.cph_settings import package_name
 from .core.cph_resources import read_resource
 from .core.cph_i18n import t as _i18n_t
 from .Highlight.test_interface import get_test_styles
@@ -179,7 +179,7 @@ class CphTestEditCommand(sublime_plugin.TextCommand):
 		v.settings().set('cph_edit_view', True)
 		v.settings().set('cph_edit_source', source_view_id)
 		v.settings().set('edit_mode', True)
-		v.set_syntax_file('Packages/%s/TestSyntax.sublime-syntax' % base_name)
+		v.set_syntax_file('Packages/%s/TestSyntax.sublime-syntax' % package_name)
 		# Position 0 holds a sentinel '\n' and the button phantom is anchored
 		# at Region(0). minihtml has no "draw above this line" layout
 		# (sublimehq/sublime_text#4469): a block phantom always renders

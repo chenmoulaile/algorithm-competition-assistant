@@ -1,8 +1,42 @@
 # Algorithm Competition Assistant — Package Control Submission Notes
 
-Package version: v2.4.10
-Repository: https://github.com/chenmoulaile/cph-by-chenkx
+Package version: v2.4.11
+Repository: https://github.com/chenmoulaile/algorithm-competition-assistant
 Channel entry file: `repository/a.json` (see snippet at the bottom)
+
+## v2.4.11 notes
+
+A Package Control install was badly broken, and it was invisible to every test
+because every test ran from a loose folder.
+
+Package Control installs as
+`Data/Installed Packages/<Name>.sublime-package` - a zip, no folder. The
+directory the host loads modules from is then
+`Algorithm Competition Assistant.sublime-package`, and that string was used
+verbatim as the package component of every path. Sublime addresses a package by
+its name without the extension - which is how zip-installed packages reference
+themselves (`Packages/BracketHighlighter/...`, `Packages/LSP/...`) - so every
+path resolved to nothing: `edit_settings` popped "could not be opened",
+`load_resource` failed for every card template and stylesheet (the run panel
+rendered without its HTML/CSS), the fold-arrow region icons did not resolve, and
+`set_syntax_file` plus the syntax comparison that detects "this view is ours"
+failed for the `-run` view and the test editor.
+
+The name is derived once with the suffix stripped, and both the resource form and
+the absolute form go through it. A folder install is unaffected. This is the
+second half of the v2.4.9 fix, which moved to an absolute path (correct, what
+`edit_settings` needs) but kept the unstripped folder name.
+
+Also: the repository is renamed to `chenmoulaile/algorithm-competition-assistant`
+to match the published name. GitHub redirects the old URL; the merged channel
+entry should be updated to the new one. Data file names are deliberately
+unchanged (`cph-by-chenkx-stats.json`, `cph-by-chenkx-machine.json`) so existing
+users keep their history.
+
+555 checks, 0 failures. Four of them now install the package the way Package
+Control does - a `.sublime-package` folder component - and assert no path handed
+to Sublime carries the suffix; reverting the fix makes them fail with the exact
+string from the error dialog.
 
 ## v2.4.10 notes
 
@@ -762,14 +796,16 @@ Reviewer feedback addressed:
 ## Channel entry (repository/a.json)
 
 The entry is filed under the letter of the published name (`a` for
-"Algorithm Competition Assistant"), not the repository name. Package Control
-derives the install folder from `name`, so the repository URL stays
-`chenmoulaile/cph-by-chenkx`.
+"Algorithm Competition Assistant"). Package Control derives the install folder
+from `name`, and the repository is now named to match (`chenmoulaile/
+algorithm-competition-assistant`, renamed from `cph-by-chenkx`), so the folder
+and the repo agree. GitHub keeps redirecting the old URL, but the merged channel
+entry in `wbond/package_control_channel` should be updated to the new one.
 
 ```json
 {
 	"name": "Algorithm Competition Assistant",
-	"details": "https://github.com/chenmoulaile/cph-by-chenkx",
+	"details": "https://github.com/chenmoulaile/algorithm-competition-assistant",
 	"labels": ["c", "c++", "competitive programming", "testing"],
 	"releases": [
 		{

@@ -21,7 +21,7 @@ import sublime_plugin
 
 from .core.cph_i18n import t
 from .core.cph_settings import (get_settings, get_tests_file_path,
-                                PACKAGE_NAME, base_name)
+                                PACKAGE_NAME, base_name, package_name)
 from .core.cph_resources import read_resource
 from .core.cph_state import plugin_version
 
@@ -453,7 +453,15 @@ class CphDoctorCommand(sublime_plugin.TextCommand):
 		# Sublime does not hot reload .py files, so a verdict can easily come
 		# from an older install than the source the user is reading.
 		lines.append('- Plugin: %s' % (plugin_version() or 'unknown'))
+		# Both names, because the difference is the bug: installed as a zip the
+		# folder carries a .sublime-package suffix that must NOT appear in a
+		# resource path, and every "could not be opened" report so far came from
+		# exactly that confusion.
 		lines.append('- Package folder: %s' % base_name)
+		lines.append('- Package name (resources): %s' % package_name)
+		lines.append('- Installed as: %s' % ('.sublime-package zip'
+											 if base_name.endswith('.sublime-package')
+											 else 'loose folder'))
 		lines.append('- Platform: %s (%s)' % (sublime.platform(), sys.platform))
 		lines.append('- Python: %s' % sys.version.split()[0])
 		lines.append('- companion_port: %s' % port)

@@ -3983,6 +3983,52 @@ def main():
     finally:
         _sub.set_timeout, _sub.set_timeout_async = _keep_st, _keep_st_async
 
+    # ---- the .sublime-package install form (what Package Control ships) ----
+    # Installed as a zip, __file__ lives inside `Packages/<name>.sublime-package/`
+    # and the folder component of every resource path must be the name WITHOUT
+    # that extension - which is how BracketHighlighter and LSP, both zip
+    # installed, reference themselves. Leaving the suffix in broke edit_settings
+    # and, worse, every load_resource / set_syntax_file / region icon path.
+    _settings_mod = importlib.import_module(pkg + '.core.cph_settings')
+    _namer = getattr(_settings_mod, 'package_name_for', None)
+    check('the .sublime-package suffix is stripped from the resource name',
+          _namer is not None
+          and _namer('/x/Packages/Algorithm Competition Assistant.sublime-package')
+          == 'Algorithm Competition Assistant'
+          and _namer('/x/Packages/cph-by-chenkx') == 'cph-by-chenkx',
+          'package_name_for missing' if _namer is None else 'wrong name')
+
+    _res = importlib.import_module(pkg + '.core.cph_resources')
+    _keep_base = _res.base_name
+    try:
+        _res.base_name = 'Algorithm Competition Assistant.sublime-package'
+        _keep_pp = getattr(_sub, 'packages_path', None)
+        _sub.packages_path = lambda: r'D:\Sublime Text\Data\Packages'
+        try:
+            res_path = _res.package_resource_path('Highlight/test_config.html')
+            file_path = _res.package_file_path(
+                'Algorithm Competition Assistant.sublime-settings')
+            check('a zip install builds resource paths without the suffix',
+                  '.sublime-package' not in res_path
+                  and res_path.startswith('Packages/Algorithm Competition Assistant/'),
+                  repr(res_path))
+            check('a zip install builds edit_settings paths without the suffix',
+                  '.sublime-package' not in file_path
+                  and os.path.isabs(file_path), repr(file_path))
+        finally:
+            if _keep_pp is None:
+                del _sub.packages_path
+            else:
+                _sub.packages_path = _keep_pp
+    finally:
+        _res.base_name = _keep_base
+
+    check('the panel resources use the stripped name, not the folder name',
+          'package_name' in open(os.path.join(ROOT, 'test_manager.py'),
+                                 encoding='utf-8').read()
+          and 'package_name' in open(os.path.join(ROOT, 'test_edit.py'),
+                                     encoding='utf-8').read())
+
     print('')
     print('%d checks, %d failures' % (CHECKS[0], len(FAILURES)))
     if FAILURES:

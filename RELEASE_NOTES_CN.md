@@ -5,6 +5,55 @@
 
 ---
 
+# v2.4.11
+
+**从 Package Control 安装的话，这个插件之前是坏的。** 测试全绿、开发者机器全好——因为没有人用
+用户的方式安装过它。
+
+## 根因
+
+Package Control 把包装成 `Data/Installed Packages/<名字>.sublime-package`（一个 zip），
+**不会**创建独立文件夹。此时宿主加载我们的目录是
+`Algorithm Competition Assistant.sublime-package`，而这个字符串被原样当作路径里的包名用了。
+Sublime 在路径里称呼一个包时用的是**去掉后缀**的名字——这从其他 zip 安装的包自己的写法就能看出来
+（`Packages/BracketHighlighter/...`、`Packages/LSP/...`，没人写 `.sublime-package/`）。
+于是所有路径都指向不存在的位置：
+
+- Preferences > Package Settings 弹
+  `The settings file "D:\Sublime Text\Data\Packages\Algorithm Competition Assistant.sublime-package\
+  Algorithm Competition Assistant.sublime-settings" could not be opened`。
+- `load_resource` 全部失败 → **测试卡片的 HTML 与 CSS 都加载不出来**，运行面板是裸的。
+- 折叠箭头的 region 图标路径解析不到。
+- `set_syntax_file` 对 `-run` 视图和编辑视图失效；而那句"这个视图是不是我们的"语法比较
+  永远不相等，导致 `make_opd` 在这些视图上错误分派。
+
+现在包名只在一处推导（去掉 `.sublime-package` 后缀），资源路径和操作系统路径都走它。
+散装目录安装不受影响——它本来就没有后缀可去。
+
+这也是 v2.4.9 那次修复的**下半场**：当时把 `Packages/<包名>/<文件>` 改成了绝对路径
+（`edit_settings` 确实需要绝对路径），但保留了未去后缀的目录名，于是同一个没人测过的安装形态
+换了一种方式坏。
+
+## 顺带
+
+仓库改名为 `chenmoulaile/algorithm-competition-assistant`，与插件显示名一致（原 `cph-by-chenkx`）。
+GitHub 会自动重定向旧地址，但已合并进 `wbond/package_control_channel` 的条目建议同步更新。
+**数据文件名保持不变**（`cph-by-chenkx-stats.json`、`cph-by-chenkx-machine.json`），
+免得任何人丢掉几个月的练习记录。
+
+## 说明 · 两种安装方式不能并存
+
+`Packages/` 下留一份源码、`Installed Packages/` 下再放一个同名 zip，Sublime 会把两份都当插件加载，
+命令与快捷键重复注册。用 Package Control 装的话，请把源码检出目录移出 `Packages/`。
+
+## 测试
+
+551 → **555 项 0 失败**。新增四条检查**按 Package Control 的方式安装一遍**：让包名带上
+`.sublime-package`，断言交给 Sublime 的资源路径与绝对路径都不含该后缀，且面板路径用的是去后缀的名字。
+把修复撤掉，这几条就用弹窗里那个原串变红——这是"测试真能拦住它"的证据。
+
+---
+
 # v2.4.10
 
 拿上一两轮改过的代码去对照**非本机平台**审出来的四个缺陷——其中三个在中国 Windows 上

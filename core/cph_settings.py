@@ -19,6 +19,29 @@ _package_root = path.dirname(path.dirname(__file__))
 root_dir = _package_root
 base_name = path.split(_package_root)[1]
 
+
+def package_name_for(root):
+    """The name Sublime addresses a package by in a resource path.
+
+    Installed as a .sublime-package zip - Package Control's default, and what
+    every user without a git clone gets - `__file__` sits inside
+    `Packages/<name>.sublime-package/`, but the resource layer, set_syntax_file,
+    region icons and edit_settings all want the name WITHOUT that extension.
+    That is how the zip-installed packages themselves spell it
+    (`Packages/BracketHighlighter/...`, `Packages/LSP/...`). Leaving the suffix
+    in breaks the run panel cards, the fold arrows and the syntax of the -run
+    view, and makes Preferences answer "could not be opened".
+    """
+    name = path.split(root)[1] if root else ''
+    if name.endswith('.sublime-package'):
+        name = name[:-len('.sublime-package')]
+    return name
+
+
+#: The folder (or zip) the host actually loaded us from; for diagnostics only.
+#: Every path handed to a Sublime API uses `package_name` instead.
+package_name = package_name_for(_package_root)
+
 # The display name changed in v2.4.4. The DATA files (practice statistics,
 # machine calibration, tests suffix) deliberately keep their old names so a
 # user who already has months of data does not lose it - only the settings

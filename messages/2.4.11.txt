@@ -1,0 +1,45 @@
+Algorithm Competition Assistant 2.4.11
+======================================
+
+Installed from Package Control, the plugin was badly broken. It worked in every
+test and on every developer machine, because nobody had installed it the way a
+user does.
+
+The cause: Package Control installs a package as
+`Data/Installed Packages/<Name>.sublime-package` - a zip. Inside it, the
+directory the host loaded us from is `Algorithm Competition Assistant.sublime-package`,
+and that string was being used verbatim as the package component of every path.
+Sublime addresses a package by its name *without* the extension - which is how
+the zip-installed packages themselves spell it (`Packages/BracketHighlighter/...`,
+`Packages/LSP/...`). So every path resolved to nothing:
+
+* Preferences > Package Settings answered "The settings file
+  `D:\Sublime Text\Data\Packages\Algorithm Competition Assistant.sublime-package\
+  Algorithm Competition Assistant.sublime-settings` could not be opened".
+* `load_resource` failed for every card template and stylesheet, so the run
+  panel rendered without its HTML/CSS.
+* The fold-arrow region icons did not resolve.
+* `set_syntax_file` failed for the `-run` view and the test editor, and the
+  comparison that detects "this view is ours" never matched, so `make_opd`
+  mis-dispatched on those views.
+
+The name is now derived once, with the suffix removed, and every path - resource
+paths and OS paths alike - goes through it. A folder install is unaffected: there
+is no suffix to strip.
+
+This is the second half of a bug v2.4.9 fixed only halfway. That release changed
+`Packages/<pkg>/<file>` into an absolute path, which is what `edit_settings`
+needs, but kept the unstripped folder name, so it broke in a new way for the same
+reason: the install form nobody had tested.
+
+Also: the repository is now `chenmoulaile/algorithm-competition-assistant`, named
+to match the plugin (was `cph-by-chenkx`). GitHub redirects the old URL, but the
+channel entry should be updated. The data files keep their original names
+(`cph-by-chenkx-stats.json`, `cph-by-chenkx-machine.json`) so nobody loses months
+of practice history.
+
+Tests: 551 -> 555. Four new checks install the package the way Package Control
+does - a `.sublime-package` folder component - and assert that no path handed to
+Sublime carries the suffix, for the resource form and the absolute form, and that
+the panel builds its paths from the stripped name. Verified by reverting the fix:
+the checks fail with exactly the string from the error dialog.

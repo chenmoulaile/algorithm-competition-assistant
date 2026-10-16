@@ -11,7 +11,7 @@ from time import time, sleep
 import threading
 
 from .Modules.ProcessManager import ProcessManager
-from .core.cph_settings import base_name, get_settings, get_tests_paths, load_all_tests, save_tests, is_run_supported_ext, get_problem_limits
+from .core.cph_settings import package_name, get_settings, get_tests_paths, load_all_tests, save_tests, is_run_supported_ext, get_problem_limits
 from .core.cph_target import visible as context_menu_visible
 from .core.cph_jump import (diagnostics as parse_diagnostics,
 							links_html, one_link, set_targets, handle_event as handle_jump_event)
@@ -357,14 +357,16 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 	REGION_BEGIN_KEY = 'test_begin_%d'
 	REGION_OUT_KEY = 'test_out_%d'
 	REGION_END_KEY = 'test_end_%d'
-	# Built from base_name (the folder the host loaded us from) rather than a
-	# hardcoded package name: the two arrow icons must resolve whether the
-	# package is installed as "Algorithm Competition Assistant" (Package
-	# Control) or opened from a differently named checkout.
-	REGION_BEGIN_PROP = ['string', 'Packages/%s/icons/arrow_right.png' % base_name, \
+	# Built from package_name (the name Sublime addresses this package by, with
+	# any .sublime-package suffix removed) rather than a hardcoded name: the two
+	# arrow icons must resolve whether the package is installed as a zip by
+	# Package Control or opened from a differently named checkout. base_name
+	# would carry the .sublime-package suffix in the zip case and resolve to
+	# nothing.
+	REGION_BEGIN_PROP = ['string', 'Packages/%s/icons/arrow_right.png' % package_name, \
 				sublime.DRAW_NO_FILL | sublime.DRAW_STIPPLED_UNDERLINE | \
 					sublime.DRAW_NO_OUTLINE | sublime.DRAW_EMPTY_AS_OVERWRITE]
-	REGION_END_PROP = ['variable.c++', 'Packages/%s/icons/arrow_left.png' % base_name, sublime.HIDDEN]
+	REGION_END_PROP = ['variable.c++', 'Packages/%s/icons/arrow_left.png' % package_name, sublime.HIDDEN]
 
 	# Dispatched actions that index the test model. A failed compile leaves
 	# the -run panel open with tester = None, yet the bindings scoped to
@@ -3703,7 +3705,7 @@ class CphViewTesterCommand(sublime_plugin.TextCommand):
 		window.focus_view(v)
 		window.focus_view(dbg_view)
 
-		dbg_view.set_syntax_file('Packages/%s/TestSyntax.sublime-syntax' % base_name)
+		dbg_view.set_syntax_file('Packages/%s/TestSyntax.sublime-syntax' % package_name)
 		dbg_view.set_name(os.path.split(v.file_name())[-1] + ' -run')
 		dbg_view.run_command('set_setting', {'setting': 'fold_buttons', 'value': False})
 		dbg_view.run_command('cph_test_manager', {
@@ -3779,7 +3781,7 @@ class CphViewTesterCommand(sublime_plugin.TextCommand):
 		if action == 'insert':
 			v.insert(edit, v.sel()[0].begin(), text)
 		elif action == 'make_opd':
-			if v.settings().get('syntax') == 'Packages/%s/TestSyntax.sublime-syntax' % base_name:
+			if v.settings().get('syntax') == 'Packages/%s/TestSyntax.sublime-syntax' % package_name:
 				v.run_command('cph_test_manager', {
 					'action': 'make_opd',
 					'load_session': True,

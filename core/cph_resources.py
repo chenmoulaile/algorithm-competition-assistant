@@ -13,14 +13,24 @@ sublime.load_resource() 在 zip 内同样可用，所以所有资源读取都走
 import sublime
 from os import path
 
-from .cph_settings import base_name
+from .cph_settings import base_name, package_name_for
 
 
 _cache = {}
 
 
+def resource_dir():
+	"""This package's name as Sublime addresses it in a path.
+
+	Derived from `base_name` on every call rather than captured at import, so
+	the .sublime-package suffix is always removed from whatever the host
+	actually loaded us from.
+	"""
+	return package_name_for(base_name)
+
+
 def package_resource_path(rel_path):
-	return 'Packages/%s/%s' % (base_name, rel_path)
+	return 'Packages/%s/%s' % (resource_dir(), rel_path)
 
 
 def package_file_path(rel_path):
@@ -28,14 +38,13 @@ def package_file_path(rel_path):
 
 	`Packages/<pkg>/<file>` is a *resource* path: load_resource accepts it,
 	edit_settings does not - it hands the string to the OS and answers "The
-	settings file ... could not be opened". Sublime's own menus therefore
-	always pass an absolute path under the Packages directory, and that form
-	covers both layouts: installed as a loose folder it is a real file, and
-	inside a .sublime-package the resource layer resolves the same path to the
-	zip entry.
+	settings file ... could not be opened". Sublime's own packages therefore
+	pass an absolute path under the Packages directory, and that form resolves
+	for both layouts, provided the package name carries no .sublime-package
+	suffix (see package_name_for).
 	"""
 	try:
-		return path.join(sublime.packages_path(), base_name, rel_path)
+		return path.join(sublime.packages_path(), resource_dir(), rel_path)
 	except Exception:
 		return package_resource_path(rel_path)
 
