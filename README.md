@@ -234,8 +234,8 @@ opens the package keymap beside your own override, so you can copy the entry and
 3. 重启 Sublime Text
 
 放完就是全部——`Packages/Algorithm Competition Assistant` 这个文件夹**就是**插件本身。
-改一个 `.py` 保存，Sublime 会自己重新加载那个模块，不用重启；只有菜单、快捷键、设置这些 JSON
-要重启才生效。
+改了 `.py` 要重启 Sublime 才生效（菜单、快捷键、设置这些 JSON 更要重启），所以想要
+"改完立刻生效"的体验，就把这里当唯一的一份，别再让 Package Control 装第二份。
 
 **Package Control（已收录进官方市场）**
 
@@ -253,7 +253,7 @@ opens the package keymap beside your own override, so you can copy the entry and
 加载的是 `folder` 还是 `zip`、版本号是多少。
 
 想用 Package Control 的自动升级，就让它只有一份：把源码检出目录移出 `Packages/`（放别处当开发用即可）。
-自己维护一份、要改了立刻生效，就用文件夹安装，别装 Package Control 的那份。
+想自己改代码、改完重启就是你自己的版本，就用文件夹安装，别再装 Package Control 的那一份。
 
 ## 使用方法
 

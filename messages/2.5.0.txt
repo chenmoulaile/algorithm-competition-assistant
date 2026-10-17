@@ -51,8 +51,8 @@ one switch. Both are measured and fixed here.
   reinstalls the package as a zip. Nothing said so, and the only symptom was "I
   changed the code, restarted, nothing happened". Startup and the doctor now
   report which install is loaded - folder or zip, and which version. README says
-  plainly: folder install to edit and reload, Package Control to auto-upgrade,
-  never both.
+  plainly: folder install to edit it yourself (a restart picks your changes up),
+  Package Control to auto-upgrade, never both.
 
 * Stress setup, and a picker that is not blurry
 
