@@ -444,6 +444,19 @@ def check(label, condition, detail=''):
 
 
 def main():
+    # The suite prints plugin messages and problem titles in Chinese, and a
+    # Windows console is not UTF-8: the encoder raised UnicodeEncodeError and
+    # the run died printing nothing but "exit 1" - no FAIL line, so the CI
+    # annotations could not say what happened. The log is a pipe here, so make
+    # it UTF-8 and never fail on a character the host console cannot spell.
+    # (The doctor test already dodged this with redirect_stdout; a plugin that
+    # prints bilingually should not have to.)
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
+
     _install_fake_sublime()
     pkg = _load_package()
 
