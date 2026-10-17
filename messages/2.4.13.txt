@@ -1,0 +1,32 @@
+Algorithm Competition Assistant 2.4.13
+======================================
+
+One click on a contest page is not one problem.
+
+A real session showed it: an AtCoder task list sends every task with a single
+click - seven POSTs, measured - so three clicks meant twenty-one requests. With
+"fill the current file" armed, all seven problems' samples landed in the file
+that was open, which is what that mode means, but nothing on screen said so and
+no new file appeared, so it read as a failure.
+
+* Pressing the key now says what it will do
+
+  `Ctrl+Alt+F` names the file the samples are about to pile into and points at
+  `Ctrl+Alt+L` for a task list page. `Ctrl+Alt+L` states that it creates the
+  file, stores the samples and runs nothing. The mode was the only difference
+  between the two clicks, and it was invisible.
+
+  Rule of thumb: task list page -> `Ctrl+Alt+L` (one new file per problem);
+  single problem page -> either.
+
+* A burst no longer means seven builds
+
+  The auto-run of `fill the current file` is debounced per file for two
+  seconds. Every problem of the burst is still stored with its samples and
+  limits; only the repeated compiles and runs of the same file are folded away,
+  which is what made the panel churn and hold memory for nothing.
+
+Nothing else changed. Use 2.4.12's `companion_debug_log` if you want to see
+what each click decided: it writes the mode, the sample count, the limits and
+the file it chose - or the refusal that used to be silent - to
+`Data/Log/aca-companion.log`.
