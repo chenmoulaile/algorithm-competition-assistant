@@ -98,23 +98,120 @@ def try_load_settings():
 		sublime.status_message('Algorithm Competition Assistant: settings loaded')
 
 
-# Per-problem limits received from Competitive Companion, kept in memory
-# only. They used to be written into the user's settings file from a
-# background HTTP callback, which is not something a plugin should do.
+# Per-problem limits received from Competitive Companion.
+#
+# They used to be written into the user's settings file from a background
+# HTTP callback, which is not something a plugin should do. They are now
+# written next to that problem's own test data instead: the file belongs to
+# one source file, travels with its tests, and is the only place a restarted
+# Sublime can read the received limits back from (they used to live in
+# memory only, so the next manual Ctrl+Alt+B ran without them).
 _problem_limits = {}
 
 
+def primary_tests_path(file, create=False):
+	"""Where save_tests() puts this file's test data.
+
+	`create` only when the caller really writes there: load_all_tests() and
+	the limits reader must not leave an empty tests folder behind in every
+	directory the user ever runs a program in.
+	"""
+	if not file:
+		return None
+
+	dirname = os.path.dirname(file)
+	filename = os.path.basename(file)
+	suffix = get_tests_file_suffix()
+	relative_dir = get_tests_relative_dir()
+
+	if relative_dir:
+		target_dir = os.path.join(dirname, relative_dir)
+	elif os.path.exists(os.path.join(dirname, filename + suffix)):
+		target_dir = dirname
+	else:
+		target_dir = os.path.join(dirname, get_tests_folder_name())
+
+	if create and not os.path.exists(target_dir):
+		try:
+			os.makedirs(target_dir)
+		except Exception:
+			pass
+	return os.path.join(target_dir, filename + suffix)
+
+
+def get_limits_file_path(file):
+	"""The sidecar holding the limits received for this problem."""
+	primary = primary_tests_path(file, create=True)
+	if not primary:
+		return None
+	return primary + '.limits'
+
+
+def _limit_value(value):
+	try:
+		return int(value)
+	except (TypeError, ValueError):
+		return None
+
+
+def _read_limits_file(file_name):
+	path = primary_tests_path(file_name)
+	if not path:
+		return {}
+	try:
+		if not os.path.exists(path + '.limits'):
+			return {}
+		with open(path + '.limits', 'r', encoding='utf-8') as f:
+			data = sublime.decode_value(f.read().strip())
+	except Exception:
+		return {}
+	if not isinstance(data, dict):
+		return {}
+	return {'time_limit_ms': _limit_value(data.get('time_limit_ms')),
+			'memory_limit_mb': _limit_value(data.get('memory_limit_mb'))}
+
+
+def _write_limits_file(file_name, limits):
+	if limits.get('time_limit_ms') is None and limits.get('memory_limit_mb') is None:
+		return
+	path = get_limits_file_path(file_name)
+	if not path:
+		return
+	try:
+		with open(path, 'w', encoding='utf-8') as f:
+			f.write(sublime.encode_value(limits, True))
+	except Exception as e:
+		print('[Algorithm Competition Assistant] limits not saved: %s (%s)' % (path, e))
+
+
 def set_problem_limits(file_name, time_limit_ms, memory_limit_mb):
+	"""Remember this problem's limits, filling only what was actually sent.
+
+	A problem that arrives without a memory limit must not erase the one the
+	same file received a minute earlier.
+	"""
 	if not file_name:
 		return
-	_problem_limits[file_name] = {
-		'time_limit_ms': time_limit_ms,
-		'memory_limit_mb': memory_limit_mb,
+	old = _problem_limits.get(file_name) or _read_limits_file(file_name)
+	limits = {
+		'time_limit_ms': old.get('time_limit_ms'),
+		'memory_limit_mb': old.get('memory_limit_mb'),
 	}
+	if time_limit_ms is not None:
+		limits['time_limit_ms'] = time_limit_ms
+	if memory_limit_mb is not None:
+		limits['memory_limit_mb'] = memory_limit_mb
+	_problem_limits[file_name] = limits
+	_write_limits_file(file_name, limits)
 
 
 def get_problem_limits(file_name):
-	return _problem_limits.get(file_name) or {}
+	limits = _problem_limits.get(file_name)
+	if limits is None:
+		limits = _read_limits_file(file_name)
+		if limits:
+			_problem_limits[file_name] = limits
+	return limits or {}
 
 
 def get_tests_file_suffix():
@@ -233,31 +330,9 @@ def save_tests(file, tests):
 	# Never persist an empty placeholder (see is_meaningful_test).
 	tests = [t for t in (tests or []) if is_meaningful_test(t)]
 
-	dirname = os.path.dirname(file)
-	filename = os.path.basename(file)
-	suffix = get_tests_file_suffix()
-	folder_name = get_tests_folder_name()
-	relative_dir = get_tests_relative_dir()
-
-	target_path = None
-	if relative_dir:
-		target_dir = os.path.join(dirname, relative_dir)
-		if not os.path.exists(target_dir):
-			try:
-				os.makedirs(target_dir)
-			except Exception:
-				pass
-		target_path = os.path.join(target_dir, filename + suffix)
-	elif os.path.exists(os.path.join(dirname, filename + suffix)):
-		target_path = os.path.join(dirname, filename + suffix)
-	else:
-		target_dir = os.path.join(dirname, folder_name)
-		if not os.path.exists(target_dir):
-			try:
-				os.makedirs(target_dir)
-			except Exception:
-				pass
-		target_path = os.path.join(target_dir, filename + suffix)
+	# Same choice the limits sidecar is keyed off, so the two always travel
+	# together (see primary_tests_path()).
+	target_path = primary_tests_path(file, create=True)
 
 	if target_path is None:
 		return False

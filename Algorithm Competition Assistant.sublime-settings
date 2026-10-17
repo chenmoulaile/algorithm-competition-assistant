@@ -170,13 +170,15 @@
 	"auto_format_on_save": false,
 
 	// ================= Competitive Companion 自动建文件 =================
-	// 收到题目时如果当前视图还没有文件（新建未保存），自动建
+	// 收到题目时如果监听没有目标文件（没打开/没保存），自动建
 	// <auto_create_dir>/<题目标题>.<auto_create_extension> 并打开。
+	// 新建的文件顶部会写几行注释：题名、来源链接、时间/空间限制。
+	// 只写插件自己新建的文件；已经在写的源码一个字都不会动。
 	"auto_create_file": true,
 	// 留空 = 用窗口第一个文件夹；也可以是绝对路径或相对当前文件的路径
 	"auto_create_dir": "",
 	"auto_create_extension": "cpp",
-	// 新建文件时写入的内容（可放你的模板；留空则是空文件）
+	// 新建文件时写在注释头之后的内容（可放你的模板；留空则只有注释头）
 	"auto_create_template": "",
 
 	// ================= 练习统计 =================
@@ -320,6 +322,10 @@
 	// 启动一次后持续监听（浏览器扩展可反复点击发送）；再次执行该命令
 	// 只会切换目标文件；用 "Stop Competitive Companion listener" 停止。
 	"companion_port": 12345,
+	// 随 Sublime 启动自动开始监听（关掉它就得自己执行一次上面的命令）。
+	// 监听不需要先打开或保存某个文件：收到题目时没有目标文件就按下面的
+	// auto_create_* 新建一个。端口被别的程序占用时只在控制台提示一次。
+	"companion_auto_listen": true,
 
 	// ================= 测试数据存储 =================
 	// 传统模式: 测试数据存在 "foo.cpp__tests"（同目录）
@@ -327,5 +333,7 @@
 	// 相对源代码目录的子目录（留空 = 直接放同目录）
 	"tests_relative_dir": "",
 	// cph-ng 模式: 测试数据存放在 "tests/foo.cpp__tests"
+	// 从 Competitive Companion 收到的时间/空间限制存在测试数据旁边的
+	// "foo.cpp__tests.limits" 里，重启后 Ctrl+Alt+B 仍然用得到它们。
 	"tests_folder_name": "tests"
 }

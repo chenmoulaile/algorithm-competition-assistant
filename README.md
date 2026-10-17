@@ -64,7 +64,7 @@ copy-paste reference if you want to change one.
 | 环境自检 doctor | ❌ | ✅ 一条命令排查 + 可粘贴的 Markdown 报告 |
 | 纯键盘操作（选测试点→操作） | ❌ | ✅ `Ctrl+Alt+M` |
 | 对拍反例自动入库 | ❌ | ✅ |
-| Competitive Companion 持久监听 | ⚠️ 需 Hook | ✅ 内建、可反复点击 |
+| Competitive Companion 持久监听 | ⚠️ 需 Hook | ✅ 启动即监听、按题面自动建文件 |
 | 中英文双语界面 | ❌ | ✅ |
 | 测试面板自适应宽度 | ❌ | ✅ 卡片放不下时自动加宽 |
 
@@ -111,14 +111,29 @@ copy-paste reference if you want to change one.
 
 ### 4. 集成 Competitive Companion 浏览器插件
 
-1. 在 Sublime Text 中打开要做题的代码文件
-2. 右键选择 `Algorithm Competition Assistant: Listen to Competitive Companion`
-3. 浏览器打开题目页，点 Competitive Companion 扩展的绿色 `+`
-4. 样例与时间/内存限制自动发送到 Sublime Text、存进测试文件并自动运行
+**装好就能用**：Sublime 一启动就自动在 `12345` 端口监听（设置项 `companion_auto_listen`，
+默认开），不用先打开或保存任何文件。
 
-监听器是**持久**的（cph-ng 风格）：启动一次后可**反复点击**发送不同题目，不会端口冲突或报 "Can't restore session"；在另一个文件上再次执行该命令 = 切换监听目标；`Stop Competitive Companion listener` 随时停止。
+1. 浏览器打开题目页，点 Competitive Companion 扩展的绿色 `+`
+2. 当前聚焦的是一个源码文件 → 样例就并进这个文件；没有可用目标（新建未保存、或焦点在
+   `-run` / `-stress` 这类面板页上）→ 按题面新建 `<题目名>.cpp` 并打开，顶部写几行注释：
+   题名、来源链接、时间限制、空间限制，你的 `auto_create_template` 跟在后面
+3. 之后照常自动运行一次，收到的时间/内存限制同时生效（`Ctrl+Alt+B` 也用得到）
 
-**注意**：需要在 Competitive Companion 扩展的端口列表里加入 `12345`（可用设置项 `companion_port` 修改）。
+插件**只会往自己新建的文件里写注释头**，你正在写的源码一个字都不会被动。题面重名时
+直接打开已有文件，不覆盖。新建文件放在哪：`auto_create_dir`，留空则是窗口第一个文件夹；
+两种都没有时状态栏会直说"先打开题目所在的文件夹"，不会静默丢掉样例。
+
+样例的落盘位置与去重规则和「导入」完全一致：按输入去重、答案只补不覆盖，重复点击
+不会顶掉你手工标记的答案。收到的时间/空间限制写在测试数据旁边的 `<文件名>__tests.limits`
+里，重启 Sublime 也不会丢。
+
+想固定监听某个文件，在里面执行一次 `Algorithm Competition Assistant: Listen to Competitive Companion`
+（幂等，不会重复起服务器或撞端口）；`Stop Competitive Companion listener` 随时停止，
+停止后要重新监听需再执行一次命令或重启 Sublime。
+
+**注意**： Competitive Companion 扩展的端口列表里要加入 `12345`（可用设置项 `companion_port`
+修改）——这一步在浏览器里，插件代劳不了。
 
 ### 5. 国际化 (i18n)
 
@@ -325,6 +340,11 @@ int main() {
 目录里有多个候选时会列出来让你选一个；一个都找不到时才会请你挑文件 —— Windows 上直接弹
 系统「打开文件」对话框，**起始目录就是当前源文件所在目录**，其它平台用命令面板浏览
 （`stress_file_picker` 可改成 `native` / `panel`）。
+
+**要问的时候会写清楚问的是哪一个**：正解和生成器分两次选，标题（以及 Sublime 列表的第一行、
+状态栏、控制台）都是 `【第 1/2 步 · 选正解 std】慢但一定对的那个（暴力/bf/sol）`、
+`【第 2/2 步 · 选生成器 gen】随机造数据的那个（gen/data/rand）`。
+两次选到同一个文件会被拒绝 —— 拿程序跟自己比，每一轮都"一致"，那场对拍发现不了任何东西。
 
 想每次都自己指定，用命令面板里的 `Algorithm Competition Assistant: Stress test with options (pick files, rounds)`，
 它会依次问 std、生成器、每轮时限和最大轮数。

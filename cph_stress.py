@@ -171,6 +171,21 @@ def _remembered_file(settings, key):
     return []
 
 
+def _same_program(first, second):
+    """True when both paths are the one and the same file.
+
+    Windows answers the same file under a different drive letter case or
+    spelling, so both sides go through normcase + abspath before comparing.
+    """
+    if not first or not second:
+        return False
+    try:
+        return (os.path.normcase(os.path.abspath(first))
+                == os.path.normcase(os.path.abspath(second)))
+    except Exception:
+        return False
+
+
 _PS_OPEN_FILE = """
 $ErrorActionPreference = 'SilentlyContinue'
 Add-Type -AssemblyName System.Windows.Forms
@@ -241,6 +256,27 @@ def _native_pick(window, start_dir, title, on_done, on_fallback):
     return True
 
 
+def _titled_panel(window, title, items, on_select):
+    """A quick panel that states which file it is asking for.
+
+    Sublime gives a quick panel no header, and the stress flow opens two of
+    them in a row (std, then the generator), so the list of file names looked
+    identical either way. The question is put in as the first row: choosing it
+    re-opens the same panel instead of picking anything.
+    """
+    rows = [title] + list(items)
+
+    def select(index):
+        if index < 0:
+            return
+        if index == 0:
+            _titled_panel(window, title, items, on_select)
+            return
+        on_select(index - 1)
+
+    window.show_quick_panel(rows, select)
+
+
 def _browse_panel(window, directory, title, on_done):
     """Walk the file system with a quick panel, starting at `directory`."""
     exts = _source_extensions()
@@ -262,12 +298,11 @@ def _browse_panel(window, directory, title, on_done):
         items = [t('stress_browse_up')]
         items += [os.path.basename(d) + '/' for d in dirs]
         items += [os.path.basename(f) for f in files]
-        mapping = [None] + entries
 
         def on_select(index):
-            if index < 0 or index >= len(mapping):
+            if index < 0 or index >= len(items):
                 return
-            target = mapping[index]
+            target = None if index == 0 else entries[index - 1]
             if target is None:
                 parent = os.path.dirname(path.rstrip(os.sep))
                 show(parent or path)
@@ -276,7 +311,7 @@ def _browse_panel(window, directory, title, on_done):
             else:
                 on_done(target)
 
-        window.show_quick_panel(items, on_select)
+        _titled_panel(window, title, items, on_select)
 
     show(directory)
 
@@ -341,7 +376,7 @@ def _typed_or_browse(window, start_dir, title, on_done):
         elif index == 1:
             _browse_panel(window, start_dir, title, on_done)
 
-    window.show_quick_panel(items, on_select)
+    _titled_panel(window, title, items, on_select)
 
 
 def _open_file_dialog(window, start_dir, title, on_done):
@@ -351,6 +386,12 @@ def _open_file_dialog(window, start_dir, title, on_done):
     directory; "panel" skips the system dialog and starts there right away.
     """
     mode = str(get_settings().get('stress_file_picker', 'auto') or 'auto').lower()
+
+    # A modal system dialog covers the Sublime window, so the status bar and
+    # the console repeat what the caption asks. Two dialogs in a row used to
+    # be indistinguishable from behind them.
+    sublime.status_message('Algorithm Competition Assistant: ' + title)
+    print('[Algorithm Competition Assistant] %s' % title)
 
     def fallback():
         _typed_or_browse(window, start_dir, title, on_done)
@@ -379,7 +420,7 @@ def _pick_file(window, start_dir, title, candidates, on_done, ask=False):
         items.append(t('stress_browse_more'))
 
         def on_select(index):
-            if index < 0:
+            if index < 0 or index >= len(items):
                 return
             if index < len(candidates):
                 on_done(candidates[index])
@@ -387,7 +428,7 @@ def _pick_file(window, start_dir, title, candidates, on_done, ask=False):
                 _path_panel(window, start_dir, title, on_done)
             else:
                 _open_file_dialog(window, start_dir, title, on_done)
-        window.show_quick_panel(items, on_select)
+        _titled_panel(window, title, items, on_select)
         return
     _open_file_dialog(window, start_dir, title, on_done)
 
@@ -504,6 +545,13 @@ def _start_flow(view, choose=False):
             return
         if not gen_file or not os.path.exists(gen_file):
             sublime.error_message(t('file_not_found') + ': ' + str(gen_file))
+            return
+        if _same_program(std_file, gen_file):
+            # Comparing a program with itself passes every round, which reads
+            # like a clean result and means nothing.
+            sublime.error_message(t('stress_same_file',
+                                    file=os.path.basename(std_file)))
+            _start_flow(view, True)
             return
         settings.set('stress_std_file', std_file)
         settings.set('stress_generator_file', gen_file)

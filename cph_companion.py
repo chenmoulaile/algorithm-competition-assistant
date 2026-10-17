@@ -6,10 +6,13 @@ Algorithm Competition Assistant - Competitive Companion 持久监听器
 
 与旧版 (FastOlympicCodingHook 一次性会话) 的区别:
 - 一次启动后持续监听 (cph-ng 风格), 浏览器扩展可反复点击发送样例
+- 默认随 Sublime 启动自动监听 (companion_auto_listen), 不需要先打开某个文件
 - 再次执行本命令只会切换目标文件, 不会重复起服务器/产生端口冲突
-- 收到样例后通过 cph_view_tester 正常走 Run 流程, 不会向源代码文件插入任何文字
+- 没有目标文件时按题面新建 <题目名>.cpp, 头部写入题名/来源/TL/ML 注释,
+  你的 auto_create_template 跟在后面; 已有源码仍然一个字都不插
+- 收到样例后通过 cph_view_tester 正常走 Run 流程
 - 收到的样例与已有样例 **合并去重**（与导入流程语义一致），不再整体覆盖
-- 收到的 TL/ML 按源文件持久化，之后手动 Ctrl+Alt+B 也不会丢
+- 收到的 TL/ML 按源文件持久化在测试数据旁边，重启后手动 Ctrl+Alt+B 也不丢
 """
 
 import sublime
@@ -20,8 +23,8 @@ import re
 import threading
 
 from .core.cph_i18n import t
-from .core.cph_settings import (get_settings, load_all_tests, save_tests,
-								set_problem_limits, settings_file)
+from .core.cph_settings import (get_settings, is_run_supported_ext, load_all_tests,
+								save_tests, set_problem_limits, settings_file)
 from .core.cph_tests_merge import merge_tests as merge_stored_with
 from .core.cph_state import set_listener
 
@@ -217,17 +220,13 @@ def build_handler():
                         'correct_answers': [output] if output else [],
                     })
 
-                view = _find_view(_listener.get('view_id'))
-                if view is not None and not view.file_name():
-                    # Auto-create: an untitled view is the normal state when a
-                    # problem arrives before any file was opened, and asking
-                    # the user to save first defeats the point of the listener.
-                    view = _auto_create_file(view, problem_name) or view
-                if view is None or not view.file_name():
+                target = resolve_target(problem_name, data.get('url') or '',
+                                        time_limit_ms, memory_limit_mb)
+                if target is None or not target.file_name():
                     sublime.status_message(t('listener_no_target'))
                     return
 
-                file_name = view.file_name()
+                file_name = target.file_name()
                 merged = merge_tests(file_name, incoming)
                 if not save_tests(file_name, merged):
                     sublime.status_message(t('import_save_failed'))
@@ -239,7 +238,10 @@ def build_handler():
                 tl = time_limit_ms if time_limit_ms is not None else '-'
                 ml = memory_limit_mb if memory_limit_mb is not None else '-'
 
-                view.run_command('cph_view_tester', {
+                # The panel belongs to the file that was resolved above: the
+                # view the request arrived on may have been closed by
+                # auto-create, and running a command on a closed view raised.
+                target.run_command('cph_view_tester', {
                     'action': 'make_opd',
                     'time_limit_ms': time_limit_ms,
                     'memory_limit_mb': memory_limit_mb,
@@ -261,12 +263,46 @@ def _sanitize_name(name):
     return cleaned[:80].rstrip('. ')
 
 
-def _auto_create_file(view, problem_name):
+#: Extensions whose comments start with '#'. The created file is opened
+#: straight into an editor, so a marker the language does not know would be a
+#: syntax error on the first line.
+_HASH_COMMENTS = ('py', 'rb', 'sh', 'pl', 'r', 'jl')
+
+
+def _statement_header(problem_name, url, time_limit_ms, memory_limit_mb, ext):
+    """The comment block written on top of a freshly created problem file.
+
+    Only ever used for a file this listener creates itself; an existing source
+    file is opened as it is.
+    """
+    mark = '#' if ext in _HASH_COMMENTS else '//'
+
+    def flat(value):
+        return re.sub(r'\s+', ' ', str(value if value is not None else '')).strip()
+
+    lines = []
+    if flat(problem_name):
+        lines.append('%s %s' % (mark, t('header_problem', value=flat(problem_name))))
+    if flat(url):
+        lines.append('%s %s' % (mark, t('header_source', value=flat(url))))
+    if time_limit_ms is not None:
+        lines.append('%s %s' % (mark, t('header_time_limit', value=time_limit_ms)))
+    if memory_limit_mb is not None:
+        lines.append('%s %s' % (mark, t('header_memory_limit', value=memory_limit_mb)))
+    return '\n'.join(lines)
+
+
+def _auto_create_file(view, problem_name, url='', time_limit_ms=None,
+                      memory_limit_mb=None):
     """Create '<dir>/<problem name>.<ext>' for an incoming problem.
 
     Returns the view for the new file, or None when auto-create is off or no
     usable directory could be found (in which case the caller reports the
     usual 'no target' message).
+
+    `view` may be None: the listener no longer needs a saved file to start,
+    and answering a browser click when nothing was opened first is the whole
+    point of that.
 
     A directory that exists but cannot be written to is a different story:
     the caller cannot tell that apart from "no target", so the failure is
@@ -280,16 +316,21 @@ def _auto_create_file(view, problem_name):
         return None
     ext = (settings.get('auto_create_extension') or 'cpp').lstrip('.')
 
+    window = (view.window() if view is not None else None) or sublime.active_window()
+    base = ''
+    if view is not None and view.file_name():
+        base = os.path.dirname(view.file_name())
+
     directory = (settings.get('auto_create_dir') or '').strip()
     if directory and not os.path.isabs(directory):
-        base = os.path.dirname(view.file_name() or '') or ''
         directory = os.path.join(base, directory) if base else directory
     if not directory:
-        window = view.window() or sublime.active_window()
         folders = window.folders() if window is not None else []
-        if folders:
-            directory = folders[0]
+        directory = folders[0] if folders else base
     if not directory:
+        # Reported here for the same reason a write failure is: the caller
+        # only sees "no target" and cannot tell that no folder was open.
+        sublime.status_message(t('listener_no_directory'))
         return None
     try:
         if not os.path.isdir(directory):
@@ -301,25 +342,25 @@ def _auto_create_file(view, problem_name):
     path = os.path.join(directory, '%s.%s' % (name, ext))
     if os.path.exists(path):
         # Already there: just open it instead of overwriting anything.
-        window = view.window() or sublime.active_window()
         return window.open_file(path) if window is not None else None
 
-    skeleton = settings.get('auto_create_template') or ''
+    header = _statement_header(problem_name, url, time_limit_ms, memory_limit_mb, ext)
+    skeleton = (settings.get('auto_create_template') or '').lstrip('\n')
+    body = (header + '\n' if header else '') + skeleton
     try:
         with open(path, 'w', encoding='utf-8', newline='\n') as handle:
-            handle.write(skeleton)
+            handle.write(body)
     except Exception as e:
         sublime.status_message(t('auto_create_failed', path=path, error=str(e)))
         return None
 
-    window = view.window() or sublime.active_window()
     if window is None:
         return None
     new_view = window.open_file(path)
     # Close the empty scratch view the problem arrived in, but only when it
     # really is untouched: it may be the user's actual work in progress.
     try:
-        if not view.is_dirty() and view.size() == 0:
+        if view is not None and not view.is_dirty() and view.size() == 0:
             view.close()
     except Exception:
         pass
@@ -327,16 +368,73 @@ def _auto_create_file(view, problem_name):
     return new_view
 
 
-def _start_listener(view):
+def _focused_source_view():
+    """The file under focus, when it can hold a problem.
+
+    In a contest one click per problem means "this one, into the file I am
+    working on", so a listener that was started by itself must not answer
+    every click with a brand new file. The run / stress / answer panels are
+    scratch views without a file name, and a file the plugin cannot run is
+    not a problem file either, so both fall through.
+    """
+    window = sublime.active_window()
+    if window is None:
+        return None
+    view = window.active_view()
+    if view is None:
+        return None
     file_name = view.file_name()
     if not file_name:
-        sublime.status_message(t('listener_need_save'))
-        return
+        return None
+    ext = os.path.splitext(file_name)[1].lower().lstrip('.')
+    if not is_run_supported_ext(ext):
+        return None
+    return view
+
+
+def resolve_target(problem_name, url='', time_limit_ms=None, memory_limit_mb=None):
+    """The view an incoming problem belongs to, creating one when needed.
+
+    Kept apart from the POST callback so the choice is testable on its own:
+    it used to be written the other way round, requiring the listener to
+    start on a saved file while the auto-create branch only ran for a target
+    with no file name. Those two exclude each other, so a browser click could
+    never create anything.
+    """
+    focused = _focused_source_view()
+    if focused is not None:
+        return focused
+    view = _find_view(_listener.get('view_id'))
+    if view is not None and view.file_name():
+        return view
+    return _auto_create_file(view, problem_name, url, time_limit_ms, memory_limit_mb)
+
+
+def _start_listener(view=None, quiet=False):
+    """Start the listener, or retarget the one that is already running.
+
+    A saved file is no longer a precondition. It used to be, and that is what
+    made "click the browser, get a new problem file" unreachable: the only
+    target the listener could remember then always had a file name, so the
+    auto-create branch could never run.
+
+    `quiet` is the startup path - a port somebody else already holds must not
+    put a complaint in the status bar of every Sublime session.
+    """
+    file_name = view.file_name() if view is not None else None
+    view_id = view.id() if view is not None else None
+    target = file_name or t('listener_auto_target')
+
+    def report(message):
+        if quiet:
+            print('[Algorithm Competition Assistant] %s' % message)
+        else:
+            sublime.status_message(message)
 
     with _listener['lock']:
-        _listener['view_id'] = view.id()
+        _listener['view_id'] = view_id
         if _listener['server'] is not None:
-            sublime.status_message(t('listener_retarget', file=file_name))
+            report(t('listener_retarget', file=target))
             return
         port = 12345
         try:
@@ -345,18 +443,19 @@ def _start_listener(view):
             from http.server import HTTPServer
             server = HTTPServer(('localhost', port), build_handler())
         except Exception as e:
-            sublime.status_message(t('listener_port_error', port=port, error=str(e)))
+            report(t('listener_port_error', port=port, error=str(e)))
             return
         _listener['server'] = server
         _listener['port'] = port
-        set_listener(server, port, view.id())
+        set_listener(server, port, view_id)
         thread = threading.Thread(target=server.serve_forever)
         thread.daemon = True
         _listener['thread'] = thread
         thread.start()
 
-    sublime.status_message(t('listener_started', file=file_name, port=port))
-    print('[Algorithm Competition Assistant] ' + t('listener_started', file=file_name, port=port))
+    report(t('listener_started', file=target, port=port))
+    if not quiet:
+        print('[Algorithm Competition Assistant] ' + t('listener_started', file=target, port=port))
 
 
 def _stop_listener():
@@ -382,7 +481,11 @@ from .core.cph_target import visible as context_menu_visible
 
 
 class CphCompanionListenerCommand(sublime_plugin.TextCommand):
-    """Listen to Competitive Companion: 启动/切换目标文件 (幂等, 可反复点击)."""
+    """Listen to Competitive Companion: 启动/切换目标文件 (幂等, 可反复点击).
+
+    Without a saved file this starts the listener with no target, and every
+    incoming problem then creates its own file.
+    """
 
     def is_visible(self, event=None, **kwargs):
         """Context menu: only offered where this package applies.
@@ -401,6 +504,27 @@ class CphCompanionStopListenerCommand(sublime_plugin.TextCommand):
 
     def run(self, edit):
         _stop_listener()
+
+
+def plugin_loaded():
+    """随 Sublime 启动自动监听: 装好就能点, 不需要先开文件.
+
+    Sublime calls plugin_loaded() in every top-level module of a package, so
+    the auto-start lives here instead of reaching this module from
+    plugin_init.py - root-level modules are not allowed to import each other
+    (see core/cph_state.py for why).
+
+    Deferred, because binding the port pulls in http.server (socket,
+    http.client, email.parser), which build_handler() deliberately keeps out
+    of the package's cold import. Starting it after the window is up keeps
+    that cost off the startup the user waits for.
+    """
+    try:
+        if not sublime.load_settings(settings_file).get('companion_auto_listen', True):
+            return
+        sublime.set_timeout(lambda: _start_listener(None, quiet=True), 1200)
+    except Exception as e:
+        print('[Algorithm Competition Assistant] companion auto-listen failed: %s' % e)
 
 
 def plugin_unloaded():

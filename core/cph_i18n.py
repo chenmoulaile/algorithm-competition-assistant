@@ -585,12 +585,21 @@ STRINGS = {
               ' unbuffered) and times out locally; remove it or drop -DLOCAL',
     },
     'choose_std_file': {
-        'zh': '选择 std (标准) 文件',
-        'en': 'Choose std (standard) file',
+        'zh': '【第 1/2 步 · 选正解 std】慢但一定对的那个（暴力/bf/sol）',
+        'en': '[Step 1/2 - the correct solution] the slow but always-right '
+              'program (brute / bf / sol)',
     },
     'choose_generator_file': {
-        'zh': '选择数据生成器文件',
-        'en': 'Choose data generator file',
+        'zh': '【第 2/2 步 · 选生成器 gen】随机造数据的那个（gen/data/rand）',
+        'en': '[Step 2/2 - the generator] the program that prints random test '
+              'data (gen / data / rand)',
+    },
+    'stress_same_file': {
+        'zh': '正解和数据生成器选到了同一个文件（{file}）：拿程序和自己比，'
+              '每一轮必然一致，这场对拍不会发现任何东西。请重新选。',
+        'en': 'std and the generator are the same file ({file}): a program '
+              'compared with itself agrees every round, so this stress test '
+              'can never find anything. Pick again.',
     },
     'stress_time_limit': {
         'zh': '对拍时间限制(秒)',
@@ -643,13 +652,35 @@ STRINGS = {
         'zh': '监听未在运行',
         'en': 'Listener is not running',
     },
-    'listener_need_save': {
-        'zh': '请先保存当前文件再开启监听',
-        'en': 'Save the current file before listening',
-    },
     'listener_no_target': {
         'zh': '监听目标文件不存在或未保存',
         'en': 'Listener target missing or unsaved',
+    },
+    'listener_auto_target': {
+        'zh': '按题面自动新建文件',
+        'en': 'auto-created from the problem name',
+    },
+    'listener_no_directory': {
+        'zh': '没有地方可以新建题目文件：先打开这场题目所在的文件夹，'
+              '或在设置里指定 auto_create_dir',
+        'en': 'Nowhere to create the problem file: open the folder holding '
+              'this contest, or set auto_create_dir',
+    },
+    'header_problem': {
+        'zh': '题目：{value}',
+        'en': 'Problem: {value}',
+    },
+    'header_source': {
+        'zh': '来源：{value}',
+        'en': 'Source: {value}',
+    },
+    'header_time_limit': {
+        'zh': '时间限制：{value} ms',
+        'en': 'Time limit: {value} ms',
+    },
+    'header_memory_limit': {
+        'zh': '空间限制：{value} MB',
+        'en': 'Memory limit: {value} MB',
     },
     'auto_create_failed': {
         'zh': '自动建文件失败: {path} ({error})',

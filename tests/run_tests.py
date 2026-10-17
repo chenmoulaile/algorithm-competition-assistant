@@ -16,6 +16,7 @@ import ast
 import contextlib
 import importlib
 import importlib.util
+import inspect
 import io
 import json
 import locale
@@ -97,6 +98,15 @@ def _install_fake_sublime():
 
         def size(self):
             return self._size
+
+        def is_valid(self):
+            return True
+
+        def is_dirty(self):
+            return False
+
+        def close(self):
+            pass
 
         def get_status(self, key):
             return self._status.get(key)
@@ -896,6 +906,317 @@ def main():
     merged2 = comp.merge_tests('x.cpp', [{'test': '9\n', 'correct_answers': []}])
     check('a genuinely new input is appended', len(merged2) == 2, repr(merged2))
 
+    print('== companion: click the browser, get a problem file ==')
+    # Starting the listener used to demand a saved file, while the auto-create
+    # branch only ran when the remembered target had NO file name. The two
+    # conditions exclude each other, so "send a problem and let the plugin
+    # create the .cpp" was unreachable code.
+    import socket
+    import tempfile as _tf
+
+    settings_mod = importlib.import_module(pkg + '.core.cph_settings')
+    fake_sublime = sys.modules['sublime']
+    saved_settings = settings_mod.settings
+    saved_load_settings = fake_sublime.load_settings
+    saved_active_window = fake_sublime.active_window
+    saved_windows = fake_sublime.windows
+    saved_set_timeout = fake_sublime.set_timeout
+    saved_error_message = fake_sublime.error_message
+
+    class _AutoWindow(object):
+        def __init__(self, folder):
+            self._folder = folder
+            self.opened = []
+
+        def folders(self):
+            return [self._folder]
+
+        def active_view(self):
+            # A real window always answers this; nothing is focused on a file
+            # here, so the problem has to fall through to auto-create.
+            return None
+
+        def open_file(self, path):
+            self.opened.append(path)
+            return fake_sublime.View(file_name=path)
+
+    def _free_port():
+        probe = socket.socket()
+        probe.bind(('127.0.0.1', 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        return port
+
+    def _use_settings(data):
+        fake_sublime.load_settings = lambda name: fake_sublime.Settings(data)
+
+    def _stop_and_reset():
+        comp._stop_listener()
+        with comp._listener['lock']:
+            comp._listener['server'] = None
+            comp._listener['thread'] = None
+            comp._listener['view_id'] = None
+
+    work_dir = _tf.mkdtemp()
+    try:
+        port = _free_port()
+        _use_settings({'companion_port': port, 'companion_auto_listen': True})
+        settings_mod.init_settings({'auto_create_file': True,
+                                    'auto_create_dir': '',
+                                    'auto_create_extension': 'cpp',
+                                    'auto_create_template': '#include <bits/stdc++.h>\n'})
+        fake_sublime.windows = lambda: []
+        fake_sublime.set_timeout = lambda fn, delay=0: fn()
+
+        # 1. the listener no longer needs a saved file to start
+        _stop_and_reset()
+        errors = []
+        fake_sublime.error_message = lambda text=None, *a, **k: errors.append(text)
+        comp._start_listener(None)
+        check('the listener starts with no target file at all',
+              comp._listener['server'] is not None
+              and comp._listener['port'] == port,
+              repr(comp._listener['port']))
+        check('starting without a target does not complain about saving',
+              not errors, repr(errors))
+        again = comp._listener['server']
+        comp._start_listener(None)
+        check('a second start reuses the running server (no port clash)',
+              comp._listener['server'] is again)
+        _stop_and_reset()
+
+        # 2. plugin_loaded() brings it back up on its own
+        _use_settings({'companion_port': port, 'companion_auto_listen': True})
+        comp.plugin_loaded()
+        check('the listener comes up by itself when Sublime starts',
+              comp._listener['server'] is not None)
+        _stop_and_reset()
+
+        # ...just not during the startup the user waits for: binding the port
+        # imports http.server, which build_handler() keeps out of the cold
+        # import for exactly that reason.
+        deferred = []
+        fake_sublime.set_timeout = lambda fn, delay=0: deferred.append(fn)
+        comp.plugin_loaded()
+        check('the auto-start is deferred instead of blocking plugin_loaded',
+              comp._listener['server'] is None and len(deferred) == 1,
+              repr((comp._listener['server'], len(deferred))))
+        for start in deferred:
+            start()
+        check('the deferred start really brings the listener up',
+              comp._listener['server'] is not None)
+        fake_sublime.set_timeout = lambda fn, delay=0: fn()
+        _stop_and_reset()
+
+        _use_settings({'companion_port': port, 'companion_auto_listen': False})
+        comp.plugin_loaded()
+        check('companion_auto_listen=false keeps the port free',
+              comp._listener['server'] is None, repr(comp._listener['port']))
+        _stop_and_reset()
+
+        # 3. an incoming problem with no target creates the file
+        _use_settings({'companion_port': port})
+        window = _AutoWindow(work_dir)
+        fake_sublime.active_window = lambda: window
+        created = comp.resolve_target(u'A/B: 简单题 #1', 'https://oj.example/p/1',
+                                      1000, 256)
+        wanted = os.path.join(work_dir, u'A B 简单题 #1.cpp')
+        check('the problem name becomes the file name',
+              created is not None and created.file_name() == wanted,
+              repr(created.file_name() if created else None))
+        check('the new file is opened in the window',
+              window.opened == [wanted], repr(window.opened))
+        with open(wanted, encoding='utf-8') as f:
+            body = f.read()
+        check('the statement header names the problem and its source',
+              u'A/B: 简单题 #1' in body and 'oj.example/p/1' in body,
+              body.replace('\n', ' | ')[:160])
+        check('the header carries the received limits',
+              '1000' in body and '256' in body, body.replace('\n', ' | ')[:160])
+        check('the template still follows the header',
+              body.rstrip().endswith('#include <bits/stdc++.h>'),
+              body.replace('\n', ' | ')[:160])
+
+        # 4. an existing problem file is opened, never rewritten
+        with open(wanted, 'w', encoding='utf-8') as f:
+            f.write(u'// mine\nint main(){}\n')
+        again = comp.resolve_target(u'A/B: 简单题 #1', 'https://oj.example/p/1',
+                                    1000, 256)
+        with open(wanted, encoding='utf-8') as f:
+            kept = f.read()
+        check('a name collision opens the file instead of overwriting it',
+              kept == u'// mine\nint main(){}\n'
+              and again is not None and again.file_name() == wanted,
+              kept.replace('\n', ' | ')[:120])
+
+        # 4b. in a contest the click means "this problem, into the file I am
+        #     working on" - creating a second file per click would be wrong.
+        class _FocusedWindow(_AutoWindow):
+            def __init__(self, folder, view):
+                _AutoWindow.__init__(self, folder)
+                self._view = view
+
+            def active_view(self):
+                return self._view
+
+        settings_mod.init_settings({'auto_create_file': True,
+                                    'auto_create_extension': 'cpp',
+                                    'run_settings': [{'name': 'C++',
+                                                       'extensions': ['cpp']}],
+                                    'auto_create_template': ''})
+        focused_file = os.path.join(work_dir, 'on_focus.cpp')
+        with open(focused_file, 'w', encoding='utf-8') as f:
+            f.write(u'// hand written\n')
+        fake_sublime.active_window = lambda: _FocusedWindow(
+            work_dir, fake_sublime.View(file_name=focused_file))
+        hit = comp.resolve_target(u'yet another', '', 1, 1)
+        check('the focused source file receives the problem',
+              hit is not None and hit.file_name() == focused_file,
+              repr(hit.file_name() if hit else None))
+        check('and no extra file is created for it',
+              window.opened == [wanted, wanted], repr(window.opened))
+
+        fake_sublime.active_window = lambda: _FocusedWindow(
+            work_dir, fake_sublime.View())
+        untitled = comp.resolve_target(u'untitled focus', '', 1, 1)
+        check('an untitled view falls through to auto-create',
+              untitled is not None
+              and untitled.file_name().endswith(u'untitled focus.cpp'),
+              repr(untitled.file_name() if untitled else None))
+
+        fake_sublime.active_window = lambda: _FocusedWindow(
+            work_dir, fake_sublime.View(file_name=os.path.join(work_dir, 'notes.md')))
+        notes = comp.resolve_target(u'not a source file', '', 1, 1)
+        check('a file the plugin cannot run is not a target',
+              notes is not None
+              and notes.file_name().endswith(u'not a source file.cpp'),
+              repr(notes.file_name() if notes else None))
+
+        # 5. the setting can turn auto-create off
+        settings_mod.init_settings({'auto_create_file': False,
+                                    'auto_create_extension': 'cpp'})
+        check('auto_create_file=false falls back to "no target"',
+              comp.resolve_target(u'another problem', '', 1, 1) is None)
+        settings_mod.init_settings({'auto_create_file': True,
+                                    'auto_create_extension': 'cpp',
+                                    'auto_create_template': ''})
+        sub_dir = comp.resolve_target(u'sub', '', None, None)
+        check('auto_create_dir stays optional (window folder is enough)',
+              sub_dir is not None, repr(sub_dir))
+
+        # ...but with no folder open at all there is nowhere to put the file,
+        # and "监听目标文件不存在" alone would not say what to do about it.
+        class _NoFolderWindow(_AutoWindow):
+            def folders(self):
+                return []
+
+        nowhere = []
+        saved_status_message = fake_sublime.status_message
+        try:
+            fake_sublime.status_message = lambda text=None, *a, **k: nowhere.append(text)
+            fake_sublime.active_window = lambda: _NoFolderWindow(work_dir)
+            missing = comp.resolve_target(u'orphan problem', '', 1, 1)
+        finally:
+            fake_sublime.status_message = saved_status_message
+        check('no folder open creates nothing and names the setting to fix',
+              missing is None and any('auto_create_dir' in m for m in nowhere),
+              repr(nowhere))
+
+        # 6. the limits survive a restart instead of living only in memory
+        limits_file = os.path.join(work_dir, 'lim.cpp')
+        settings_mod.set_problem_limits(limits_file, 1500, 512)
+        # Default storage layout is tests/<name>__tests, so the sidecar has to
+        # land beside it, not loose in the problem's own folder.
+        limits_path = os.path.join(work_dir, 'tests', 'lim.cpp__tests.limits')
+        check('the received limits are written next to the tests file',
+              os.path.exists(limits_path), limits_path)
+        if os.path.exists(limits_path):
+            with open(limits_path, encoding='utf-8') as f:
+                stored = json.loads(f.read())
+            check('the sidecar holds the two numbers it was given',
+                  stored.get('time_limit_ms') == 1500
+                  and stored.get('memory_limit_mb') == 512, repr(stored))
+        settings_mod._problem_limits.clear()
+        back = settings_mod.get_problem_limits(limits_file)
+        check('a restart reads them back from disk',
+              back.get('time_limit_ms') == 1500
+              and back.get('memory_limit_mb') == 512, repr(back))
+        settings_mod._problem_limits.clear()
+        settings_mod.set_problem_limits(limits_file, None, 128)
+        back = settings_mod.get_problem_limits(limits_file)
+        check('a half-empty update keeps the limit it did not receive',
+              back.get('time_limit_ms') == 1500, repr(back))
+        settings_mod._problem_limits.clear()
+        check('a file that never received limits still reports none',
+              settings_mod.get_problem_limits(os.path.join(work_dir, 'none.cpp')) == {})
+
+        comp_src = open(os.path.join(ROOT, 'cph_companion.py'), encoding='utf-8').read()
+        check('the run panel is driven by the resolved target, not the old view',
+              'target.run_command' in comp_src
+              and "view.run_command('cph_view_tester'" not in comp_src)
+
+        # 7. a real POST through the socket goes all the way: parse -> create
+        #    the problem file -> write its samples -> remember its limits.
+        #    This is the one claim that unit calls cannot substitute for.
+        comp.load_all_tests = settings_mod.load_all_tests
+        settings_mod.init_settings({'auto_create_file': True,
+                                    'auto_create_extension': 'cpp',
+                                    'auto_create_template': '#include <bits/stdc++.h>\n'})
+        _use_settings({'companion_port': port})
+        fake_sublime.active_window = lambda: window
+        payload = json.dumps({
+            'name': u'A. 两数之和', 'group': u'模拟赛',
+            'url': 'https://newoj.test/p/1',
+            'timeLimit': 1000, 'memoryLimit': 256,
+            'tests': [{'input': '1 2\n', 'output': '3\n'},
+                      {'input': '5 6\n', 'output': '11\n'}],
+        }).encode('utf-8')
+        ack = b''
+        comp._start_listener(None, quiet=True)
+        try:
+            import urllib.request as _url
+            request = _url.Request('http://localhost:%d/' % port, data=payload)
+            response = _url.urlopen(request, timeout=5)
+            try:
+                ack = response.read()
+            finally:
+                response.close()
+        finally:
+            comp._stop_listener()
+        check('the listener answers the extension with ok', ack == b'ok', repr(ack))
+        posted = os.path.join(work_dir, u'A. 两数之和.cpp')
+        check('the posted problem becomes a file named after its statement',
+              os.path.exists(posted) and window.opened[-1] == posted,
+              repr(window.opened[-1:]))
+        with open(posted, encoding='utf-8') as f:
+            posted_body = f.read()
+        check('the created file opens with the statement header and the template',
+              posted_body.startswith('//') and u'A. 两数之和' in posted_body
+              and 'https://newoj.test/p/1' in posted_body
+              and posted_body.rstrip().endswith('#include <bits/stdc++.h>'),
+              posted_body.replace('\n', ' | ')[:160])
+        data_file = os.path.join(work_dir, 'tests', u'A. 两数之和.cpp__tests')
+        stored = []
+        if os.path.exists(data_file):
+            with open(data_file, encoding='utf-8') as f:
+                stored = json.loads(f.read())
+        check('the posted samples arrive as test data, answers included',
+              [item.get('test') for item in stored] == ['1 2\n', '5 6\n']
+              and stored[0].get('correct_answers') == ['3'], repr(stored))
+        posted_limits = settings_mod.get_problem_limits(posted)
+        check('the posted limits are remembered for that file',
+              posted_limits.get('time_limit_ms') == 1000
+              and posted_limits.get('memory_limit_mb') == 256, repr(posted_limits))
+    finally:
+        _stop_and_reset()
+        settings_mod.init_settings(saved_settings)
+        fake_sublime.load_settings = saved_load_settings
+        fake_sublime.active_window = saved_active_window
+        fake_sublime.windows = saved_windows
+        fake_sublime.set_timeout = saved_set_timeout
+        fake_sublime.error_message = saved_error_message
+        shutil.rmtree(work_dir, ignore_errors=True)
+
     print('== static checks: the regressions that unit tests cannot reach ==')
     # 1. Every self.X() call must resolve inside its own class. This is the
     #    v1.4.5 bug: a helper was defined on CphViewTesterCommand but called
@@ -1367,6 +1688,99 @@ def main():
     stress_cmd = stress._format_cmd('g++ {typo} {file_name}', os.path.join('tmp', 'a.cpp'))
     check('stress ignores an unknown placeholder',
           '{typo}' not in stress_cmd and stress_cmd.rstrip().endswith('a'), stress_cmd)
+
+    print('== stress picker: every step says which file it wants ==')
+    # Setting a stress test up asked for two files in a row with nothing on
+    # screen to tell them apart: the titles were jargon ("选择 std (标准) 文件"),
+    # and every Sublime-panel path dropped the title argument completely.
+    class _PickerWindow(object):
+        def __init__(self):
+            self.panels = []
+            self.prompts = []
+
+        def show_quick_panel(self, items, on_select, *args, **kwargs):
+            self.panels.append((list(items), on_select))
+
+        def show_input_panel(self, caption, initial, on_done, *args):
+            self.prompts.append((caption, initial))
+
+        def folders(self):
+            return []
+
+    i18n.set_lang('zh')
+    std_title = i18n.t('choose_std_file')
+    gen_title = i18n.t('choose_generator_file')
+    check('the std pick names its step and its role',
+          '1/2' in std_title and 'std' in std_title.lower()
+          and ('正解' in std_title or '暴力' in std_title), std_title)
+    check('the generator pick names its step and its role',
+          '2/2' in gen_title and 'gen' in gen_title.lower()
+          and '生成' in gen_title, gen_title)
+    check('the two prompts are not the same words', std_title != gen_title)
+    i18n.set_lang('en')
+    check('the English prompts carry the same step numbers',
+          '1/2' in i18n.t('choose_std_file')
+          and '2/2' in i18n.t('choose_generator_file'))
+    i18n.set_lang('zh')
+
+    pw = _PickerWindow()
+    picked = []
+    stress._pick_file(pw, os.path.join('tmp'), gen_title,
+                      [os.path.join('tmp', 'gen.cpp'), os.path.join('tmp', 'gen2.cpp')],
+                      picked.append, ask=True)
+    rows, select = pw.panels[-1]
+    check('a candidate list is headed by the question it answers',
+          rows[0] == gen_title, repr(rows))
+    check('choosing a candidate returns that file',
+          (select(1), picked[-1])[-1] == os.path.join('tmp', 'gen.cpp'), repr(picked))
+    before = len(pw.panels)
+    select(0)
+    check('the header row is inert: it re-opens the same panel',
+          len(pw.panels) == before + 1 and rows[0] == pw.panels[-1][0][0])
+    n_before = len(pw.panels)
+    select(-1)
+    check('escaping the picker does not restart it', len(pw.panels) == n_before)
+
+    pw = _PickerWindow()
+    stress._browse_panel(pw, os.path.join('tmp'), std_title, lambda p: None)
+    rows, select = pw.panels[-1]
+    check('the browser is headed too', rows[0] == std_title, repr(rows[:2]))
+    check('the browser still offers the parent directory',
+          rows[1] == i18n.t('stress_browse_up'), repr(rows[:2]))
+
+    pw = _PickerWindow()
+    messages = []
+    fake_sublime = sys.modules['sublime']
+    saved_status = fake_sublime.status_message
+    try:
+        fake_sublime.status_message = lambda text=None, *a, **k: messages.append(text)
+        stress._open_file_dialog(pw, os.path.join('tmp'), std_title, lambda p: None)
+    finally:
+        fake_sublime.status_message = saved_status
+    check('the dialog step is echoed where the caption cannot be read',
+          any(std_title in m for m in messages), repr(messages))
+    check('the fallback panel keeps the title as its header',
+          pw.panels and pw.panels[-1][0][0] == std_title, repr(pw.panels[:1]))
+
+    pw = _PickerWindow()
+    stress._path_panel(pw, os.path.join('tmp'), gen_title, lambda p: None)
+    check('the typed path asks with the same words',
+          pw.prompts and pw.prompts[-1][0] == gen_title, repr(pw.prompts))
+
+    # std == gen is not a stress test: every round agrees by construction and
+    # the run reports "passed" having compared a program with itself.
+    same = os.path.join('tmp', 'std.cpp')
+    check('the same file twice is recognised',
+          stress._same_program(same, same)
+          and stress._same_program(same, os.path.abspath(same)))
+    check('two different programs are not confused for one',
+          not stress._same_program(same, os.path.join('tmp', 'gen.cpp')))
+    check('the comparison is case insensitive, the way Windows paths are',
+          'normcase' in inspect.getsource(stress._same_program))
+    stress_src = open(os.path.join(ROOT, 'cph_stress.py'), encoding='utf-8').read()
+    check('begin() refuses to start when std and gen are the same file',
+          '_same_program(std_file, gen_file)' in stress_src
+          and "t('stress_same_file'" in stress_src)
 
     print('== round 5: answer matching, empty placeholder, RE vs TLE, run clock ==')
 
