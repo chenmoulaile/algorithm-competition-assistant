@@ -1517,6 +1517,140 @@ def main():
               repr((comp._target_mode(), comp._listener['view_id'])))
         comp._stop_listener()
         fake_sublime.windows = lambda: []
+
+        # 11. creating a problem file must not also start testing it. Nothing
+        #     has been written yet, and a run panel plus a compile per click is
+        #     memory spent on nothing. Only the "fill the current file" button
+        #     runs samples - that file has code in it.
+        class _RunRecordingView(fake_sublime.View):
+            def __init__(self, file_name=None):
+                fake_sublime.View.__init__(self, file_name)
+                self.panel_runs = []
+
+            def run_command(self, name, args=None):
+                self.panel_runs.append((name, args or {}))
+
+        class _RecordingWindow(_AutoWindow):
+            def __init__(self, folder):
+                _AutoWindow.__init__(self, folder)
+                self.made = []
+
+            def open_file(self, path):
+                view = _RunRecordingView(path)
+                self.opened.append(path)
+                self.made.append(view)
+                return view
+
+        solo = json.dumps({
+            'name': u'B - no run', 'url': 'https://x.test/b',
+            'timeLimit': 500, 'memoryLimit': 64,
+            'tests': [{'input': '1\n', 'output': '2\n'}],
+        }).encode('utf-8')
+        settings_mod.init_settings(dict(base_settings, companion_target='new_file',
+                                       run_settings=[cpp_only]))
+        rec_win = _RecordingWindow(work_dir)
+        fake_sublime.active_window = lambda: rec_win
+        port = _arm()
+        comp._start_listener(None, quiet=True)
+        try:
+            _post_at(solo, port)
+        finally:
+            comp._stop_listener()
+        made_view = rec_win.made[-1] if rec_win.made else None
+        check('the new-file click creates the file and runs nothing',
+              made_view is not None
+              and made_view.file_name() == os.path.join(work_dir, u'B - no run.cpp')
+              and made_view.panel_runs == [],
+              repr(made_view.panel_runs if made_view else None))
+        check('its samples are still stored',
+              os.path.exists(os.path.join(work_dir, 'tests',
+                                          u'B - no run.cpp__tests')))
+
+        filled_file = os.path.join(work_dir, 'fill_me.cpp')
+        with io.open(filled_file, 'w', encoding='utf-8') as f:
+            f.write('// code already here\n')
+        fill_view = _RunRecordingView(filled_file)
+        fake_sublime.active_window = lambda: _FocusedWindow(work_dir, fill_view)
+        settings_mod.init_settings(dict(base_settings, companion_target='current_file',
+                                       run_settings=[cpp_only]))
+        port = _arm()
+        comp._start_listener(None, quiet=True)
+        try:
+            _post_at(solo, port)
+        finally:
+            comp._stop_listener()
+        check('the fill-the-current-file click does run them',
+              [name for name, _a in fill_view.panel_runs] == ['cph_view_tester'],
+              repr(fill_view.panel_runs))
+
+        # 12. "one new file per problem", clicked inside a problem file, means
+        #     the new files belong next to THAT file - a folder per contest task
+        #     - not in whatever folder Sublime happens to have open.
+        subdir = os.path.join(work_dir, 'C')
+        os.makedirs(subdir)
+        anchor = fake_sublime.View(file_name=os.path.join(subdir, 'anchor.cpp'))
+        fake_sublime.windows = lambda: []
+        fake_sublime.active_window = lambda: _AutoWindow(work_dir)
+        settings_mod.init_settings(dict(base_settings, companion_target='new_file'))
+        port = _arm()
+        comp._start_listener(anchor, target='new_file')
+        check('listening in a file records its folder',
+              comp._listener.get('dir') == subdir, repr(comp._listener.get('dir')))
+        next_to = comp.resolve_target(u'next to me', '', 1, 1)
+        check('the new problem is created there, not in the workspace root',
+              next_to is not None
+              and next_to.file_name() == os.path.join(subdir, u'next to me.cpp'),
+              repr(next_to.file_name() if next_to else None))
+        comp._stop_listener()
+        check('stopping the listener forgets that folder',
+              comp._listener.get('dir') is None, repr(comp._listener.get('dir')))
+
+        # 13. the header is the user's text, the way cp editor's template is.
+        header_win = _AutoWindow(work_dir)
+        fake_sublime.active_window = lambda: header_win
+        settings_mod.init_settings({
+            'auto_create_file': True, 'auto_create_extension': 'cpp',
+            'companion_target': 'new_file',
+            'auto_create_header': [u'// {problem}', u'// TL {time}ms  ML {memory}MB',
+                                   u'// {url}', u'// {typo} stays'],
+            'auto_create_template': 'int main(){}\n'})
+        comp.resolve_target(u'D. 图论', 'https://x.test/d', 1000, 256)
+        head_text = _read(os.path.join(work_dir, u'D. 图论.cpp'))
+        check('a custom header template is written as given',
+              head_text.startswith(u'// D. 图论\n// TL 1000ms  ML 256MB\n'
+                                   u'// https://x.test/d'),
+              repr(head_text[:90]))
+        check('an unknown placeholder is left alone instead of crashing',
+              '{typo}' in head_text, repr(head_text[:120]))
+        check('the template still follows the header',
+              head_text.rstrip().endswith('int main(){}'), repr(head_text[-40:]))
+
+        settings_mod.init_settings({'auto_create_file': True,
+                                   'auto_create_extension': 'cpp',
+                                   'companion_target': 'new_file',
+                                   'auto_create_header': '',
+                                   'auto_create_template': 'int main(){}\n'})
+        comp.resolve_target(u'no header at all', '', 1, 1)
+        bare_text = _read(os.path.join(work_dir, 'no header at all.cpp'))
+        check('an empty auto_create_header writes no header at all',
+              bare_text == 'int main(){}\n', repr(bare_text[:60]))
+
+        # 14. both ways need a key: choosing where samples go should not cost a
+        #     trip through the context menu.
+        for os_name in ('Windows', 'Linux', 'OSX'):
+            with io.open(os.path.join(ROOT, 'Default (%s).sublime-keymap' % os_name),
+                         encoding='utf-8') as f:
+                binds = json.loads(f.read())
+            by_key = {}
+            for entry in binds:
+                if entry.get('command') == 'cph_companion_listener':
+                    by_key['+'.join(entry['keys'])] = (entry.get('args') or {}).get('target')
+            check('the two listen modes have keys on %s' % os_name,
+                  by_key.get('ctrl+alt+l') == 'new_file'
+                  and by_key.get('ctrl+alt+f') == 'current_file', repr(by_key))
+
+        check('the header template is a documented setting',
+              '"auto_create_header"' in shipped_text, 'auto_create_header missing')
     finally:
         _stop_and_reset()
         settings_mod.init_settings(saved_settings)

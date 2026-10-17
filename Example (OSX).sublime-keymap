@@ -63,6 +63,26 @@
 			"super+alt+l"
 		],
 		"command": "cph_companion_listener",
+		"args": {
+			"target": "new_file"
+		},
+		"context": [
+			{
+				"operand": "source.TestSyntax",
+				"operator": "not_equal",
+				"match_all": true,
+				"key": "selector"
+			}
+		]
+	},
+	{
+		"keys": [
+			"super+alt+f"
+		],
+		"command": "cph_companion_listener",
+		"args": {
+			"target": "current_file"
+		},
 		"context": [
 			{
 				"operand": "source.TestSyntax",

@@ -296,6 +296,31 @@
 			"ctrl+alt+l"
 		],
 		"command": "cph_companion_listener",
+		"args": {
+			"target": "new_file"
+		},
+		"context": [
+			{
+				"operand": "source.TestSyntax",
+				"operator": "not_equal",
+				"match_all": true,
+				"key": "selector"
+			},
+			{
+				"key": "cph_keybindings_enabled",
+				"operator": "equal",
+				"operand": true
+			}
+		]
+	},
+	{
+		"keys": [
+			"ctrl+alt+f"
+		],
+		"command": "cph_companion_listener",
+		"args": {
+			"target": "current_file"
+		},
 		"context": [
 			{
 				"operand": "source.TestSyntax",

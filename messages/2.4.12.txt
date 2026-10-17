@@ -1,0 +1,82 @@
+Algorithm Competition Assistant 2.4.12
+======================================
+
+Competitive Companion finally does something, and the stress test says what it
+is asking for.
+
+* Why clicking the extension did nothing
+
+  The listener refused every request from the extension itself. A browser puts
+  the extension's own id in the Origin header of a background request
+  (`chrome-extension://...`), and the check that keeps web pages away from this
+  port treated that as a foreign page and answered 403 - silently, so a click
+  looked identical to "the extension never sent anything". Extension origins are
+  allowed now; a page's origin and a non-loopback Host are still refused, which
+  is what stops DNS rebinding and drive-by posts.
+
+  Refusals are also written down now. `companion_debug_log: true` appends every
+  click - mode, sample count, limits, the file it chose or why it refused - to
+  `Data/Log/aca-companion.log`. A `refused 403` line means the plugin blocked
+  it; no line at all means the request never left the browser, and the usual
+  reason is that the extension's port list does not contain 12345.
+
+* Two ways to listen, each with its own menu entry and key
+
+  `Ctrl+Alt+L` (one new file per problem) creates `<problem name>.cpp`, stores
+  the samples, remembers the time and memory limits, and stops there. Nothing
+  has been written yet, so it no longer compiles, opens a run panel or runs the
+  samples - that used to cost a panel and a compile per click, for a result that
+  could not mean anything.
+
+  `Ctrl+Alt+F` (fill the current file) puts the samples into the file you are
+  working on and runs them once, which is the case where a run is worth having.
+  The same two are in the right-click menu, the View menu and the command
+  palette; `companion_target` picks the default for the next Sublime session.
+
+  Listening inside a file no longer silently outranks the mode: a stale
+  "Listen to Competitive Companion" in `std.cpp` used to swallow every later
+  click, which is exactly how the new-file feature looked broken. Picking
+  one-new-file-per-problem clears that pin.
+
+* No setup, and the file lands where you are working
+
+  The listener starts by itself when Sublime starts (`companion_auto_listen`),
+  on a deferred tick so binding the port never adds `http.server` to the
+  startup. A saved file is no longer required: it used to refuse an unsaved view
+  while the create-a-file branch only ran for a target with no file name, and
+  those two exclude each other - so auto-creating a problem file was
+  unreachable code.
+
+  The new file goes to `auto_create_dir`, else the folder of the file you
+  clicked in, else the folder of the file under focus, else the first folder of
+  the window. With a folder per contest task, one click in it puts every later
+  problem beside it.
+
+  The header on a created file is yours to write: `auto_create_header` takes a
+  string or one list element per line, fills `{problem}` `{url}` `{time}`
+  `{memory}`, leaves anything else in braces untouched, and `null` keeps the
+  built-in bilingual text (`""` writes no header). `auto_create_template` is the
+  body that follows it. Files the plugin did not create are never written to.
+
+  Received limits are stored beside the problem's test data as
+  `<name>__tests.limits` and read back after a restart, so a later manual
+  `Ctrl+Alt+B` still runs with the judge's limits instead of the defaults.
+
+* The stress test now names the file it wants
+
+  Setting one up asked twice in a row and never said which was which: the
+  captions were jargon, and every Sublime-panel path dropped its title
+  argument, so two lists of file names looked identical. They now read
+  `[Step 1/2 - the correct solution] ...` and `[Step 2/2 - the generator] ...`,
+  repeat themselves in the status bar and the console, and head the candidate
+  list, the folder browser and the cancelled-dialog fallback alike.
+
+  Picking the same file for both is refused: a program compared with itself
+  agrees every round, which reads as a clean result and proves nothing.
+
+Other changes: the status bar names the file the samples went into; the listener
+and the environment check (`doctor`) bind `127.0.0.1` explicitly instead of
+betting on how this host resolves the name `localhost`; and the regression suite
+grew from 555 to 644 checks, including real socket posts through the real
+handler - one of its own port-reuse races had been turning CI red on two
+platforms while the other two passed on timing.

@@ -7,10 +7,14 @@ Algorithm Competition Assistant - Competitive Companion 持久监听器
 与旧版 (FastOlympicCodingHook 一次性会话) 的区别:
 - 一次启动后持续监听 (cph-ng 风格), 浏览器扩展可反复点击发送样例
 - 默认随 Sublime 启动自动监听 (companion_auto_listen), 不需要先打开某个文件
-- 再次执行本命令只会切换目标文件, 不会重复起服务器/产生端口冲突
-- 没有目标文件时按题面新建 <题目名>.cpp, 头部写入题名/来源/TL/ML 注释,
-  你的 auto_create_template 跟在后面; 已有源码仍然一个字都不插
-- 收到样例后通过 cph_view_tester 正常走 Run 流程
+- 两种监听方式各有右键入口和快捷键 (companion_target):
+  new_file     每题新建 <题目名>.cpp + 存样例 + 记限制, **到此为止, 不编译不跑样例**
+               (代码还没写; 运行面板和每次编译都是白占内存)
+  current_file 样例送进聚焦/固定的文件, 并立刻跑一遍 (那文件里已经有代码)
+- 新建文件的目录优先取你点命令时那个 cpp 所在的文件夹, 其次聚焦文件, 再次工作区
+- 头部注释可用 auto_create_header 完全自定义 ({problem} {url} {time} {memory});
+  只写插件自己新建的文件, 已有源码仍然一个字都不插
+- 再次执行监听命令只会切换目标文件, 不会重复起服务器/产生端口冲突
 - 收到的样例与已有样例 **合并去重**（与导入流程语义一致），不再整体覆盖
 - 收到的 TL/ML 按源文件持久化在测试数据旁边，重启后手动 Ctrl+Alt+B 也不丢
 """
@@ -38,6 +42,7 @@ _listener = {
     'port': None,
     'view_id': None,     # target source view id
     'target': None,      # mode picked from the menu, for this session
+    'dir': None,         # folder picked by listening inside a file
     'lock': threading.Lock(),
 }
 
@@ -297,14 +302,20 @@ def build_handler():
                 tl = time_limit_ms if time_limit_ms is not None else '-'
                 ml = memory_limit_mb if memory_limit_mb is not None else '-'
 
+                # Auto-run only where it can mean something. `new_file` just
+                # created an empty problem file: there is no code to test yet,
+                # and a panel plus a compile for every click is memory spent on
+                # nothing. `current_file` fills the file being written, and
+                # running its samples right there is the point.
                 # The panel belongs to the file that was resolved above: the
                 # view the request arrived on may have been closed by
                 # auto-create, and running a command on a closed view raised.
-                target.run_command('cph_view_tester', {
-                    'action': 'make_opd',
-                    'time_limit_ms': time_limit_ms,
-                    'memory_limit_mb': memory_limit_mb,
-                })
+                if _target_mode() == _TARGET_CURRENT:
+                    target.run_command('cph_view_tester', {
+                        'action': 'make_opd',
+                        'time_limit_ms': time_limit_ms,
+                        'memory_limit_mb': memory_limit_mb,
+                    })
                 # Naming the destination is the one thing the user could not
                 # tell: "已接收题目" alone does not say whether it landed in the
                 # file he was looking at or in a newly created one.
@@ -332,22 +343,60 @@ def _sanitize_name(name):
 _HASH_COMMENTS = ('py', 'rb', 'sh', 'pl', 'r', 'jl')
 
 
+def _flat(value):
+    return re.sub(r'\s+', ' ', str(value if value is not None else '')).strip()
+
+
+#: The words a custom header template may use.
+HEADER_FIELDS = ('problem', 'url', 'time', 'memory')
+
+
+def _custom_header(template, problem_name, url, time_limit_ms, memory_limit_mb):
+    """The user's own header text, written as they typed it.
+
+    `{problem} {url} {time} {memory}` are filled and anything else in braces is
+    left alone rather than raising - a template is the user's, so its comment
+    markers are too. Guessing the marker would rewrite what someone wrote for a
+    language this plugin cannot see.
+    """
+    if isinstance(template, (list, tuple)):
+        lines = [str(line) for line in template]
+    else:
+        lines = str(template).split('\n')
+    values = {'problem': _flat(problem_name), 'url': _flat(url),
+              'time': '' if time_limit_ms is None else str(time_limit_ms),
+              'memory': '' if memory_limit_mb is None else str(memory_limit_mb)}
+    out = []
+    for line in lines:
+        for key in HEADER_FIELDS:
+            line = line.replace('{%s}' % key, values[key])
+        out.append(line.rstrip())
+    while out and not out[0]:
+        out.pop(0)
+    while out and not out[-1]:
+        out.pop()
+    return '\n'.join(out)
+
+
 def _statement_header(problem_name, url, time_limit_ms, memory_limit_mb, ext):
     """The comment block written on top of a freshly created problem file.
 
     Only ever used for a file this listener creates itself; an existing source
-    file is opened as it is.
+    file is opened as it is. `auto_create_header` replaces this built-in text
+    entirely - as null it is the language-aware default below, as "" there is
+    no header at all.
     """
+    template = (get_settings() or {}).get('auto_create_header')
+    if template is not None:
+        return _custom_header(template, problem_name, url,
+                              time_limit_ms, memory_limit_mb)
+
     mark = '#' if ext in _HASH_COMMENTS else '//'
-
-    def flat(value):
-        return re.sub(r'\s+', ' ', str(value if value is not None else '')).strip()
-
     lines = []
-    if flat(problem_name):
-        lines.append('%s %s' % (mark, t('header_problem', value=flat(problem_name))))
-    if flat(url):
-        lines.append('%s %s' % (mark, t('header_source', value=flat(url))))
+    if _flat(problem_name):
+        lines.append('%s %s' % (mark, t('header_problem', value=_flat(problem_name))))
+    if _flat(url):
+        lines.append('%s %s' % (mark, t('header_source', value=_flat(url))))
     if time_limit_ms is not None:
         lines.append('%s %s' % (mark, t('header_time_limit', value=time_limit_ms)))
     if memory_limit_mb is not None:
@@ -402,8 +451,13 @@ def _auto_create_file(view, problem_name, url='', time_limit_ms=None,
     if directory and not os.path.isabs(directory):
         directory = os.path.join(base, directory) if base else directory
     if not directory:
+        # Where the Listen command was clicked, then the file being worked on:
+        # in a contest "here" is the folder of the task at hand, which beats
+        # whatever folder Sublime happens to have open.
+        directory = _listener.get('dir') or base
+    if not directory:
         folders = window.folders() if window is not None else []
-        directory = folders[0] if folders else base
+        directory = folders[0] if folders else ''
     if not directory:
         # Reported here for the same reason a write failure is: the caller
         # only sees "no target" and cannot tell that no folder was open.
@@ -556,9 +610,11 @@ def _start_listener(view=None, quiet=False, target=None):
             if target == _TARGET_NEW:
                 # A pick of "one new file per problem" is the more recent
                 # instruction: a pin left over from listening in some file
-                # would otherwise keep filling that file and look like the
-                # pick did nothing.
+                # would otherwise keep filling that file and look like the pick
+                # did nothing. The file clicked in is still what "here" means,
+                # so its folder is where the new problems go.
                 _listener['view_id'] = None
+                _listener['dir'] = os.path.dirname(file_name) if file_name else None
             sublime.status_message('Algorithm Competition Assistant: '
                                    'companion_target = %s' % target)
         elif file_name:
@@ -607,6 +663,7 @@ def _stop_listener():
         _listener['port'] = None
         _listener['view_id'] = None
         _listener['target'] = None
+        _listener['dir'] = None
     threading.Thread(target=server.shutdown, daemon=True).start()
     try:
         server.server_close()

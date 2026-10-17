@@ -115,31 +115,37 @@ copy-paste reference if you want to change one.
 默认开），不用先打开或保存任何文件。
 
 1. 浏览器打开题目页，点 Competitive Companion 扩展的绿色 `+`
-2. 一次点击送去哪儿由 `companion_target` 决定，两种行为是**分开的**：
-   - `"new_file"`（默认）：按题面新建 `<题目名>.cpp` 并打开，顶部写几行注释
-     （题名、来源链接、时间限制、空间限制），你的 `auto_create_template` 跟在后面。
-     重名就打开已有那个再把样例并进去，不会越点越多。
-   - `"current_file"`：只把样例送到当前聚焦的源码文件，**绝不新建**（原本的行为）；
-     在某个文件里执行过 `Listen to Competitive Companion` 的，一律送到那个文件。
-   - `"new_file"` 模式下**固定目标不再生效**：一题一个文件就是这个模式的全部意思。
+2. 一次点击送去哪儿由 `companion_target` 决定，两种行为是**分开的**（右键、View 菜单、
+   命令面板和快捷键都各有两项）：
+   - `Ctrl+Alt+L` / `... new file per problem`（默认）：按题面新建 `<题目名>.cpp` 并打开，
+     存好样例、记住时间/空间限制，然后**就此为止**——不编译、不弹运行面板、不跑样例
+     （代码还没写，跑了只是白占内存）。重名就打开已有那个再把样例并进去，不会越点越多。
+   - `Ctrl+Alt+F` / `... fill the current file`：把样例送到当前聚焦（或你固定过）的源码文件，
+     并立刻跑一遍——这个文件里已经有代码，跑才有意义。
+   - `new_file` 模式下**固定目标不再生效**：一题一个文件就是这个模式的全部意思。
      （以前它被固定项压住，于是"在 std.cpp 里开过监听"之后整个会话都只往那个文件送，
      看起来就像新建功能完全没用——真实日志里出现过这个。）
-3. 之后照常自动运行一次，收到的时间/内存限制同时生效（`Ctrl+Alt+B` 也用得到）；
-   状态栏这次会**写明样例落进了哪个文件**，不用猜。
+3. 新文件建在哪，按顺序取第一个能用的：`auto_create_dir` → 你在某个 cpp 里点
+   `new file` 那项时那个 cpp 所在的目录 → 当前聚焦的源码文件所在目录 → 工作区第一个文件夹。
+   所以在一题一目录的比赛文件夹里点一下，后面每道题都建在同一个目录里。
 
-插件**只会往自己新建的文件里写注释头**，你正在写的源码一个字都不会被动。新建文件放在哪：
-`auto_create_dir`，留空则是窗口第一个文件夹；两种都没有时状态栏会直说"先打开题目所在的
-文件夹"，不会静默丢掉样例。
+新建文件顶部的注释头可以整条换掉：`auto_create_header` 写字符串或"每行一个元素"的数组，
+可用 `{problem}` `{url}` `{time}` `{memory}`，注释符号也由你写（内置默认会按扩展名选
+`//` 或 `#`，`null` 就用它，`""` 则一行都不写）；`auto_create_template` 是紧随其后的正文模板。
+
+插件**只会往自己新建的文件里写注释头**，你正在写的源码一个字都不会被动。四处目录一个都取不到时
+状态栏会直说"先打开题目所在的文件夹"，不会静默丢掉样例。状态栏每次都会**写明样例落进了哪个文件**。
 
 样例的落盘位置与去重规则和「导入」完全一致：按输入去重、答案只补不覆盖，重复点击
 不会顶掉你手工标记的答案。收到的时间/空间限制写在测试数据旁边的 `<文件名>__tests.limits`
 里，重启 Sublime 也不会丢。
 
-想把样例收进某个特定文件，在里面执行一次 `Algorithm Competition Assistant: Listen to Competitive Companion`
-（`Ctrl+Alt+L`）——它同时把这个文件设为目标并切到 `current_file`，本会话内点击都送进它
-（幂等，不会重复起服务器或撞端口）。想再回到一题一文件，右键选 `... one new file per problem`
-即可，它会顺手解除固定。`Stop Competitive Companion listener` 随时停止，停止后目标与模式
-都清空，要重新监听需再执行一次命令或重启 Sublime。
+想把样例长期收进某个特定文件：在里面按 `Ctrl+Alt+F`，或执行不带模式的
+`Algorithm Competition Assistant: Listen to Competitive Companion`——它把这个文件设为目标
+并切到 `current_file`，本会话内的点击都送进它（幂等，不会重复起服务器或撞端口）。想回到
+一题一文件，按 `Ctrl+Alt+L` 即可，它会顺手解除固定。`Stop Competitive Companion listener`
+（`Ctrl+Alt+Shift+L`）随时停止，停止后目标、模式与目录都清空，要重新监听需再执行一次命令或
+重启 Sublime。
 
 `companion_debug_log: true` 会把每次点击的判定过程（模式、样例数、限制、最后落到哪个文件
 或为什么被拒）追加到 `Data/Log/aca-companion.log`，用来回答"样例到底去哪了"；默认关。
@@ -306,7 +312,9 @@ Sublime 会把两份都当插件加载，命令与快捷键会重复注册。用
 | `Ctrl+Alt+I` (Mac: `Cmd+Alt+I`) | 从文件导入测试 |
 | `Ctrl+Alt+S` (Mac: `Cmd+Alt+S`) | 开始对拍（对拍输出页上也按它 = 重新跑该文件的这场对拍） |
 | `Ctrl+Alt+Shift+S` (Mac: `Cmd+Alt+Shift+S`) | 停止对拍，**只在对拍输出页生效**；多个文件同时对拍时停的是当前页这一场 |
-| `Ctrl+Alt+L` / `Ctrl+Alt+Shift+L` (Mac: `Cmd+Alt+L` / `Cmd+Alt+Shift+L`) | 开启 / 停止 Competitive Companion 监听 |
+| `Ctrl+Alt+L` (Mac 同键) | 监听 Competitive Companion：**一题一个新文件**，不自动跑样例 |
+| `Ctrl+Alt+F` (Mac 同键) | 监听 Competitive Companion：样例送进**当前文件**并立刻跑一遍 |
+| `Ctrl+Alt+Shift+L` (Mac 同键) | 停止 Competitive Companion 监听 |
 | `Ctrl+Alt+P` 或 `Ctrl+K, Ctrl+P` (Mac: `Cmd+Alt+P` 或 `Cmd+K, Cmd+P`) | 收缩 / 恢复右侧测试面板 |
 | `Ctrl+Alt+T` (Mac: `Cmd+Alt+T`) | 展开模板片段（光标停在关键字后，如 `fastio`） |
 | `Ctrl+Alt+V` (Mac: `Cmd+Alt+V`) | 用剪贴板内容新增测试点（`输入 --- 输出` 可同时带答案） |
