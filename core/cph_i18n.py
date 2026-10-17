@@ -660,6 +660,20 @@ STRINGS = {
         'zh': '按题面自动新建文件',
         'en': 'auto-created from the problem name',
     },
+    'listener_mode_new': {
+        'zh': '一题一个新文件：只建文件、存样例、记限制，不跑样例。'
+              '想把样例收进当前文件并立刻跑一次，按 Ctrl+Alt+F',
+        'en': 'One new file per problem: created, samples stored, nothing run. '
+              'To fill the file you are in and run it once, press Ctrl+Alt+F',
+    },
+    'listener_mode_current': {
+        'zh': '样例会送进 {file} 并立刻跑一遍。注意：比赛题目列表页一次点击会发来'
+              '整包题目，那种页面请用 Ctrl+Alt+L 每题建一个新文件，否则每道题的'
+              '样例都并进同一个文件',
+        'en': 'Samples will go into {file} and run once. Note: a contest task '
+              'list sends every task per click - use Ctrl+Alt+L there, one new '
+              'file per problem, or all of them pile into this one file',
+    },
     'listener_no_directory': {
         'zh': '没有地方可以新建题目文件：先打开这场题目所在的文件夹，'
               '或在设置里指定 auto_create_dir',

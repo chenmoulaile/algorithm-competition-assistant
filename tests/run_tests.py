@@ -1037,6 +1037,8 @@ def main():
             comp._listener['thread'] = None
             comp._listener['view_id'] = None
             comp._listener['target'] = None
+            comp._listener['dir'] = None
+            comp._listener['last_run'] = None
 
     work_dir = _tf.mkdtemp()
     try:
@@ -1595,6 +1597,54 @@ def main():
         check('the fill-the-current-file click does run them',
               [name for name, _a in fill_view.panel_runs] == ['cph_view_tester'],
               repr(fill_view.panel_runs))
+
+        # 11b. a contest page sends every task in one click - seven problems
+        #      arriving into the same file is not seven things to compile. The
+        #      samples are still stored; only the run is folded away.
+        burst_file = os.path.join(work_dir, 'burst.cpp')
+        with io.open(burst_file, 'w', encoding='utf-8') as f:
+            f.write('// hand written\n')
+        burst_view = _RunRecordingView(burst_file)
+        fake_sublime.active_window = lambda: _FocusedWindow(work_dir, burst_view)
+        settings_mod.init_settings(dict(base_settings, companion_target='current_file',
+                                       run_settings=[cpp_only]))
+        comp._stop_listener()
+        port = _arm()
+        comp._start_listener(None, quiet=True)
+        try:
+            for number, letter in enumerate(('X', 'Y', 'Z'), start=1):
+                body = json.dumps({'name': u'%s - burst' % letter,
+                                   'url': 'https://x.test/%s' % letter,
+                                   'timeLimit': 100, 'memoryLimit': 64,
+                                   'tests': [{'input': '%d\n' % number,
+                                              'output': '2\n'}]}
+                                  ).encode('utf-8')
+                _post_at(body, port)
+        finally:
+            comp._stop_listener()
+        check('a burst of problems into one file runs the samples once',
+              len(burst_view.panel_runs) == 1, repr(burst_view.panel_runs))
+        burst_tests = []
+        burst_data = os.path.join(work_dir, 'tests', 'burst.cpp__tests')
+        if os.path.exists(burst_data):
+            with io.open(burst_data, encoding='utf-8') as f:
+                burst_tests = json.loads(f.read())
+        check('and every problem of the burst is still stored',
+              len(burst_tests) == 3, repr(len(burst_tests)))
+
+        # 11c. pressing the key has to say what it will do: a list page plus
+        #       "fill the current file" is how seven problems end up in std.cpp.
+        warned = []
+        saved_sm = fake_sublime.status_message
+        try:
+            fake_sublime.status_message = lambda text=None, *a, **k: warned.append(text)
+            comp._start_listener(_RunRecordingView(burst_file), quiet=True,
+                                 target='current_file')
+        finally:
+            fake_sublime.status_message = saved_sm
+        check('picking fill-the-current-file names the file and warns',
+              any('burst.cpp' in m and ('Ctrl+Alt+L' in m or 'new file' in m)
+                  for m in warned), repr(warned))
 
         # 12. "one new file per problem", clicked inside a problem file, means
         #     the new files belong next to THAT file - a folder per contest task

@@ -25,6 +25,7 @@ import json
 import os
 import re
 import threading
+import time
 
 from .core.cph_i18n import t
 from .core.cph_settings import (get_settings, is_run_supported_ext, load_all_tests,
@@ -43,8 +44,32 @@ _listener = {
     'view_id': None,     # target source view id
     'target': None,      # mode picked from the menu, for this session
     'dir': None,         # folder picked by listening inside a file
+    'last_run': None,    # (file, monotonic) of the last auto-run
     'lock': threading.Lock(),
 }
+
+#: One click on a contest page is not one problem: an AtCoder task list sends
+#: every task at once (seven POSTs measured here), so filling one file would
+#: queue a compile and a run per problem, back to back. The samples are all
+#: stored; only the repeat runs are folded away.
+AUTO_RUN_DEBOUNCE_SECONDS = 2.0
+
+
+def _should_run(file_name):
+    """True unless this very file was auto-run by the same click a moment ago.
+
+    Debounced per file, not globally: two files being filled are two
+    intentions, seven problems landing in one file are one.
+    """
+    now = time.monotonic()
+    last = _listener.get('last_run')
+    if (last is not None and last[0] == file_name
+            and now - last[1] < AUTO_RUN_DEBOUNCE_SECONDS):
+        _debug_log('auto-run skipped for %s (another problem of the same click)'
+                   % os.path.basename(file_name))
+        return False
+    _listener['last_run'] = (file_name, now)
+    return True
 
 
 def _find_view(view_id):
@@ -310,7 +335,7 @@ def build_handler():
                 # The panel belongs to the file that was resolved above: the
                 # view the request arrived on may have been closed by
                 # auto-create, and running a command on a closed view raised.
-                if _target_mode() == _TARGET_CURRENT:
+                if _target_mode() == _TARGET_CURRENT and _should_run(file_name):
                     target.run_command('cph_view_tester', {
                         'action': 'make_opd',
                         'time_limit_ms': time_limit_ms,
@@ -615,8 +640,15 @@ def _start_listener(view=None, quiet=False, target=None):
                 # so its folder is where the new problems go.
                 _listener['view_id'] = None
                 _listener['dir'] = os.path.dirname(file_name) if file_name else None
-            sublime.status_message('Algorithm Competition Assistant: '
-                                   'companion_target = %s' % target)
+                sublime.status_message(t('listener_mode_new'))
+            else:
+                # Say what the key just did. A contest page sends its whole
+                # task list per click, and "all seven into this file" is not
+                # what most people meant when they reached for it.
+                sublime.status_message(t(
+                    'listener_mode_current',
+                    file=os.path.basename(file_name) if file_name
+                    else t('listener_auto_target')))
         elif file_name:
             # Running the plain command inside a file has always meant
             # "listen for THIS file", so it fills that file for this session
@@ -664,6 +696,7 @@ def _stop_listener():
         _listener['view_id'] = None
         _listener['target'] = None
         _listener['dir'] = None
+        _listener['last_run'] = None
     threading.Thread(target=server.shutdown, daemon=True).start()
     try:
         server.server_close()
