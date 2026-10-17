@@ -963,8 +963,59 @@ def main():
         probe.close()
         return port
 
+    def _post_at(body, at_port, headers=None):
+        """POST to the listener and return its status code (0 = no answer).
+
+        127.0.0.1, never the name: HTTPServer is IPv4-only, so asking for
+        "localhost" tests whichever address family this host happens to
+        resolve first - which passed on macOS and crashed the suite on Linux
+        and on the official Windows CPython. A refusal to connect reports
+        itself as a failed check rather than taking the whole run down.
+        """
+        import urllib.error as _err
+        import urllib.request as _url
+        request = _url.Request('http://127.0.0.1:%d/' % at_port, data=body,
+                               headers=headers or {})
+        try:
+            response = _url.urlopen(request, timeout=10)
+            try:
+                return response.getcode()
+            finally:
+                response.close()
+        except _err.HTTPError as error:
+            return error.code
+        except Exception as e:
+            print('   (no answer from the listener: %s)' % e)
+            return 0
+
     def _use_settings(data):
         fake_sublime.load_settings = lambda name: fake_sublime.Settings(data)
+
+    def _arm(auto_listen=True):
+        """Give the next start a port of its own, and return it.
+
+        _stop_listener() shuts the server down on another thread, so reusing
+        one port number across rounds can re-bind before the old socket is
+        gone. That is not a race worth having in a regression suite: it bound
+        nothing, the request then found nobody listening, and two CI images
+        died on it while two others happened to pass on timing.
+        """
+        at_port = _free_port()
+        _use_settings({'companion_port': at_port,
+                       'companion_auto_listen': auto_listen})
+        return at_port
+
+    def _read(path):
+        """The file's text, or '' when it is not there.
+
+        A missing file has to surface as a failed check: an uncaught IOError
+        ended the whole run, which is why a platform-only failure printed
+        nothing but "exit 1" and left every other result unread.
+        """
+        if not os.path.exists(path):
+            return ''
+        with io.open(path, encoding='utf-8') as f:
+            return f.read()
 
     def _stop_and_reset():
         comp._stop_listener()
@@ -976,8 +1027,7 @@ def main():
 
     work_dir = _tf.mkdtemp()
     try:
-        port = _free_port()
-        _use_settings({'companion_port': port, 'companion_auto_listen': True})
+        port = _arm()
         settings_mod.init_settings({'auto_create_file': True,
                                     'auto_create_dir': '',
                                     'auto_create_extension': 'cpp',
@@ -1003,7 +1053,7 @@ def main():
         _stop_and_reset()
 
         # 2. plugin_loaded() brings it back up on its own
-        _use_settings({'companion_port': port, 'companion_auto_listen': True})
+        port = _arm()
         comp.plugin_loaded()
         check('the listener comes up by itself when Sublime starts',
               comp._listener['server'] is not None)
@@ -1014,6 +1064,7 @@ def main():
         # import for exactly that reason.
         deferred = []
         fake_sublime.set_timeout = lambda fn, delay=0: deferred.append(fn)
+        port = _arm()
         comp.plugin_loaded()
         check('the auto-start is deferred instead of blocking plugin_loaded',
               comp._listener['server'] is None and len(deferred) == 1,
@@ -1025,14 +1076,14 @@ def main():
         fake_sublime.set_timeout = lambda fn, delay=0: fn()
         _stop_and_reset()
 
-        _use_settings({'companion_port': port, 'companion_auto_listen': False})
+        _arm(auto_listen=False)
         comp.plugin_loaded()
         check('companion_auto_listen=false keeps the port free',
               comp._listener['server'] is None, repr(comp._listener['port']))
         _stop_and_reset()
 
         # 3. an incoming problem with no target creates the file
-        _use_settings({'companion_port': port})
+        port = _arm()
         window = _AutoWindow(work_dir)
         fake_sublime.active_window = lambda: window
         created = comp.resolve_target(u'A/B: 简单题 #1', 'https://oj.example/p/1',
@@ -1043,8 +1094,7 @@ def main():
               repr(created.file_name() if created else None))
         check('the new file is opened in the window',
               window.opened == [wanted], repr(window.opened))
-        with open(wanted, encoding='utf-8') as f:
-            body = f.read()
+        body = _read(wanted)
         check('the statement header names the problem and its source',
               u'A/B: 简单题 #1' in body and 'oj.example/p/1' in body,
               body.replace('\n', ' | ')[:160])
@@ -1059,8 +1109,7 @@ def main():
             f.write(u'// mine\nint main(){}\n')
         again = comp.resolve_target(u'A/B: 简单题 #1', 'https://oj.example/p/1',
                                     1000, 256)
-        with open(wanted, encoding='utf-8') as f:
-            kept = f.read()
+        kept = _read(wanted)
         check('a name collision opens the file instead of overwriting it',
               kept == u'// mine\nint main(){}\n'
               and again is not None and again.file_name() == wanted,
@@ -1144,18 +1193,31 @@ def main():
             f.write(u'// pinned\n')
         pinned_view = fake_sublime.View(file_name=pinned_file)
         fake_sublime.windows = lambda: [_PinnedWindow(pinned_view)]
-        with comp._listener['lock']:
-            comp._listener['view_id'] = pinned_view.id()
         settings_mod.init_settings(dict(base_settings, companion_target='new_file'))
         pin_win = _FocusedWindow(work_dir, fake_sublime.View(file_name=focused_file))
         fake_sublime.active_window = lambda: pin_win
+        with comp._listener['lock']:
+            comp._listener['view_id'] = pinned_view.id()
         pinned = comp.resolve_target(u'pinned problem', '', 1, 1)
-        check('the view the command pinned outranks the focus and the mode',
+        check('a pin does not outrank new_file: one click is still one file',
+              pinned is not None
+              and pinned.file_name() == os.path.join(work_dir, u'pinned problem.cpp')
+              and pinned.file_name() != pinned_file,
+              repr(pinned.file_name() if pinned else None))
+        with comp._listener['lock']:
+            comp._listener['view_id'] = None
+        settings_mod.init_settings(dict(base_settings, companion_target='current_file'))
+        opened_before = list(pin_win.opened)
+        with comp._listener['lock']:
+            comp._listener['view_id'] = pinned_view.id()
+        pinned = comp.resolve_target(u'pinned problem', '', 1, 1)
+        check('the pinned view is where current_file sends its samples',
               pinned is not None and pinned.file_name() == pinned_file
-              and pin_win.opened == [],
+              and pin_win.opened == opened_before,
               repr((pinned.file_name() if pinned else None, pin_win.opened)))
         with comp._listener['lock']:
             comp._listener['view_id'] = None
+            comp._listener['target'] = None
         fake_sublime.windows = lambda: []
 
         settings_mod.init_settings(dict(base_settings, companion_target='new_file'))
@@ -1251,7 +1313,7 @@ def main():
         settings_mod.init_settings({'auto_create_file': True,
                                     'auto_create_extension': 'cpp',
                                     'auto_create_template': '#include <bits/stdc++.h>\n'})
-        _use_settings({'companion_port': port})
+        port = _arm()
         fake_sublime.active_window = lambda: window
         payload = json.dumps({
             'name': u'A. 两数之和', 'group': u'模拟赛',
@@ -1260,27 +1322,17 @@ def main():
             'tests': [{'input': '1 2\n', 'output': '3\n'},
                       {'input': '5 6\n', 'output': '11\n'}],
         }).encode('utf-8')
-        ack = b''
+        ack = 0
         post_status = []
-        saved_status_message = fake_sublime.status_message
         saved_packages_path = getattr(fake_sublime, 'packages_path', None)
+        saved_status_message = fake_sublime.status_message
         fake_sublime.packages_path = lambda: os.path.join(work_dir, 'Packages')
-
-        def _post(body, at_port):
-            import urllib.request as _url
-            response = _url.urlopen(_url.Request('http://localhost:%d/' % at_port,
-                                                 data=body), timeout=5)
-            try:
-                return response.read()
-            finally:
-                response.close()
-
         settings_mod.init_settings(dict(settings_mod.get_settings(),
                                        companion_debug_log=True))
         fake_sublime.status_message = lambda text=None, *a, **k: post_status.append(text)
         comp._start_listener(None, quiet=True)
         try:
-            ack = _post(payload, port)
+            ack = _post_at(payload, port)
         finally:
             comp._stop_listener()
             fake_sublime.status_message = saved_status_message
@@ -1291,7 +1343,7 @@ def main():
                     pass
             else:
                 fake_sublime.packages_path = saved_packages_path
-        check('the listener answers the extension with ok', ack == b'ok', repr(ack))
+        check('the listener answers a click with 200', ack == 200, repr(ack))
         posted = os.path.join(work_dir, u'A. 两数之和.cpp')
         check('the posted problem becomes a file named after its statement',
               os.path.exists(posted) and window.opened[-1] == posted,
@@ -1307,8 +1359,7 @@ def main():
               log_lines and any(u'A. 两数之和' in line and posted in line
                                 for line in log_lines), repr(log_lines[-1:]))
 
-        with open(posted, encoding='utf-8') as f:
-            posted_body = f.read()
+        posted_body = _read(posted)
         check('the created file opens with the statement header and the template',
               posted_body.startswith('//') and u'A. 两数之和' in posted_body
               and 'https://newoj.test/p/1' in posted_body
@@ -1338,9 +1389,10 @@ def main():
                                    'auto_create_extension': 'cpp',
                                    'auto_create_template': '#include <bits/stdc++.h>\n'})
         fake_sublime.active_window = lambda: window
+        port = _arm()
         comp._start_listener(None, quiet=True)
         try:
-            ack2 = _post(payload, port)
+            ack2 = _post_at(payload, port)
         finally:
             comp._stop_listener()
         lines_after = 0
@@ -1348,8 +1400,8 @@ def main():
             with io.open(log_path, encoding='utf-8') as f:
                 lines_after = len(f.read().splitlines())
         check('a second click on the same problem re-uses its file',
-              ack2 == b'ok' and sorted(os.listdir(work_dir)) == listing,
-              repr(sorted(os.listdir(work_dir))))
+              ack2 == 200 and sorted(os.listdir(work_dir)) == listing,
+              repr((ack2, sorted(os.listdir(work_dir)))))
         re_stored = []
         if os.path.exists(data_file):
             with io.open(data_file, encoding='utf-8') as f:
@@ -1372,20 +1424,6 @@ def main():
         #    click and a click that never left the browser looked identical from
         #    the outside - which is exactly how "I clicked, the log is empty"
         #    became undiagnosable.
-        def _post_code(headers, at_port):
-            import urllib.error as _err
-            import urllib.request as _url
-            request = _url.Request('http://localhost:%d/' % at_port,
-                                   data=payload, headers=headers)
-            try:
-                response = _url.urlopen(request, timeout=5)
-                try:
-                    return response.getcode()
-                finally:
-                    response.close()
-            except _err.HTTPError as error:
-                return error.code
-
         allowed = {'Host': 'localhost:12345',
                    'Origin': 'chrome-extension://ldaglennelkejdgjigfbaobdnmdo'}
         check('the extension itself is allowed to post',
@@ -1405,11 +1443,14 @@ def main():
                                    'companion_debug_log': True})
         saved_packages_path = getattr(fake_sublime, 'packages_path', None)
         fake_sublime.packages_path = lambda: os.path.join(work_dir, 'Packages')
+        port = _arm()
         comp._start_listener(None, quiet=True)
         codes = {}
         try:
-            codes['extension'] = _post_code({'Origin': 'chrome-extension://cafe-babe'}, port)
-            codes['webpage'] = _post_code({'Origin': 'https://evil.example'}, port)
+            codes['extension'] = _post_at(payload, port,
+                                          {'Origin': 'chrome-extension://cafe-babe'})
+            codes['webpage'] = _post_at(payload, port,
+                                         {'Origin': 'https://evil.example'})
         finally:
             comp._stop_listener()
             if saved_packages_path is None:
@@ -1447,6 +1488,7 @@ def main():
         settings_mod.init_settings({'auto_create_file': True,
                                    'auto_create_extension': 'cpp',
                                    'companion_target': 'new_file'})
+        port = _arm()
         comp._start_listener(None, quiet=True, target='current_file')
         check('a menu pick overrides the setting for the session',
               comp._target_mode() == 'current_file', comp._target_mode())
@@ -1455,6 +1497,26 @@ def main():
             comp._listener['target'] = None
         check('with no pick the setting rules again',
               comp._target_mode() == 'new_file', comp._target_mode())
+
+        # Pressing Ctrl+Alt+L inside a file has always meant "listen for THIS
+        # file". Filling it silently while the setting still reads new_file is
+        # exactly how a stale pin came to look like "creating a file is broken".
+        fake_sublime.windows = lambda: [_PinnedWindow(pinned_view)]
+        settings_mod.init_settings({'auto_create_file': True,
+                                   'auto_create_extension': 'cpp',
+                                   'companion_target': 'new_file'})
+        port = _arm()
+        comp._start_listener(pinned_view, quiet=True)
+        check('listening inside a file fills that file, whatever the setting says',
+              comp._target_mode() == 'current_file'
+              and comp._listener['view_id'] == pinned_view.id(),
+              repr((comp._target_mode(), comp._listener['view_id'], pinned_view.id())))
+        comp._start_listener(None, quiet=True, target='new_file')
+        check('picking new_file drops the pin instead of ignoring the pick',
+              comp._target_mode() == 'new_file' and comp._listener['view_id'] is None,
+              repr((comp._target_mode(), comp._listener['view_id'])))
+        comp._stop_listener()
+        fake_sublime.windows = lambda: []
     finally:
         _stop_and_reset()
         settings_mod.init_settings(saved_settings)

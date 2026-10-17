@@ -119,8 +119,11 @@ copy-paste reference if you want to change one.
    - `"new_file"`（默认）：按题面新建 `<题目名>.cpp` 并打开，顶部写几行注释
      （题名、来源链接、时间限制、空间限制），你的 `auto_create_template` 跟在后面。
      重名就打开已有那个再把样例并进去，不会越点越多。
-   - `"current_file"`：只把样例送到当前聚焦的源码文件，**绝不新建**（原本的行为）。
-   - 两种模式下，用 `Listen to Competitive Companion` 在某个文件里固定过的目标都优先。
+   - `"current_file"`：只把样例送到当前聚焦的源码文件，**绝不新建**（原本的行为）；
+     在某个文件里执行过 `Listen to Competitive Companion` 的，一律送到那个文件。
+   - `"new_file"` 模式下**固定目标不再生效**：一题一个文件就是这个模式的全部意思。
+     （以前它被固定项压住，于是"在 std.cpp 里开过监听"之后整个会话都只往那个文件送，
+     看起来就像新建功能完全没用——真实日志里出现过这个。）
 3. 之后照常自动运行一次，收到的时间/内存限制同时生效（`Ctrl+Alt+B` 也用得到）；
    状态栏这次会**写明样例落进了哪个文件**，不用猜。
 
@@ -132,9 +135,11 @@ copy-paste reference if you want to change one.
 不会顶掉你手工标记的答案。收到的时间/空间限制写在测试数据旁边的 `<文件名>__tests.limits`
 里，重启 Sublime 也不会丢。
 
-想固定监听某个文件，在里面执行一次 `Algorithm Competition Assistant: Listen to Competitive Companion`
-（幂等，不会重复起服务器或撞端口）；`Stop Competitive Companion listener` 随时停止，
-停止后要重新监听需再执行一次命令或重启 Sublime。
+想把样例收进某个特定文件，在里面执行一次 `Algorithm Competition Assistant: Listen to Competitive Companion`
+（`Ctrl+Alt+L`）——它同时把这个文件设为目标并切到 `current_file`，本会话内点击都送进它
+（幂等，不会重复起服务器或撞端口）。想再回到一题一文件，右键选 `... one new file per problem`
+即可，它会顺手解除固定。`Stop Competitive Companion listener` 随时停止，停止后目标与模式
+都清空，要重新监听需再执行一次命令或重启 Sublime。
 
 `companion_debug_log: true` 会把每次点击的判定过程（模式、样例数、限制、最后落到哪个文件
 或为什么被拒）追加到 `Data/Log/aca-companion.log`，用来回答"样例到底去哪了"；默认关。

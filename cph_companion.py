@@ -496,23 +496,21 @@ def _target_mode():
 def resolve_target(problem_name, url='', time_limit_ms=None, memory_limit_mb=None):
     """The view an incoming problem belongs to.
 
-    Order: the file the Listen command pinned - that is a deliberate
-    instruction about where samples go, so it outranks the mode - then what
-    companion_target says. Kept apart from the POST callback so the choice is
+    `new_file` creates a file per problem and ignores the pinned view: the pin
+    is a decision about *where samples go*, and letting it outrank the mode
+    meant that anyone who had ever run "Listen to Competitive Companion" in a
+    file - the documented way to use it, and the thing the log of a real
+    session shows - silently stopped creating files for the rest of the
+    session, which reads as "the new-file feature does not work at all".
+
+    `current_file` fills the pinned view, or the problem file under focus, and
+    never creates anything. Kept apart from the POST callback so the choice is
     testable on its own.
-
-    Two mistakes made "click the browser, get a problem file" impossible here.
-    `_start_listener()` refused an unsaved view while the creation branch only
-    ran for a target with no file name: those conditions exclude each other.
-    And once a focused-file lookup was added at the front, it always won - a
-    .cpp is focused during a whole contest - so creation was still unreachable
-    in the only situation that matters.
     """
-    pinned = _find_view(_listener.get('view_id'))
-    if pinned is not None and pinned.file_name():
-        return pinned
-
     if _target_mode() == _TARGET_CURRENT:
+        pinned = _find_view(_listener.get('view_id'))
+        if pinned is not None and pinned.file_name():
+            return pinned
         return _focused_source_view()
 
     arrival = _focused_view()
@@ -555,8 +553,19 @@ def _start_listener(view=None, quiet=False, target=None):
         _listener['view_id'] = view_id
         if target in (_TARGET_NEW, _TARGET_CURRENT):
             _listener['target'] = target
+            if target == _TARGET_NEW:
+                # A pick of "one new file per problem" is the more recent
+                # instruction: a pin left over from listening in some file
+                # would otherwise keep filling that file and look like the
+                # pick did nothing.
+                _listener['view_id'] = None
             sublime.status_message('Algorithm Competition Assistant: '
                                    'companion_target = %s' % target)
+        elif file_name:
+            # Running the plain command inside a file has always meant
+            # "listen for THIS file", so it fills that file for this session
+            # instead of pinning it under a mode that says otherwise.
+            _listener['target'] = _TARGET_CURRENT
         if _listener['server'] is not None:
             report(t('listener_retarget', file=label))
             return
@@ -565,7 +574,11 @@ def _start_listener(view=None, quiet=False, target=None):
             port = int(sublime.load_settings(settings_file)
                        .get('companion_port', 12345) or 12345)
             from http.server import HTTPServer
-            server = HTTPServer(('localhost', port), build_handler())
+            # Bind the loopback address, not the name: HTTPServer is IPv4, so
+            # "localhost" is a resolution lottery - a host whose resolver puts
+            # ::1 first would leave the listener on an address no browser can
+            # reach, and the doctor's probe would then call the port free.
+            server = HTTPServer(('127.0.0.1', port), build_handler())
         except Exception as e:
             report(t('listener_port_error', port=port, error=str(e)))
             return

@@ -172,7 +172,7 @@
 	// ================= Competitive Companion 自动建文件 =================
 	// companion_target = "new_file" 时按 <auto_create_dir>/<题目标题>.
 	// <auto_create_extension> 新建并打开；改成 false 就谁也不新建
-	// （此时样例只能送到聚焦的或已固定的目标文件）。
+	// （此时样例只能送到聚焦的或已固定的那个源码文件）。
 	// 新建的文件顶部会写几行注释：题名、来源链接、时间/空间限制。
 	// 只写插件自己新建的文件；已经在写的源码一个字都不会动。
 	"auto_create_file": true,
@@ -330,10 +330,12 @@
 	// 点一次扩展算什么：
 	//   "new_file"     — 每次按题面新建 <题目名>.cpp（同名就打开已有那个，
 	//                   再把样例并进去），一题一个文件，和 cph /
-	//                   FastOlympicCodingHook 一样
-	//   "current_file" — 只把样例送到你当前聚焦的源码文件，绝不新建
-	// 用 "Listen to Competitive Companion" 在某个文件里固定过目标时，
-	// 两种模式都先送到那个文件。
+	//                   FastOlympicCodingHook 一样；此模式下"固定目标"不生效
+	//   "current_file" — 只把样例送到你当前聚焦的源码文件，绝不新建；
+	//                   在里面执行过 "Listen to Competitive Companion" 的，
+	//                   一律送到那个文件
+	// 右键那两项监听入口就是这两个模式，选一次管本次会话，停止监听后回到
+	// 这里的设置值；选 "new file" 那项会顺手解除固定。
 	"companion_target": "new_file",
 	// 把每次点击的判定过程（模式、样例数、限制、落到哪个文件还是被拒）写到
 	// Data/Log/aca-companion.log。查"样例到底去哪了"时才需要开；默认关——

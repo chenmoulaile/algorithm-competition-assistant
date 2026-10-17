@@ -312,11 +312,14 @@ def _check_port(port):
 
 	Returns False both when another program holds it and when this plugin's
 	own listener is already running, so report that distinction upstream.
+	Binds 127.0.0.1 - the address the listener itself uses; going by the name
+	"localhost" would probe whichever family this host resolves first and
+	call the port free when the listener sits on the other one.
 	"""
 	import socket
 	sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 	try:
-		sock.bind(('localhost', port))
+		sock.bind(('127.0.0.1', port))
 		return True
 	except OSError:
 		return False
