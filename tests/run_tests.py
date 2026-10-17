@@ -1724,6 +1724,71 @@ def main():
         fake_sublime.error_message = saved_error_message
         shutil.rmtree(work_dir, ignore_errors=True)
 
+    print('== install layout: who is really loaded ==')
+    # Package Control reinstalled the package as a zip and emptied the folder
+    # install underneath a running developer (measured here: the folder was
+    # still there, completely empty, after a restart) - the symptom being
+    # "my changes do nothing", with no error anywhere.
+    inst = importlib.import_module(pkg + '.core.cph_install')
+    layout = _tf.mkdtemp()
+    pkgs = os.path.join(layout, 'Packages')
+    os.makedirs(pkgs)
+
+    def _write_folder(name, version):
+        folder = os.path.join(pkgs, name)
+        os.makedirs(folder)
+        with io.open(os.path.join(folder, 'plugin_init.py'), 'w',
+                     encoding='utf-8', newline='\n') as f:
+            f.write("VERSION = '%s'\n" % version)
+        with io.open(os.path.join(folder, 'cph_companion.py'), 'w',
+                     encoding='utf-8', newline='\n') as f:
+            f.write('# listener\n')
+        return folder
+
+    def _write_zip(name, version):
+        import zipfile
+        installed = os.path.join(layout, 'Installed Packages')
+        if not os.path.isdir(installed):
+            os.makedirs(installed)
+        path = os.path.join(installed, name + '.sublime-package')
+        with zipfile.ZipFile(path, 'w') as archive:
+            archive.writestr('plugin_init.py', "VERSION = '%s'\n" % version)
+            archive.writestr('cph_companion.py', '# listener\n')
+        return path
+
+    NAME = 'Algorithm Competition Assistant'
+    folder = _write_folder(NAME, '2.5.0')
+    check('a single folder install says nothing',
+          inst.describe_installs(pkgs, NAME, folder, '2.5.0') == [],
+          repr(inst.describe_installs(pkgs, NAME, folder, '2.5.0')))
+
+    zip_path = _write_zip(NAME, '2.4.12')
+    both = inst.describe_installs(pkgs, NAME, folder, '2.5.0')
+    check('two installs are reported with both versions',
+          len(both) == 1 and '2.5.0' in both[0] and '2.4.12' in both[0],
+          repr(both))
+
+    # now the damage: the folder emptied by a Package Control reinstall
+    for entry in os.listdir(folder):
+        os.remove(os.path.join(folder, entry))
+    emptied = inst.describe_installs(pkgs, NAME, zip_path, '2.4.12')
+    check('an emptied folder install is called out by name',
+          len(emptied) == 1 and 'EMPTY' in emptied[0], repr(emptied))
+    check('and the fix is in the message, not just the symptom',
+          emptied and 'installed_packages' in emptied[0], repr(emptied))
+
+    os.makedirs(os.path.join(pkgs, 'Other'))
+    check('another package installed as a zip says nothing about us',
+          inst.describe_installs(pkgs, 'Other',
+                                 os.path.join(pkgs, 'Other'), '1.0') == [])
+    check('the install mode names the shape the host actually loaded',
+          inst.install_mode(folder) == 'folder'
+          and inst.install_mode(zip_path) == 'zip'
+          and inst.install_mode(None) == 'folder',
+          repr([inst.install_mode(folder), inst.install_mode(zip_path)]))
+
+    shutil.rmtree(layout, ignore_errors=True)
+
     print('== static checks: the regressions that unit tests cannot reach ==')
     # 1. Every self.X() call must resolve inside its own class. This is the
     #    v1.4.5 bug: a helper was defined on CphViewTesterCommand but called

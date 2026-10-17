@@ -78,3 +78,21 @@ def _init():
         try_load_settings()
     except Exception as e:
         print('[Algorithm Competition Assistant] Error loading settings: %s' % str(e))
+
+    try:
+        # Say which install is actually running. Package Control has emptied
+        # the folder install under a running user before, and the only symptom
+        # was "my changes do nothing" - no error, because nothing was wrong
+        # with the code that was loaded, it was just not their code.
+        from .core.cph_install import describe_installs
+        from .core.cph_settings import package_name
+        from .core.cph_i18n import t
+        lines = describe_installs(sublime.packages_path(), package_name,
+                                  os.path.dirname(os.path.abspath(__file__)),
+                                  VERSION)
+        for line in lines:
+            print('[Algorithm Competition Assistant] ' + line)
+        if lines:
+            sublime.status_message('%s: %s' % (package_name, t('install_check_warn')))
+    except Exception as e:
+        print('[Algorithm Competition Assistant] install check failed: %s' % str(e))

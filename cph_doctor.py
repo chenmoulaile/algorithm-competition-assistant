@@ -307,6 +307,25 @@ def _check_command(cmd):
 	return (bool(found), found or exe)
 
 
+def _install_report():
+	"""(what is loaded, warnings) - which install the host actually runs.
+
+	A folder install emptied by a Package Control reinstall leaves no error
+	behind: the code that runs is simply not the code on disk, and the only
+	symptom is the user's own work appearing to do nothing.
+	"""
+	try:
+		from .core.cph_install import describe_installs, install_mode
+		from .core.cph_settings import package_name
+		root = os.path.dirname(os.path.abspath(__file__))
+		version = plugin_version() or '?'
+		summary = '%s %s' % (install_mode(root), version)
+		warn = describe_installs(sublime.packages_path(), package_name, root, version)
+		return summary, warn
+	except Exception:
+		return '?', []
+
+
 def _check_port(port):
 	"""True when we can bind the port.
 
@@ -408,6 +427,12 @@ class CphDoctorCommand(sublime_plugin.TextCommand):
 										  ' (listening)' if ours else ''))
 		if not free and not ours:
 			lines.append('         -> ' + t('doctor_port_busy'))
+		lines.append('')
+		install_summary, install_warnings = _install_report()
+		for line in install_warnings:
+			lines.append('    WARN %s' % line)
+		if not install_warnings:
+			lines.append('    ok   %s: %s' % (t('doctor_install'), install_summary))
 		lines.append('')
 
 		if file_name:

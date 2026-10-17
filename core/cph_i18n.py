@@ -652,6 +652,11 @@ STRINGS = {
         'zh': '监听未在运行',
         'en': 'Listener is not running',
     },
+    'install_check_warn': {
+        'zh': '安装形态异常：同时存在目录安装和 zip，或目录被清空（详情见控制台）',
+        'en': 'install layout is odd: a folder and a zip both exist, or the '
+              'folder is empty (see the console)',
+    },
     'listener_no_target': {
         'zh': '监听目标文件不存在或未保存',
         'en': 'Listener target missing or unsaved',
@@ -900,6 +905,10 @@ STRINGS = {
     'doctor_fix_path': {
         'zh': '找不到 {name}，请确认它在 PATH 中或改用绝对路径',
         'en': '{name} not found - add it to PATH or use an absolute path',
+    },
+    'doctor_install': {
+        'zh': '安装形态',
+        'en': 'install layout',
     },
     'doctor_port': {
         'zh': 'Companion 端口',
