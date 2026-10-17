@@ -345,7 +345,7 @@
 				"key": "selector",
 				"operator": "equal",
 				"match_all": false,
-				"operand": "source.c++, source.c, source.python, source.java, source.TestSyntax"
+				"operand": "source.c++, source.c, source.python, source.java, source.rust, source.go, source.pascal, source.js, source.TestSyntax"
 			},
 			{
 				"key": "cph_keybindings_enabled",
@@ -364,7 +364,7 @@
 				"key": "selector",
 				"operator": "equal",
 				"match_all": false,
-				"operand": "source.c++, source.c, source.python, source.java, source.TestSyntax"
+				"operand": "source.c++, source.c, source.python, source.java, source.rust, source.go, source.pascal, source.js, source.TestSyntax"
 			},
 			{
 				"key": "cph_keybindings_enabled",
@@ -383,7 +383,7 @@
 				"key": "selector",
 				"operator": "equal",
 				"match_all": false,
-				"operand": "source.c++, source.c, source.python, source.java, source.TestSyntax"
+				"operand": "source.c++, source.c, source.python, source.java, source.rust, source.go, source.pascal, source.js, source.TestSyntax"
 			},
 			{
 				"key": "cph_keybindings_enabled",
@@ -402,7 +402,7 @@
 				"key": "selector",
 				"operator": "equal",
 				"match_all": false,
-				"operand": "source.c++, source.c, source.python, source.java, source.TestSyntax"
+				"operand": "source.c++, source.c, source.python, source.java, source.rust, source.go, source.pascal, source.js, source.TestSyntax"
 			},
 			{
 				"key": "cph_keybindings_enabled",
@@ -421,7 +421,7 @@
 				"key": "selector",
 				"operator": "equal",
 				"match_all": false,
-				"operand": "source.c++, source.c, source.python, source.java, source.TestSyntax"
+				"operand": "source.c++, source.c, source.python, source.java, source.rust, source.go, source.pascal, source.js, source.TestSyntax"
 			},
 			{
 				"key": "cph_keybindings_enabled",
@@ -440,7 +440,26 @@
 				"key": "selector",
 				"operator": "equal",
 				"match_all": false,
-				"operand": "source.c++, source.c, source.python, source.java, source.TestSyntax"
+				"operand": "source.c++, source.c, source.python, source.java, source.rust, source.go, source.pascal, source.js, source.TestSyntax"
+			},
+			{
+				"key": "cph_keybindings_enabled",
+				"operator": "equal",
+				"operand": true
+			}
+		]
+	},
+	{
+		"keys": [
+			"ctrl+alt+e"
+		],
+		"command": "cph_export_tests",
+		"context": [
+			{
+				"key": "selector",
+				"operator": "equal",
+				"match_all": false,
+				"operand": "source.c++, source.c, source.python, source.java, source.rust, source.go, source.pascal, source.js, source.TestSyntax"
 			},
 			{
 				"key": "cph_keybindings_enabled",
@@ -459,7 +478,7 @@
 				"key": "selector",
 				"operator": "equal",
 				"match_all": false,
-				"operand": "source.c++, source.c, source.python, source.java, source.TestSyntax"
+				"operand": "source.c++, source.c, source.python, source.java, source.rust, source.go, source.pascal, source.js, source.TestSyntax"
 			},
 			{
 				"key": "cph_keybindings_enabled",
@@ -478,7 +497,7 @@
 				"key": "selector",
 				"operator": "equal",
 				"match_all": false,
-				"operand": "source.c++, source.c, source.python, source.java, source.TestSyntax"
+				"operand": "source.c++, source.c, source.python, source.java, source.rust, source.go, source.pascal, source.js, source.TestSyntax"
 			},
 			{
 				"key": "cph_keybindings_enabled",

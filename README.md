@@ -28,8 +28,9 @@ verdict display rebuilt after VSCode's [cph-ng](https://github.com/langningchen/
 - **Stress test** against a generator and a reference solution; a counterexample is saved as a test.
 - Chinese / English UI (`language` setting).
 
-**Getting started**: open a source file, then use `Ctrl+Shift+P` → `cph` (every command is in the
-command palette) or the `View → Algorithm Competition Assistant` menu. The default `run_settings` cover C++ (`g++`,
+**Getting started**: open a source file, then use `Ctrl+Shift+P` → `Algorithm` (every command is in the
+command palette under `Algorithm Competition Assistant: ...`; the `cph_*` names are command ids, not
+palette text) or the `View → Algorithm Competition Assistant` menu. The default `run_settings` cover C++ (`g++`,
 `-std=c++17 -O2`), Python, Java, C, Rust, Go, Pascal and JavaScript (Node.js) — edit them under
 `Preferences → Package Settings → Algorithm Competition Assistant → Settings` to match your toolchain (the compiler has
 to be on `PATH`; the *Check environment (doctor)* command reports anything that is missing).
@@ -38,9 +39,10 @@ correct program gets reported as TLE.
 
 **Key bindings**: the bindings live in this package's own `Default (<platform>).sublime-keymap`, so
 they load with the package and are released again when you disable or uninstall it — nothing is ever
-written into your personal keymap. Set `"enable_keybindings": false` to release the keys without
-editing any keymap. `Example (Windows|Linux|OSX).sublime-keymap` holds the same entries as a
-copy-paste reference if you want to change one.
+written into your personal keymap. The names are literal on every platform: `Ctrl+Alt+B` means
+Control+Option+B on macOS too (no `super+` binding ships). Set `"enable_keybindings": false` to release the keys without
+editing any keymap. To change one, `View -> Algorithm Competition Assistant -> Key Bindings`
+opens the package keymap beside your own override, so you can copy the entry and edit the keys.
 
 **Context menu**: entries only appear for the file types listed in `run_settings`; set
 `"context_menu": false` to hide them completely. Nothing is added to other menus.
@@ -224,30 +226,39 @@ copy-paste reference if you want to change one.
 
 ## 安装
 
-**推荐：Package Control（已收录进官方市场）**
-
-1. `Ctrl+Shift+P` → `Package Control: Install Package`
-2. 搜 `Algorithm Competition Assistant` 回车
-
-装完即生效，无需重启。日后升级用 `Package Control: Upgrade Package`。
-注意它会以 `Installed Packages/Algorithm Competition Assistant.sublime-package`（zip）的形式安装，
-而不是一个独立文件夹——这是 Package Control 的默认打包方式，v2.4.11 之前该形式下所有资源路径都是坏的。
-
-**手动安装**
+**推荐：直接把仓库文件夹放进 `Packages`（文件夹安装）**
 
 1. 克隆或下载本仓库（`chenmoulaile/algorithm-competition-assistant`）
 2. 把仓库文件夹放进 Sublime Text 的 `Packages` 目录，目录名随你——v2.4.11 起路径按插件真实所在目录
    （或 zip 名）推导并去掉 `.sublime-package` 后缀，所以叫什么都一样；数据文件名也保持不变
 3. 重启 Sublime Text
 
-⚠️ 两种方式**不要同时用**：`Packages/` 下放着一份源码、`Installed Packages/` 下又有一个同名 zip，
-Sublime 会把两份都当插件加载，命令与快捷键会重复注册。用 Package Control 装的话，请把源码检出目录
-移出 `Packages/`（放到别处当开发用即可）。
+放完就是全部——`Packages/Algorithm Competition Assistant` 这个文件夹**就是**插件本身。
+改一个 `.py` 保存，Sublime 会自己重新加载那个模块，不用重启；只有菜单、快捷键、设置这些 JSON
+要重启才生效。
+
+**Package Control（已收录进官方市场）**
+
+1. `Ctrl+Shift+P` → `Package Control: Install Package`
+2. 搜 `Algorithm Competition Assistant` 回车
+
+装完即生效，无需重启，日后升级用 `Package Control: Upgrade Package`。
+
+⚠️ 两种方式**不要同时用**，而且这里有个坑值得单独讲：Package Control 装的是
+`Installed Packages/…sublime-package`（zip）。如果 `Packages/` 下同时有一个同名文件夹，
+安装/升级 zip 版的那一步会把**那个文件夹清空**——v2.5.0 之前这件事发生的时候一点动静都没有，
+症状是"我改了代码、重启，什么都没变"，而 `Packages/Algorithm Competition Assistant` 只剩一个
+空目录（实测：目录还在，创建时间是一次重启之后，内容 0 个文件）。
+现在启动时会打印并状态栏提示"检测到两份安装 / 目录已被清空"，环境自检（`Ctrl+Alt+D`）也写明当前
+加载的是 `folder` 还是 `zip`、版本号是多少。
+
+想用 Package Control 的自动升级，就让它只有一份：把源码检出目录移出 `Packages/`（放别处当开发用即可）。
+自己维护一份、要改了立刻生效，就用文件夹安装，别装 Package Control 的那份。
 
 ## 使用方法
 
 1. 打开 C++ 源文件
-2. 按 `Ctrl+Alt+B`（Mac：`Cmd+Alt+B`）启动测评
+2. 按 `Ctrl+Alt+B` 启动测评
 3. 右侧打开测试运行窗口，可输入/编辑测试数据
 4. 测评结束后每个测试点显示 verdict 徽章
 5. 点 `详情` 看带逐行 diff 的详情页；点 `编辑` 打开输入（`test N -edit`）与标准答案（`test N -answer`）两个标签页，在答案页填好预期输出后 `save` 即可自动重新评判
@@ -305,27 +316,29 @@ Sublime 会把两份都当插件加载，命令与快捷键会重复注册。用
 > 所以禁用或卸载本插件时，这些按键会自动还给其它插件，不会留下"占着键位却没人响应"的死绑定。
 >
 > - 想临时让出键位：设置 `"enable_keybindings": false`，不用改任何 keymap。
-> - 想改某一个键：在 `Preferences → Key Bindings` 里覆盖同一条即可
->   （`Example (<你的平台>).sublime-keymap` 里有同样的条目可以直接抄）。
+> - 想改某一个键：`View → Algorithm Competition Assistant → Key Bindings`
+>   会左右分屏打开包内 keymap 和你对它的覆盖，照抄那一条改按键名即可。
+>   同一条绑定在两边同时存在时，**你这一侧赢**。
 >
-> 下表里的按键就是随包默认生效的绑定（macOS 上 `Ctrl+Alt` 对应 `Cmd+Alt`）。
+> 下表就是三个平台随包默认生效的绑定：`Ctrl` 与 `Alt` 都按字面算，
+> macOS 上是 **Control + Option**（不是 Cmd），包内 keymap 里没有一条 `super+`。
 > 面板内的 `Enter / Ctrl+V / Ctrl+D …` 只在本插件的测试编辑/详情视图里生效。
 
 | 按键 | 功能 |
 | --- | --- |
-| `Ctrl+Alt+B` (Mac: `Cmd+Alt+B`) | 运行测试 |
-| `Ctrl+Alt+I` (Mac: `Cmd+Alt+I`) | 从文件导入测试 |
-| `Ctrl+Alt+S` (Mac: `Cmd+Alt+S`) | 开始对拍（对拍输出页上也按它 = 重新跑该文件的这场对拍） |
-| `Ctrl+Alt+Shift+S` (Mac: `Cmd+Alt+Shift+S`) | 停止对拍，**只在对拍输出页生效**；多个文件同时对拍时停的是当前页这一场 |
-| `Ctrl+Alt+L` (Mac 同键) | 监听 Competitive Companion：**一题一个新文件**，不自动跑样例 |
-| `Ctrl+Alt+F` (Mac 同键) | 监听 Competitive Companion：样例送进**当前文件**并立刻跑一遍 |
-| `Ctrl+Alt+Shift+L` (Mac 同键) | 停止 Competitive Companion 监听 |
-| `Ctrl+Alt+P` 或 `Ctrl+K, Ctrl+P` (Mac: `Cmd+Alt+P` 或 `Cmd+K, Cmd+P`) | 收缩 / 恢复右侧测试面板 |
-| `Ctrl+Alt+T` (Mac: `Cmd+Alt+T`) | 展开模板片段（光标停在关键字后，如 `fastio`） |
-| `Ctrl+Alt+V` (Mac: `Cmd+Alt+V`) | 用剪贴板内容新增测试点（`输入 --- 输出` 可同时带答案） |
+| `Ctrl+Alt+B` | 运行测试 |
+| `Ctrl+Alt+I` | 从文件导入测试 |
+| `Ctrl+Alt+S` | 开始对拍（对拍输出页上也按它 = 重新跑该文件的这场对拍） |
+| `Ctrl+Alt+Shift+S` | 停止对拍，**只在对拍输出页生效**；多个文件同时对拍时停的是当前页这一场 |
+| `Ctrl+Alt+L` | 监听 Competitive Companion：**一题一个新文件**，不自动跑样例 |
+| `Ctrl+Alt+F` | 监听 Competitive Companion：样例送进**当前文件**并立刻跑一遍 |
+| `Ctrl+Alt+Shift+L` | 停止 Competitive Companion 监听 |
+| `Ctrl+Alt+P` 或 `Ctrl+K, Ctrl+P` | 收缩 / 恢复右侧测试面板 |
+| `Ctrl+Alt+T` | 展开模板片段（光标停在关键字后，如 `fastio`） |
+| `Ctrl+Alt+V` | 用剪贴板内容新增测试点（`输入 --- 输出` 可同时带答案） |
 | `Ctrl+Alt+C` / `Ctrl+Alt+Shift+C` | 复制当前测试的 预期输出 / 实际输出 |
-| `Ctrl+Alt+E` (Mac: `Cmd+Alt+E`) | 把全部测试导出成 `1.in` / `1.out` 文件对 |
-| `Ctrl+Alt+R` (Mac: `Cmd+Alt+R`) | 只重跑失败的测试点（已 AC 的自动跳过） |
+| `Ctrl+Alt+E` | 把全部测试导出成 `1.in` / `1.out` 文件对 |
+| `Ctrl+Alt+R` | 只重跑失败的测试点（已 AC 的自动跳过） |
 | `Ctrl+Alt+Shift+B` | 跑完全部测试点（不因失败中断） |
 | `Ctrl+Alt+Shift+P` | **并行**跑完全部测试点（多进程，TLE 多时总时长约 1/4） |
 | `Ctrl+Alt+Shift+F` | 从题目 URL 抓题：样例变测试点（可同时打开题面） |
@@ -333,15 +346,31 @@ Sublime 会把两份都当插件加载，命令与快捷键会重复注册。用
 | `Ctrl+Alt+Shift+K` | Benchmark 当前测试点（跑 N 次报最快/平均/最慢） |
 | `Ctrl+Alt+Shift+T` | 比赛计时器（状态栏倒计时，可停止） |
 | `Ctrl+Alt+Shift+R` | 强制重新编译后运行（忽略编译缓存） |
-| `Ctrl+Alt+G` (Mac: `Cmd+Alt+G`) | 切换 Debug / Release 编译模式（状态栏显示当前模式） |
-| `Ctrl+Alt+D` (Mac: `Cmd+Alt+D`) | 环境自检（编译器 / 端口 / 路径 / 资源） |
-| `Ctrl+Alt+M` (Mac: `Cmd+Alt+M`) | 键盘选择测试点并运行 / 详情 / 编辑（不用鼠标） |
+| `Ctrl+Alt+G` | 切换 Debug / Release 编译模式（状态栏显示当前模式） |
+| `Ctrl+Alt+D` | 环境自检（编译器 / 端口 / 路径 / 资源） |
+| `Ctrl+Alt+M` | 键盘选择测试点并运行 / 详情 / 编辑（不用鼠标） |
 | `Enter` (在 TestSyntax 中) | 插入行 |
 | `Ctrl+Enter` (在 TestSyntax 中) | 新建测试 |
 | `Ctrl+V` / `Cmd+V` (在 TestSyntax 中) | 粘贴 |
 | `Ctrl+X` / `Cmd+X` (在 TestSyntax 中) | 终止进程 |
 | `Ctrl+D` / `Cmd+D` (在 TestSyntax 中) | 删除测试 |
 | `Ctrl+Shift+Up/Down` (在 TestSyntax 中) | 交换测试顺序 |
+
+## 设置面板（改开关不用开 JSON）
+
+赛前最常切的几个开关原来只能改设置文件：打开 JSON、找到键、改字符串或布尔、保存。
+现在这三个面板各一屏就能改完，而且**改完立刻生效**（它们都是每次使用时现读的）：
+
+| 命令面板 / View 菜单 | 管什么 |
+| --- | --- |
+| `Verdict rules` / 判定口径 | 浮点容差、PE 当 AC、第一个失败就停、判定时忽略 stderr |
+| `Stress test options` / 对拍设置 | `std`/`gen` 从哪来、挑文件用原生选择器还是快速面板、反例是否存成测试点、最大轮数、每轮时限 |
+| `Competitive Companion options` / 监听设置 | 一次点击送到"一题一个新文件"还是"当前文件并跑一遍"、启动是否自动监听、是否记录点击日志、打开日志 |
+
+- 浮点容差那行按下去是要你输入一个数（默认给 `1e-6`），不是开关；输入不是数字就保持原值并告诉你。
+- `companion_auto_listen` 是面板上唯一**要下次启动监听才生效**的一项（端口同理，
+  它只在启动监听时读一次，所以不在面板里）；面板那一行直接写了"下次启动生效"。
+- 面板写的就是设置文件里那几个键，两边看到的是同一份数据，不存在"面板改了、JSON 没变"。
 
 ## 对拍 (Stress Test) 教程
 
@@ -372,7 +401,7 @@ int main() {
 
 - 菜单：`View` → `Algorithm Competition Assistant` → `Start stress test`
 - 命令面板：`Algorithm Competition Assistant: Start stress test`
-- 快捷键：`Ctrl+Alt+S` (Mac: `Cmd+Alt+S`)
+- 快捷键：`Ctrl+Alt+S`
 
 **正解和生成器从哪来由 `stress_file_source` 决定，三种都写在设置注释里：**
 

@@ -132,6 +132,15 @@
 		"command": "cph_export_tests"
 	},
 	{
+		"command": "cph_verdict_mode"
+	},
+	{
+		"command": "cph_stress_options"
+	},
+	{
+		"command": "cph_companion_options"
+	},
+	{
 		"caption": "Algorithm Competition Assistant: Check environment (doctor)",
 		"command": "cph_doctor"
 	},
@@ -144,7 +153,6 @@
 		"command": "cph_test_menu"
 	},
 	{
-		"caption": "Algorithm Competition Assistant: Toggle Debug / Release build mode",
 		"command": "cph_toggle_build_mode"
 	},
 	{

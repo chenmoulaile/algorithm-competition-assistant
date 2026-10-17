@@ -1,0 +1,85 @@
+Algorithm Competition Assistant 2.5.0
+======================================
+
+Two things ate the time you did not have: waiting, and opening a JSON file to flip
+one switch. Both are measured and fixed here.
+
+* What "slow" actually was
+
+  Compiled his own way, on this machine: g++ release build 1.44 s, debug build
+  1.74 s, the plugin's own cost 11 ms per test point (130 ms for the first run of
+  a freshly written exe), a point that hits the limit costs the limit itself
+  (2081 ms). Waiting tens of seconds = waiting x how many stored samples the run
+  walks. So the compiler was never the problem - drawing the cards was.
+
+  A chain step used to rebuild EVERY card: with 24 samples and 78 KB of output
+  each, 1.5 ms per step -> 0.04 ms, and a 60-sample chain 94.8 ms -> 1.5 ms. The
+  whitespace squash is memoised (capped at 4 MB, because the cached strings are
+  the program's own output), the test file used to be serialised and rewritten
+  after every single sample and is now flushed at most every 250 ms plus once at
+  the chain end, and the compile closure no longer touches views on Sublime's one
+  shared async worker - which is why a Run could freeze unrelated plugins.
+
+* Three option panels, no more JSON hunting
+
+  `Verdict rules` (float tolerance, PE as AC, stop at first failure, ignore
+  stderr), `Stress test options` (where std/gen come from, which picker, save the
+  counterexample, rounds, per-round limit) and `Competitive Companion options`
+  (where a click sends samples, auto-listen, click log, open the log). They write
+  the same keys the settings file has, live, and the palette name comes from
+  `description()` so it follows the `language` setting. Only "listen when Sublime
+  starts" needs the next start, and that row says so.
+
+* Keys: what you were told to press now works
+
+  `Ctrl+Alt+E` (export tests) was in the README and not in the package keymap -
+  it is bound now, on all three platforms. And the "any supported source file"
+  bindings listed four languages while `run_settings` ships eight, so Rust, Go,
+  Pascal and JavaScript never had a single working shortcut; a static check now
+  fails the build if a multi-language binding forgets a supported language. The
+  three `Example (<platform>).sublime-keymap` copies are gone - they were a second
+  copy of the same bindings and had already drifted.
+
+  `"enable_keybindings": false` claimed to release every package binding. Stop
+  stress, stop listener and collapse panel looked only at state, not at the
+  setting; the gate is now one place in the context listener, and every key is
+  tested on both sides of the switch.
+
+* "Restarting Sublime deleted my folder"
+
+  It did: Package Control empties the folder install under a running user when it
+  reinstalls the package as a zip. Nothing said so, and the only symptom was "I
+  changed the code, restarted, nothing happened". Startup and the doctor now
+  report which install is loaded - folder or zip, and which version. README says
+  plainly: folder install to edit and reload, Package Control to auto-upgrade,
+  never both.
+
+* Stress setup, and a picker that is not blurry
+
+  `stress_file_source` = `pick_once` (asks once per source file, native dialog
+  starting in that file's folder, remembered beside the test data), `same_dir`
+  (never asks; best-named std and generator next to the source, and it tells you
+  which folder it searched before falling back), or `auto` (previous behaviour).
+  The pair actually chosen is printed at start. The PowerShell picker declared no
+  DPI awareness, so Windows drew it at 100% and stretched it; it now asks for
+  Per-Monitor V2 before any window exists, with the older APIs as fallbacks.
+
+* Honest documentation
+
+  The macOS rows said `Cmd+Alt+B`: no `super+` binding ships, so it is literally
+  Control+Option on every platform. The palette token is `Algorithm`, not `cph`.
+  `contest_duration_minutes` never auto-started from the listener and never will -
+  a contest clock runs from the scheduled start, not from the first sample that
+  landed - so it is now simply the default in the countdown box, where 0 means
+  "make me type it" (the old `or 120` silently swallowed 0).
+
+Deleted: three example keymaps, a `stress_running` flag with no reader, four
+context keys no binding asks any more, and several dead setters on `Test` and the
+run panel. Nothing lost a caller.
+
+Deliberately NOT done: folding the output pump into ~40 ms windows, and moving the
+gdb replay / checker verdict off the main thread. Both are real wins, both change
+when text appears on screen, and that is not something to decide from a regression
+suite alone - it needs someone playing a real contest.
+
+Regression suite: 647 -> 716 checks. Full notes: RELEASE_NOTES_CN.md.

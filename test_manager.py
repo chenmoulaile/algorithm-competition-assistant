@@ -383,7 +383,6 @@ def estimate_card_width_px(view, with_memory=False):
 
 class CphTestManagerCommand(sublime_plugin.TextCommand):
 	REGION_BEGIN_KEY = 'test_begin_%d'
-	REGION_OUT_KEY = 'test_out_%d'
 	REGION_END_KEY = 'test_end_%d'
 	# Built from package_name (the name Sublime addresses this package by, with
 	# any .sublime-package suffix removed) rather than a hardcoded name: the two
@@ -417,7 +416,6 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		self.delta_input = 0
 		self.tester = None
 		self.session = None
-		self.phantoms = PhantomSet(view, 'test-phantoms')
 		self.test_phantoms = [PhantomSet(view, 'test-phantoms-' + str(i)) for i in range(10)]
 		self.summary_phantom = PhantomSet(view, 'cph-summary-phantom')
 		# Panel auto-fit scheduling state (see schedule_auto_fit_panel_width).
@@ -533,10 +531,6 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		def append_string(self, s):
 			self.test_string += s
 
-		def set_inner_range(self, start, end):
-			self.start = start
-			self.end = end
-
 		def set_tie_pos(self, pos):
 			self.tie_pos = pos
 
@@ -581,15 +575,6 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 		def set_expected_output(self, expected):
 			self.expected_output = expected
-
-		def set_message(self, message):
-			self.message = message
-
-		def set_time_limit(self, time_ms):
-			self.time_limit_ms = time_ms
-
-		def set_memory_limit(self, mem_mb):
-			self.memory_limit_mb = mem_mb
 
 		def get_nice_runtime(self):
 			runtime = self.runtime
@@ -878,6 +863,12 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				self._clock_start = time()
 
 		def run_generation(self):
+			"""The current run generation.
+
+			Not used by the shipped code - it is how the regression suite can
+			assert the guard that stops a killed thread from an older run from
+			writing over the new one, without reaching into a private name.
+			"""
 			return self._active_gen
 
 		def __on_stop(self, rtcode, runtime=-1, crash_line=None, gen=None):
@@ -1204,11 +1195,6 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			self.on_status_change('COMPILING')
 			sublime.set_timeout_async(compile_worker, 10)
 
-		def have_pretests(self):
-			n = self.test_iter
-			tests = self.tests
-			return n < len(tests)
-
 		def get_tests(self):
 			return self.tests
 
@@ -1247,9 +1233,6 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				return None
 			tests[nth].remove_correct_answer(outs[nth].rstrip().lstrip())
 			tests[nth].add_uncorrect_answer(outs[nth].rstrip().lstrip())
-
-		def check_test(self, nth):
-			return self.tests[nth].is_correct_answer(self.output_at(nth))
 
 		def terminate(self):
 			self.process_manager.terminate()
@@ -2854,7 +2837,6 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		v.run_command('cph_test_manager', {'action': 'erase_all'})
 		v.sel().clear()
 		v.sel().add(Region(v.size(), v.size()))
-		self.phantoms.update([])
 		for phs in self.test_phantoms:
 			phs.update([])
 		if self.tester:
@@ -2862,8 +2844,6 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			for i in range(-1, self.tester.test_iter + 1):
 				v.erase_regions(self.REGION_BEGIN_KEY % i)
 				v.erase_regions(self.REGION_END_KEY % i)
-				v.erase_regions('line_%d' % i)
-				v.erase_regions('test_error_%d' % i)
 
 	def set_compile_bar(self, cmd, type='', chip_text=None):
 		view = self.view

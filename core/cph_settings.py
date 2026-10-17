@@ -270,6 +270,16 @@ def get_problem_limits(file_name):
 	return limits or {}
 
 
+def companion_log_path():
+	"""Where companion_debug_log appends to: <Data>/Log/aca-companion.log.
+
+	One function because both the writer and the panel that opens the file
+	need the same answer, and neither should re-derive it from packages_path().
+	"""
+	return os.path.join(os.path.dirname(sublime.packages_path()), 'Log',
+						'aca-companion.log')
+
+
 def get_tests_file_suffix():
 	return get_settings().get('tests_file_suffix', tests_file_suffix_default)
 

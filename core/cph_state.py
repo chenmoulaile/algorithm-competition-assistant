@@ -8,9 +8,7 @@
 这里只放"当前是否正在做什么"这类瞬时标志，不放用户设置（那属于 cph_settings）。
 """
 
-# 对拍是否正在运行（cph_stress 写，快捷键上下文读）
 state = {
-	'stress_running': False,
 	# 对拍输出页注册表：view id -> {'user_file': 被测源文件}
 	# 多个文件可同时对拍，每个输出页一个会话；快捷键上下文靠它判断
 	# "当前视图是不是对拍页"。
@@ -33,14 +31,6 @@ def set_plugin_version(version):
 def plugin_version():
 	"""The build this host actually loaded, or '' before it was recorded."""
 	return state.get('plugin_version') or ''
-
-
-def set_stress_running(running):
-	state['stress_running'] = bool(running)
-
-
-def is_stress_running():
-	return bool(state.get('stress_running'))
 
 
 def register_stress_view(view_id, user_file=None):

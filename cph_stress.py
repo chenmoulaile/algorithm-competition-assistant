@@ -18,8 +18,7 @@ from .core.cph_settings import (get_settings, load_all_tests, save_tests,
                                 PACKAGE_NAME, settings_file)
 from .core.cph_stats import record_stress
 from .core.cph_tests_merge import merge_tests
-from .core.cph_state import (set_stress_running, register_stress_view,
-                             unregister_stress_view)
+from .core.cph_state import register_stress_view, unregister_stress_view
 from .core.cph_target import context_menu_enabled, visible as context_menu_visible
 from .core.cph_i18n import t
 from .core.cph_verdict import normalize_lines, outputs_equal
@@ -40,11 +39,6 @@ class _Aborted(Exception):
 # files can be stress tested at the same time; each gets its own page, its
 # own scratch build directory and its own Stop.
 _sessions = {}
-
-
-def _sync_stress_state():
-    """Mirror 'any session running' into the shared state (keybindings)."""
-    set_stress_running(any(s['running'] for s in _sessions.values()))
 
 
 def _new_session(user_file, std_file, gen_file, time_limit, max_rounds,
@@ -72,7 +66,6 @@ def _new_session(user_file, std_file, gen_file, time_limit, max_rounds,
     if view_id is not None:
         _sessions[view_id] = sess
         register_stress_view(view_id, user_file=user_file)
-    _sync_stress_state()
     return sess
 
 
@@ -1462,7 +1455,6 @@ def _run_stress_loop(sess):
 def _stop_stress(sess):
     sess['running'] = False
     sess['stop_requested'] = False
-    _sync_stress_state()
 
 
 def _append_stress(sess, text):
@@ -1668,7 +1660,6 @@ class CphStressEvents(sublime_plugin.EventListener):
         if sess is None:
             return
         unregister_stress_view(view.id())
-        _sync_stress_state()
         if sess['running']:
             sess['stop_requested'] = True
             proc = sess.get('current_proc')

@@ -180,6 +180,14 @@ def _install_fake_sublime():
     sublime.DRAW_EMPTY_AS_OVERWRITE = 0
 
     sublime.platform = lambda: 'linux'
+    # Context operators, same values as the real API: cph_context compares the
+    # operator it was handed against these.
+    sublime.OP_EQUAL = 0
+    sublime.OP_NOT_EQUAL = 1
+    sublime.OP_GREATER_THAN = 2
+    sublime.OP_LESS_THAN = 3
+    sublime.OP_REGEX_MATCH = 4
+    sublime.OP_REGEX_NOT_MATCH = 5
     sublime.status_message = lambda *a, **k: None
     sublime.error_message = lambda *a, **k: None
     sublime.ok_cancel_dialog = lambda *a, **k: True
@@ -188,6 +196,12 @@ def _install_fake_sublime():
     sublime.set_timeout_async = lambda fn, delay=0: None
     sublime.windows = lambda: []
     sublime.active_window = lambda: None
+    # Real Sublime always answers these; the click log and the panel that opens
+    # it both derive their path from packages_path(). Tests that need a live
+    # Data directory still override them for their own duration.
+    sublime.packages_path = lambda: os.path.join(os.path.dirname(ROOT), 'Packages')
+    sublime.installed_packages_path = lambda: os.path.join(
+        os.path.dirname(ROOT), 'Installed Packages')
     sublime.get_clipboard = lambda: ''
     sublime.set_clipboard = lambda text: None
     sublime.load_settings = lambda name: Settings({})
@@ -222,7 +236,20 @@ def _install_fake_sublime():
             return True
 
     sublime_plugin.TextCommand = _Command
-    sublime_plugin.WindowCommand = _Command
+
+    class _WindowCommand(_Command):
+        """A WindowCommand is handed a window, not a view."""
+
+        def __init__(self, window=None):
+            self.window = window
+
+        def is_enabled(self, *a, **k):
+            return True
+
+        def is_visible(self, *a, **k):
+            return True
+
+    sublime_plugin.WindowCommand = _WindowCommand
     sublime_plugin.ApplicationCommand = _Command
     sublime_plugin.EventListener = object
     sys.modules['sublime_plugin'] = sublime_plugin
@@ -427,6 +454,17 @@ def _i18n_usage():
             if isinstance(a0, ast.Constant) and isinstance(a0.value, str):
                 used.add(a0.value)
     return keys, used
+
+
+def _palette_entry(palette_text, command):
+    """The Default.sublime-commands object that registers `command`, or None."""
+    needle = '"command": "%s"' % command
+    if needle not in palette_text:
+        return None
+    i = palette_text.index(needle)
+    start = palette_text.rindex('{', 0, i)
+    end = palette_text.index('}', i)
+    return palette_text[start:end + 1]
 
 
 # ------------------------------------------------------------------ test rig
@@ -1860,6 +1898,175 @@ def main():
     finally:
         tm.save_tests = real_save
 
+    print('== settings panels: the JSON-only switches, one keystroke away ==')
+    opts = importlib.import_module(pkg + '.cph_options')
+    store = fake_sublime.Settings({})
+    saved_load = fake_sublime.load_settings
+    saved_save = fake_sublime.save_settings
+    writes = []
+    sfile = 'Algorithm Competition Assistant.sublime-settings'
+    fake_sublime.load_settings = lambda name: store
+    fake_sublime.save_settings = lambda name: writes.append(name)
+
+    class _PanelWindow(object):
+        def __init__(self):
+            self.panels = []
+            self.prompts = []
+            self.opened = []
+            self.status = []
+
+        def show_quick_panel(self, items, on_select, *a, **k):
+            self.panels.append((list(items), on_select))
+
+        def show_input_panel(self, caption, initial, on_done, *a):
+            self.prompts.append((caption, initial, on_done))
+
+        def open_file(self, path):
+            self.opened.append(path)
+
+        def status_message(self, text=None, *a, **k):
+            self.status.append(text)
+
+    try:
+        win = _PanelWindow()
+        opts.CphVerdictModeCommand(win).run()
+        items, choose = win.panels[-1]
+        # compared through t(), not against a literal: the panel answers in the
+        # configured language, and a hard-coded 'off' made this a test of the
+        # suite's own locale.
+        check('the verdict panel lists all four rules with their live values',
+              len(items) == 4 and items[1][1] == opts.t('opt_off')
+              and items[2][1] == opts.t('opt_on'), repr(items))
+        choose(1)
+        check('choosing one writes the key and saves the file',
+              store.get('regard_pe_as_ac') is True and writes == [sfile],
+              repr((store.get('regard_pe_as_ac'), writes)))
+        choose(0)
+        check('the float tolerance asks for a number instead of guessing one',
+              len(win.prompts) == 1 and '1e-6' == win.prompts[0][1],
+              repr(win.prompts))
+        win.prompts[0][2]('1e-7')
+        check('and stores what it was given',
+              store.get('float_tolerance') == 1e-07, repr(store.get('float_tolerance')))
+        win.prompts[0][2]('nonsense')
+        check('a non-number keeps the old value and says so',
+              store.get('float_tolerance') == 1e-07, repr(store.get('float_tolerance')))
+
+        store.set('stress_file_source', 'pick_once')
+        win2 = _PanelWindow()
+        opts.CphStressOptionsCommand(win2).run()
+        items2, choose2 = win2.panels[-1]
+        choose2(0)
+        check('the stress panel cycles the file source in the documented order',
+              store.get('stress_file_source') == 'same_dir',
+              repr(store.get('stress_file_source')))
+        choose2(1)
+        check('and the picker mode with it',
+              store.get('stress_file_picker') == 'native',
+              repr(store.get('stress_file_picker')))
+
+        store.set('companion_target', 'new_file')
+        messages = []
+        saved_status = fake_sublime.status_message
+        fake_sublime.status_message = lambda text=None, *a, **k: messages.append(text)
+        try:
+            win3 = _PanelWindow()
+            opts.CphCompanionOptionsCommand(win3).run()
+            items3, choose3 = win3.panels[-1]
+            check('the target row names the live mode',
+                  len(items3) == 4 and items3[0][1] == opts.t('opt_target_mode'),
+                  repr(items3[0]))
+            choose3(0)
+            check('one click on it pins the other target mode',
+                  store.get('companion_target') == 'current_file',
+                  repr(store.get('companion_target')))
+            check('and the row says so in words the user set, not the raw key',
+                  win3.status[-1].endswith(opts.t('opt_target_mode_current')),
+                  repr(win3.status[-1]))
+            choose3(1)
+            check('auto listen defaults to on, so toggling it means off',
+                  store.get('companion_auto_listen') is False,
+                  repr(store.get('companion_auto_listen')))
+            choose3(2)
+            check('the log switch is a real toggle',
+                  store.get('companion_debug_log') is True
+                  and writes[-1] == sfile, repr(store.get('companion_debug_log')))
+            choose3(2)
+            check('and switches back off',
+                  store.get('companion_debug_log') is False,
+                  repr(store.get('companion_debug_log')))
+            check('no row falls through into opening the log',
+                  win3.opened == [], repr(win3.opened))
+            choose3(3)
+            check('with no log on disk it says so instead of opening a ghost',
+                  win3.opened == [] and items3[3][1] == opts.t('opt_log_missing')
+                  and messages[-1] == opts.t('opt_log_missing'),
+                  repr((win3.opened, messages[-1], items3[3][1])))
+        finally:
+            fake_sublime.status_message = saved_status
+
+        saved_pp = fake_sublime.packages_path
+        data_dir = os.path.join(tempfile.mkdtemp(), 'Data')
+        fake_sublime.packages_path = lambda: os.path.join(data_dir, 'Packages')
+        try:
+            log_path = opts.companion_log_path()
+            if not os.path.isdir(os.path.dirname(log_path)):
+                os.makedirs(os.path.dirname(log_path))
+            io.open(log_path, 'w', encoding='utf-8').write(u'click\n')
+            win4 = _PanelWindow()
+            opts.CphCompanionOptionsCommand(win4).run()
+            win4.panels[-1][1](3)
+            check('once the log exists the same row opens it',
+                  win4.opened == [log_path]
+                  and win4.panels[-1][0][3][1] == log_path, repr(win4.opened))
+        finally:
+            fake_sublime.packages_path = saved_pp
+
+        palette = io.open(os.path.join(ROOT, 'Default.sublime-commands'),
+                          encoding='utf-8').read()
+        view_menu = io.open(os.path.join(ROOT, 'Main.sublime-menu'),
+                            encoding='utf-8').read()
+        for command in ('cph_verdict_mode', 'cph_stress_options',
+                        'cph_companion_options'):
+            check('%s is reachable from the palette and the menu' % command,
+                  command in palette and command in view_menu, command)
+            entry = _palette_entry(palette, command)
+            check('%s lets description() name it, so the palette follows the '
+                  'language setting' % command,
+                  entry is not None and 'caption' not in entry, repr(entry))
+        check('the build mode shows its current value in the palette',
+              '"caption": "Algorithm Competition Assistant: Toggle Debug / Release build mode"'
+              not in palette)
+        for cls in ('CphVerdictModeCommand', 'CphStressOptionsCommand',
+                    'CphCompanionOptionsCommand'):
+            name = getattr(opts, cls)(None).description()
+            check('%s names itself after the package' % cls,
+                  name.startswith('Algorithm Competition Assistant: ')
+                  and len(name) > 34, repr(name))
+    finally:
+        fake_sublime.load_settings = saved_load
+        fake_sublime.save_settings = saved_save
+
+    print('== the contest countdown starts from what the user set ==')
+    # `or 120` used to swallow 0, so the documented "0 = ask me every time"
+    # silently typed 120 into the box instead.
+    extras = importlib.import_module(pkg + '.cph_extras')
+    cs = importlib.import_module(pkg + '.core.cph_settings')
+    saved_contest = cs.get_settings()
+    try:
+        for value, want in ((120, '120'), (270, '270'), (0, ''),
+                            ('abc', ''), (None, '')):
+            cs.init_settings({'contest_duration_minutes': value})
+            got = extras._contest_default_minutes()
+            check('contest_duration_minutes=%r pre-fills %r' % (value, want),
+                  got == want, repr(got))
+        cs.init_settings({})
+        check('with no setting at all the box still suggests a contest length',
+              extras._contest_default_minutes() == '120',
+              repr(extras._contest_default_minutes()))
+    finally:
+        cs.init_settings(saved_contest)
+
     print('== install layout: who is really loaded ==')
     # Package Control reinstalled the package as a zip and emptied the folder
     # install underneath a running developer (measured here: the folder was
@@ -2079,8 +2286,6 @@ def main():
     print('== Package Control review rules ==')
     DEFAULTS = ('Default (Windows).sublime-keymap', 'Default (Linux).sublime-keymap',
                 'Default (OSX).sublime-keymap')
-    EXAMPLES = ('Example (Windows).sublime-keymap', 'Example (Linux).sublime-keymap',
-                'Example (OSX).sublime-keymap')
 
     # 1. A package should not claim keys while the user is editing their own
     #    code (Package Control: "we strongly advice against adding keybindings
@@ -2126,43 +2331,155 @@ def main():
           and 'cph_keybindings_enabled' in open(
               os.path.join(ROOT, 'cph_context.py'), encoding='utf-8').read())
 
-    # 2. The suggestions users copy must be valid JSON and scoped as well.
-    suggestion_problems = []
-    suggestion_count = 0
-    for name in EXAMPLES:
-        path = os.path.join(ROOT, name)
-        if not os.path.isfile(path):
-            suggestion_problems.append('%s missing' % name)
-            continue
-        with open(path, encoding='utf-8') as f:
-            entries = json.load(f)
-        suggestion_count += len(entries)
-        for entry in entries:
-            if not entry.get('context'):
-                suggestion_problems.append('%s %s' % (name, entry.get('keys')))
-    check('per-platform example keymaps exist and are scoped',
-          not suggestion_problems and suggestion_count > 0,
-          '; '.join(suggestion_problems) or 'no suggestions')
-    check('no active key binding ships by default',
-          not os.path.isfile(os.path.join(ROOT, 'Example.sublime-keymap')),
-          'the old single Example.sublime-keymap is back')
+    # 2. One keymap per platform, no copies of it. `Example (<platform>).sublime-
+    #    keymap` shipped the same bindings "for copying into your own keymap",
+    #    and it drifted: it kept ctrl+alt+e (export tests) that the package
+    #    keymap did not bind, so the README advertised a shortcut that only
+    #    worked if that second file happened to be loaded. Two copies of a
+    #    binding set cannot be kept honest. There is one: the package keymap,
+    #    which "Key Bindings" opens as the base file for overrides.
+    strays = sorted(f for f in os.listdir(ROOT)
+                    if f.endswith('.sublime-keymap') and f not in DEFAULTS)
+    check('the package ships exactly one keymap per platform', not strays,
+          '; '.join(strays))
 
-    # 3. Custom context keys used anywhere must be answered by the listener.
+    def _bindings(name):
+        with open(os.path.join(ROOT, name), encoding='utf-8') as f:
+            return json.load(f)
+
+    shipped_bindings = _bindings('Default (Windows).sublime-keymap')
+
+    def _keys_for(bindings, command):
+        return [e.get('keys') for e in bindings if e.get('command') == command]
+
+    check('export tests really is bound, as the README says',
+          _keys_for(shipped_bindings, 'cph_export_tests') == [['ctrl+alt+e']],
+          repr(_keys_for(shipped_bindings, 'cph_export_tests')))
+
+    # 2a. The README table is the thing a contestant reads mid-contest, so it is
+    #     checked against the keymap instead of against memory: every chord the
+    #     table prints must actually be bound. This is the check that would have
+    #     caught Ctrl+Alt+E (documented for versions, never in the package file).
+    def _canon(text):
+        return ' '.join(word for part in text.replace(',', ' ').split('+')
+                        for word in part.lower().split())
+
+    bound = set()
+    for entry in shipped_bindings:
+        bound.add(' '.join(_canon(k) for k in (entry.get('keys') or [])))
+    documented = []
+    readme = io.open(os.path.join(ROOT, 'README.md'), encoding='utf-8').read()
+    for line in readme.split('\n'):
+        if not line.startswith(u'| `'):
+            continue
+        cell = re.sub(r'\([^)]*\)', '', line.split('|')[1])
+        for token in re.split(r'\s*/\s*|\s+或\s+', cell):
+            token = token.strip().strip('`')
+            if not re.match(r'(?i)^(ctrl|enter)', token):
+                continue          # Cmd aliases, panel names, prose cells
+            documented.append(_canon(token))
+    undocumented_rows = [c for c in documented if c not in bound]
+    check('every chord the README table prints is really bound',
+          len(documented) >= 20 and not undocumented_rows,
+          '%d rows, not bound: %s' % (len(documented), ', '.join(undocumented_rows)))
+
+    # 2b. A binding scoped to "source.c++, source.c, source.python,
+    #     source.java" is a binding that does nothing in the Rust, Go, Pascal
+    #     and JavaScript entries of the very same settings file.
+    exts = set()
+    for m in re.finditer(r'"extensions":\s*\[([^\]]*)\]', settings_text):
+        for item in m.group(1).split(','):
+            item = item.strip().strip('"')
+            if item:
+                exts.add(item)
+    SCOPE_OF = {'cpp': 'source.c++', 'c': 'source.c', 'py': 'source.python',
+                'java': 'source.java', 'rs': 'source.rust', 'go': 'source.go',
+                'pas': 'source.pascal', 'pp': 'source.pascal',
+                'js': 'source.js', 'mjs': 'source.js', 'cjs': 'source.js'}
+    missing_exts = sorted(e for e in exts if e not in SCOPE_OF)
+    check('every shipped language extension has a known syntax selector',
+          not missing_exts, '; '.join(missing_exts))
+    unscoped = []
+    for name in DEFAULTS:
+        for entry in _bindings(name):
+            for item in entry.get('context') or []:
+                operand = str(item.get('operand') or '')
+                # only the "any code file we support" bindings; the single
+                # language ones (source.c++ for the template) and our own test
+                # editor (source.TestSyntax) mean something else
+                if ',' not in operand or 'source.c++' not in operand:
+                    continue
+                absent = sorted(SCOPE_OF[e] for e in exts
+                                if e in SCOPE_OF and SCOPE_OF[e] not in operand)
+                if absent:
+                    unscoped.append('%s %s: %s' % (name, entry.get('keys'),
+                                                   ', '.join(absent)))
+    check('every multi-language binding covers every supported language',
+          not unscoped, '; '.join(sorted(set(unscoped)))[:400])
+
+    # 3. Custom context keys: the keymap must not ask a question the listener
+    #    does not answer, and the listener must not answer a question nobody
+    #    asks. Both directions, because the drift that shipped here went the
+    #    second way - four branches stayed behind after their bindings left,
+    #    and one of them (cph_stress_running) mirrored a flag nothing read.
     with open(os.path.join(ROOT, 'cph_context.py'), encoding='utf-8') as f:
         ctx_src = f.read()
     used_keys = set()
-    for name in DEFAULTS + EXAMPLES:
-        with open(os.path.join(ROOT, name), encoding='utf-8') as f:
-            for entry in json.load(f):
-                for item in entry.get('context') or []:
-                    key = item.get('key', '')
-                    if key.startswith('cph_'):
-                        used_keys.add(key)
+    for name in DEFAULTS:
+        for entry in _bindings(name):
+            for item in entry.get('context') or []:
+                key = item.get('key', '')
+                if key.startswith('cph_'):
+                    used_keys.add(key)
     unanswered = [k for k in sorted(used_keys) if ("'%s'" % k) not in ctx_src]
     check('custom context keys are answered by cph_context', not unanswered,
           '; '.join(unanswered))
     check('at least one custom context key is exercised', bool(used_keys),
           'none found')
+    answered = set(re.findall(r"key == '(cph_[a-z_]+)'", ctx_src))
+    unasked = sorted(answered - used_keys)
+    check('cph_context answers no key the shipped keymap stopped asking',
+          not unasked, '; '.join(unasked))
+
+    # 3b. enable_keybindings=false must release EVERY package binding, which is
+    #     what the README claims. Most entries ask the gate directly; the ones
+    #     that fire on state (stop the stress test, stop the listener, collapse
+    #     the panel) are released inside the listener, at one choke point, so a
+    #     new state key cannot forget it. Proved by making every state true and
+    #     then switching the setting off.
+    ctx_mod = importlib.import_module(pkg + '.cph_context')
+    state_mod = importlib.import_module(pkg + '.core.cph_state')
+    gate_settings = importlib.import_module(pkg + '.core.cph_settings')
+    listener = ctx_mod.CphContextListener()
+    gate_view = sys.modules['sublime'].View(settings={'cph_run_view': True})
+    gate_view._file_name = os.path.join('x', 'a.cpp')
+    saved_gate = gate_settings.get_settings()
+    saved_listener = state_mod.state.get('listener_running')
+    saved_views = dict(state_mod.state.get('stress_views') or {})
+    try:
+        state_mod.set_listener(object(), port=1)
+        state_mod.register_stress_view(gate_view.id())
+        asked = sorted(used_keys)
+        op_equal = sys.modules['sublime'].OP_EQUAL
+        gate_settings.init_settings({'enable_keybindings': True})
+        on = [listener.on_query_context(gate_view, k, op_equal, True, True)
+              for k in asked]
+        gate_settings.init_settings({'enable_keybindings': False})
+        off = [listener.on_query_context(gate_view, k, op_equal, True, True)
+               for k in asked]
+        check('with the gate on, every context the keymap asks is answerable',
+              all(v is True for v in on) and len(on) == len(asked),
+              repr(list(zip(asked, on))))
+        check('enable_keybindings=false releases every package binding',
+              all(v is False for v in off), repr(list(zip(asked, off))))
+        check('and it reports itself as off, so bindings gated directly stop too',
+              listener.on_query_context(gate_view, 'cph_keybindings_enabled',
+                                        op_equal, True, True) is False)
+    finally:
+        gate_settings.init_settings(saved_gate)
+        state_mod.state['listener_running'] = saved_listener
+        state_mod.state['listener_port'] = None
+        state_mod.state['stress_views'] = saved_views
 
     # 4. Context menu entries: .sublime-menu has no `context` key, so the
     #    command's is_visible() is the only way to make an entry conditional.
@@ -2294,7 +2611,7 @@ def main():
         '__init__.py', 'plugin_init.py', 'test_edit.py', 'test_manager.py',
         'cph_auto.py', 'cph_companion.py', 'cph_context.py', 'cph_doctor.py',
         'cph_extras.py', 'cph_import.py', 'cph_jump.py', 'cph_language.py',
-        'cph_run_modes.py', 'cph_stress.py', 'cph_template.py',
+        'cph_options.py', 'cph_run_modes.py', 'cph_stress.py', 'cph_template.py',
         'cph_tests_io.py',
     ])
     actual_root_modules = set(
@@ -3793,11 +4110,15 @@ def main():
           i18n.STRINGS.get('compile_warning', {}).get('zh')
           and i18n.STRINGS.get('compile_warning', {}).get('en'))
 
-    # (6) enable_keybindings claims every package binding turns into a no-op;
-    # the panel-toggle binding has to honour it too.
-    check('the panel-toggle binding honours enable_keybindings',
-          'def _panel_toggle_ok(' in context_src
-          and 'if not keybindings_enabled():\n\t\treturn False' in context_src)
+    # (6) enable_keybindings claims every package binding turns into a no-op.
+    # It used to be a per-branch copy-paste, which is how the state-driven
+    # bindings (stop stress, stop listener) came to ignore it. Now the listener
+    # applies the gate once, after whatever a branch answered: adding a state
+    # key cannot forget it, and the behaviour test above runs every key through
+    # both positions of the switch.
+    check('the keybinding gate is one choke point, not per-branch copy-paste',
+          'if not keybindings_enabled():\n\t\t\tvalue = False' in context_src
+          and 'if not keybindings_enabled():\n\t\t\treturn False' not in context_src)
 
     # (8) warnings from a build that succeeded used to be thrown away: only
     # the failure branch wrote the compiler output to the panel, so the
@@ -4442,7 +4763,7 @@ def main():
                 _collect_cmds(_v, where)
 
     for _name in ('Default.sublime-commands', 'Main.sublime-menu',
-                  'Context.sublime-menu') + DEFAULTS + EXAMPLES:
+                  'Context.sublime-menu') + DEFAULTS:
         with open(os.path.join(ROOT, _name), encoding='utf-8') as f:
             _collect_cmds(json.load(f), _name)
     # Not a string-in-file check: the command name a *Command class actually

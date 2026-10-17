@@ -103,6 +103,18 @@
 						"caption": "-"
 					},
 					{
+						"caption": "Verdict rules (float tolerance, PE as AC, stop on first failure)...",
+						"command": "cph_verdict_mode"
+					},
+					{
+						"caption": "Stress test options (where std/gen come from, rounds)...",
+						"command": "cph_stress_options"
+					},
+					{
+						"caption": "Competitive Companion options (target mode, click log)...",
+						"command": "cph_companion_options"
+					},
+					{
 						"caption": "Check environment (doctor)",
 						"command": "cph_doctor"
 					},

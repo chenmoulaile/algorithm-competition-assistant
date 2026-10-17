@@ -914,6 +914,103 @@ STRINGS = {
         'zh': '找不到 {name}，请确认它在 PATH 中或改用绝对路径',
         'en': '{name} not found - add it to PATH or use an absolute path',
     },
+    # ---- 设置开关面板 (cph_options) ---------------------------------------
+    'opt_verdict_mode': {
+        'zh': '判定口径（浮点容差 / PE 当 AC / 首错即停 / stderr）',
+        'en': 'Verdict rules (float tolerance, PE, stop on first failure)',
+    },
+    'opt_companion_options': {
+        'zh': '监听设置：样例送到哪里 (Competitive Companion)',
+        'en': 'Competitive Companion options (target mode, click log)',
+    },
+    'opt_stress_options': {
+        'zh': '对拍设置：std/gen 从哪来、跑多少轮',
+        'en': 'Stress test options (file source, rounds, limit)',
+    },
+    'opt_float_tolerance': {
+        'zh': '浮点容差（浮点题不开会一直 WA）',
+        'en': 'Float tolerance (off means floating point WA forever)',
+    },
+    'opt_regard_pe_as_ac': {
+        'zh': '格式不同算 AC（PE 当 AC）',
+        'en': 'Treat presentation error as AC',
+    },
+    'opt_stop_on_first_failure': {
+        'zh': '第一个失败就停',
+        'en': 'Stop at the first failure',
+    },
+    'opt_ignore_stderr': {
+        'zh': '判定时忽略 stderr',
+        'en': 'Ignore stderr when judging',
+    },
+    'opt_stress_source': {
+        'zh': 'std / gen 从哪来',
+        'en': 'Where std and gen come from',
+    },
+    'opt_stress_picker': {
+        'zh': '挑文件用哪种界面',
+        'en': 'How to pick a file',
+    },
+    'opt_stress_rounds': {
+        'zh': '最大轮数',
+        'en': 'Max rounds',
+    },
+    'opt_stress_time_limit': {
+        'zh': '每轮时限（秒）',
+        'en': 'Time limit per round (seconds)',
+    },
+    'opt_save_counterexample': {
+        'zh': '反例自动存成测试点',
+        'en': 'Save the counterexample as a test',
+    },
+    'opt_target_row': {
+        'zh': '一次点击把样例送到（点一下切换）',
+        'en': 'Where a click sends the samples (click to switch)',
+    },
+    'opt_target_mode': {
+        'zh': '一次点击 = 一题一个新文件',
+        'en': 'One click = one new file per problem',
+    },
+    'opt_target_mode_current': {
+        'zh': '一次点击 = 送进当前文件并跑一遍',
+        'en': 'One click = fill the current file and run it',
+    },
+    'opt_auto_listen': {
+        'zh': '启动 Sublime 就监听（改动下次启动生效）',
+        'en': 'Listen when Sublime starts (applies to the next start)',
+    },
+    'opt_debug_log': {
+        'zh': '记录每次点击到 Data/Log/aca-companion.log',
+        'en': 'Log every click to Data/Log/aca-companion.log',
+    },
+    'opt_open_log': {
+        'zh': '打开监听日志',
+        'en': 'Open the companion log',
+    },
+    'opt_log_missing': {
+        'zh': '还没有日志：先把上面的记录开关打开，再点一次扩展',
+        'en': 'No log yet: turn the switch on above, then click the extension once',
+    },
+    'opt_on': {
+        'zh': '开',
+        'en': 'on',
+    },
+    'opt_off': {
+        'zh': '关',
+        'en': 'off',
+    },
+    'opt_next_start': {
+        'zh': '下次启动生效',
+        'en': 'next start',
+    },
+    'opt_value_prompt': {
+        'zh': '新值（{label}）',
+        'en': 'New value ({label})',
+    },
+    'opt_number_kept': {
+        'zh': '不是数字，保持 {value}',
+        'en': 'not a number, kept {value}',
+    },
     'doctor_install': {
         'zh': '安装形态',
         'en': 'install layout',

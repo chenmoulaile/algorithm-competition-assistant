@@ -32,6 +32,19 @@ def _settings():
 		return {}
 
 
+def _contest_default_minutes():
+	"""What the countdown input panel starts with: the configured length, or an
+	empty box when it is 0 (0 means "ask me", not "a zero minute contest").
+	"""
+	try:
+		value = float(_settings().get('contest_duration_minutes', 120))
+	except (TypeError, ValueError):
+		return ''
+	if value <= 0:
+		return ''
+	return '%g' % value
+
+
 def _run_view(view):
 	return bool(view.settings().get('cph_run_view'))
 
@@ -233,8 +246,10 @@ class CphStatsCommand(sublime_plugin.TextCommand):
 class CphContestTimerCommand(sublime_plugin.TextCommand):
 	"""A countdown in the status bar for a timed contest.
 
-	`cph_contest_timer` with no argument asks for the length; `stop` cancels.
-	The Companion can start it automatically (see contest_duration_minutes).
+	`cph_contest_timer` with no argument asks for the length (the default comes
+	from `contest_duration_minutes`); `stop` cancels. Nothing starts it by
+	itself: a contest clock runs from the scheduled start, not from the moment
+	the first sample landed, so the first thing a countdown needs is a human.
 	"""
 
 	STATE = {'until': 0.0, 'total': 0, 'warned': set()}
@@ -247,7 +262,7 @@ class CphContestTimerCommand(sublime_plugin.TextCommand):
 			sublime.status_message('[Algorithm Competition Assistant] ' + t('contest_stopped'))
 			return
 		if minutes is None:
-			default = str(_settings().get('contest_duration_minutes', 120) or 120)
+			default = _contest_default_minutes()
 			self.view.window().show_input_panel(
 				t('contest_enter_minutes'), default,
 				lambda text: self.start(text), None, None)
