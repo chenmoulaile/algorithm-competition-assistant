@@ -26,6 +26,16 @@
 		"command": "cph_companion_listener"
 	},
 	{
+		"caption": "Algorithm Competition Assistant: Listen to Competitive Companion (new file per problem)",
+		"command": "cph_companion_listener",
+		"args": {"target": "new_file"}
+	},
+	{
+		"caption": "Algorithm Competition Assistant: Listen to Competitive Companion (fill the current file)",
+		"command": "cph_companion_listener",
+		"args": {"target": "current_file"}
+	},
+	{
 		"caption": "Algorithm Competition Assistant: Stop Competitive Companion listener",
 		"command": "cph_companion_stop_listener"
 	},

@@ -28,8 +28,14 @@
 						}
 					},
 					{
-						"caption": "Listen to Competitive Companion",
-						"command": "cph_companion_listener"
+						"caption": "Listen to Competitive Companion (new file per problem)",
+						"command": "cph_companion_listener",
+						"args": {"target": "new_file"}
+					},
+					{
+						"caption": "Listen to Competitive Companion (fill the current file)",
+						"command": "cph_companion_listener",
+						"args": {"target": "current_file"}
 					},
 					{
 						"caption": "Stop Competitive Companion listener",

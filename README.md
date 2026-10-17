@@ -139,6 +139,21 @@ copy-paste reference if you want to change one.
 `companion_debug_log: true` 会把每次点击的判定过程（模式、样例数、限制、最后落到哪个文件
 或为什么被拒）追加到 `Data/Log/aca-companion.log`，用来回答"样例到底去哪了"；默认关。
 
+不想改设置就直接右键，两种行为各一项：
+
+- `Algorithm Competition Assistant: Listen to CC, one new file per problem`
+- `Algorithm Competition Assistant: Listen to CC, fill the current file`
+
+选中后本次会话就按它走（不改设置文件），停止监听后回到 `companion_target` 的设置值。
+
+**点了没反应时**：`companion_debug_log` 打开再点一次。日志里有 `refused 403 origin=…`
+就是被本地鉴权挡了（把 Origin 发过来告诉我们）；日志完全没动，说明请求根本没从浏览器发出来，
+十有八九是扩展的端口列表里没有 `12345`。
+
+> v2.4.11 之前这里的鉴权只认 `localhost` 来源，把扩展自己发请求时带的
+> `chrome-extension://<id>` 当成外部页面拒掉了——点击于是变成无声的 403。现在扩展来源
+> 放行，非 `localhost` 的 Host 与真实网页的 Origin 仍然拒绝（防 DNS rebinding 和网页乱 POST）。
+
 **注意**： Competitive Companion 扩展的端口列表里要加入 `12345`（可用设置项 `companion_port`
 修改）——这一步在浏览器里，插件代劳不了。
 

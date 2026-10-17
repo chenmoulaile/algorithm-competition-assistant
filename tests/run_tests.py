@@ -972,6 +972,7 @@ def main():
             comp._listener['server'] = None
             comp._listener['thread'] = None
             comp._listener['view_id'] = None
+            comp._listener['target'] = None
 
     work_dir = _tf.mkdtemp()
     try:
@@ -1365,6 +1366,95 @@ def main():
               '"companion_target": "new_file"' in shipped_text, 'companion_target missing')
         check('the debug log switch ships off',
               '"companion_debug_log": false' in shipped_text, 'companion_debug_log missing')
+
+        # 9. who is allowed to knock, and what happens when it is not.
+        #    The rejection path answered 403 and recorded nothing, so a refused
+        #    click and a click that never left the browser looked identical from
+        #    the outside - which is exactly how "I clicked, the log is empty"
+        #    became undiagnosable.
+        def _post_code(headers, at_port):
+            import urllib.error as _err
+            import urllib.request as _url
+            request = _url.Request('http://localhost:%d/' % at_port,
+                                   data=payload, headers=headers)
+            try:
+                response = _url.urlopen(request, timeout=5)
+                try:
+                    return response.getcode()
+                finally:
+                    response.close()
+            except _err.HTTPError as error:
+                return error.code
+
+        allowed = {'Host': 'localhost:12345',
+                   'Origin': 'chrome-extension://ldaglennelkejdgjigfbaobdnmdo'}
+        check('the extension itself is allowed to post',
+              comp.request_allowed(allowed.get))
+        check('a firefox extension origin is allowed too',
+              comp.request_allowed({'Host': 'localhost:12345',
+                                    'Origin': 'moz-extension://cafe-babe'}.get))
+        check('a web page is still refused (DNS rebinding and drive-by posts)',
+              not comp.request_allowed({'Host': 'localhost:12345',
+                                        'Origin': 'https://evil.example'}.get))
+        check('a non-loopback Host is refused whatever the origin claims',
+              not comp.request_allowed({'Host': 'evil.example:12345',
+                                        'Origin': 'chrome-extension://cafe'}.get))
+
+        settings_mod.init_settings({'auto_create_file': True,
+                                   'auto_create_extension': 'cpp',
+                                   'companion_debug_log': True})
+        saved_packages_path = getattr(fake_sublime, 'packages_path', None)
+        fake_sublime.packages_path = lambda: os.path.join(work_dir, 'Packages')
+        comp._start_listener(None, quiet=True)
+        codes = {}
+        try:
+            codes['extension'] = _post_code({'Origin': 'chrome-extension://cafe-babe'}, port)
+            codes['webpage'] = _post_code({'Origin': 'https://evil.example'}, port)
+        finally:
+            comp._stop_listener()
+            if saved_packages_path is None:
+                try:
+                    del fake_sublime.packages_path
+                except AttributeError:
+                    pass
+            else:
+                fake_sublime.packages_path = saved_packages_path
+        check('a click from the extension reaches the handler instead of a 403',
+              codes['extension'] == 200, repr(codes))
+        check('a web page posting at the local port is still refused',
+              codes['webpage'] == 403, repr(codes))
+        refusal_lines = []
+        if os.path.exists(log_path):
+            with io.open(log_path, encoding='utf-8') as f:
+                refusal_lines = f.read().splitlines()
+        check('a refusal is recorded with the header that caused it',
+              any('refused 403' in line and 'evil.example' in line
+                  for line in refusal_lines), repr(refusal_lines[-1:]))
+
+        # 10. the two modes have to be reachable without editing a settings
+        #     file in the middle of a contest.
+        with io.open(os.path.join(ROOT, 'Context.sublime-menu'), encoding='utf-8') as f:
+            context_menu = f.read()
+        with io.open(os.path.join(ROOT, 'Main.sublime-menu'), encoding='utf-8') as f:
+            main_menu = f.read()
+        check('the context menu offers both listener modes',
+              '"target": "new_file"' in context_menu
+              and '"target": "current_file"' in context_menu, context_menu)
+        check('so does the Tools menu',
+              '"target": "new_file"' in main_menu
+              and '"target": "current_file"' in main_menu)
+
+        settings_mod.init_settings({'auto_create_file': True,
+                                   'auto_create_extension': 'cpp',
+                                   'companion_target': 'new_file'})
+        comp._start_listener(None, quiet=True, target='current_file')
+        check('a menu pick overrides the setting for the session',
+              comp._target_mode() == 'current_file', comp._target_mode())
+        comp._stop_listener()
+        with comp._listener['lock']:
+            comp._listener['target'] = None
+        check('with no pick the setting rules again',
+              comp._target_mode() == 'new_file', comp._target_mode())
     finally:
         _stop_and_reset()
         settings_mod.init_settings(saved_settings)

@@ -13,8 +13,14 @@
 		"command": "cph_pick_import_file"
 	},
 	{
-		"caption": "Algorithm Competition Assistant: Listen to Competitive Companion",
-		"command": "cph_companion_listener"
+		"caption": "Algorithm Competition Assistant: Listen to CC, one new file per problem",
+		"command": "cph_companion_listener",
+		"args": {"target": "new_file"}
+	},
+	{
+		"caption": "Algorithm Competition Assistant: Listen to CC, fill the current file",
+		"command": "cph_companion_listener",
+		"args": {"target": "current_file"}
 	},
 	{
 		"caption": "Algorithm Competition Assistant: Start stress test",

@@ -37,6 +37,7 @@ _listener = {
     'thread': None,      # serving thread
     'port': None,
     'view_id': None,     # target source view id
+    'target': None,      # mode picked from the menu, for this session
     'lock': threading.Lock(),
 }
 
@@ -114,6 +115,15 @@ def remember_limits(file_name, time_limit_ms, memory_limit_mb):
 #: caller resolved our port under a different name (DNS rebinding).
 _LOOPBACK_HOSTS = ('localhost', '127.0.0.1', '::1', '[::1]')
 
+#: Origins that are not a web page. A browser extension's own background
+#: worker is where Competitive Companion posts from, and Chrome puts the
+#: extension's id in Origin rather than the page's - refusing that refused the
+#: extension itself, silently, with a 403 and no trace. An extension is code
+#: already installed on this machine, not a remote attacker; the rebinding
+#: defence is the Host check above.
+_EXTENSION_SCHEMES = ('chrome-extension://', 'moz-extension://',
+                      'safari-web-extension://', 'extension://')
+
 
 def _origin_host(origin):
     """Host part of an http(s) origin.
@@ -127,6 +137,10 @@ def _origin_host(origin):
         rest = rest[1:]
         return rest.split(']', 1)[0]
     return rest.split(':')[0]
+
+
+def _is_extension_origin(origin):
+    return origin.startswith(_EXTENSION_SCHEMES)
 
 
 def _host_name(host):
@@ -152,6 +166,10 @@ def request_allowed(get_header):
     compile that executes it. Origin and Sec-Fetch-Site say which page sent
     the request, and a browser script cannot set either one.
 
+    The extension's own origin counts as allowed: it is the only thing
+    Competitive Companion ever sends, and blocking it made the plugin deaf
+    while still answering 200-adjacent errors to the browser.
+
     Callers with no trace of a browser (curl, a local script, an OJ tool) are
     still accepted: this listener is a local automation endpoint.
     """
@@ -161,7 +179,8 @@ def request_allowed(get_header):
 
     origin = (get_header('Origin') or '').strip().lower()
     if origin:
-        return _origin_host(origin) in _LOOPBACK_HOSTS
+        return (_origin_host(origin) in _LOOPBACK_HOSTS
+                or _is_extension_origin(origin))
 
     fetch_site = (get_header('Sec-Fetch-Site') or '').strip().lower()
     if fetch_site:
@@ -198,6 +217,12 @@ def build_handler():
 
         def do_POST(self):
             if not self._host_allowed():
+                # Recorded, not just answered: a click the plugin refused and a
+                # click that never left the browser were indistinguishable.
+                _debug_log('refused 403 host=%s origin=%s fetch-site=%s'
+                           % (self.headers.get('Host') or '-',
+                              self.headers.get('Origin') or '-',
+                              self.headers.get('Sec-Fetch-Site') or '-'))
                 self._deny()
                 return
 
@@ -218,6 +243,8 @@ def build_handler():
                 raw = self.rfile.read(content_length) if content_length else b''
                 data = json.loads(raw.decode('utf-8'))
             except Exception:
+                _debug_log('refused 400: body is not json (%d bytes)'
+                           % content_length)
                 self._deny(400)
                 return
 
@@ -452,8 +479,17 @@ _TARGET_CURRENT = 'current_file'
 
 
 def _target_mode():
-    settings = get_settings() or {}
-    mode = str(settings.get('companion_target', _TARGET_NEW) or '').strip().lower()
+    """The mode in effect: the menu pick for this session, else the setting.
+
+    A pick from the context menu outranks `companion_target` without editing
+    any settings file mid-contest, and it is only remembered until the
+    listener stops - the file stays the place to change the default.
+    """
+    pinned = _listener.get('target')
+    if pinned in (_TARGET_NEW, _TARGET_CURRENT):
+        return pinned
+    mode = str((get_settings() or {}).get('companion_target', _TARGET_NEW)
+               or '').strip().lower()
     return mode if mode in (_TARGET_NEW, _TARGET_CURRENT) else _TARGET_NEW
 
 
@@ -491,7 +527,7 @@ def resolve_target(problem_name, url='', time_limit_ms=None, memory_limit_mb=Non
     return _focused_source_view()
 
 
-def _start_listener(view=None, quiet=False):
+def _start_listener(view=None, quiet=False, target=None):
     """Start the listener, or retarget the one that is already running.
 
     A saved file is no longer a precondition. It used to be, and that is what
@@ -499,12 +535,15 @@ def _start_listener(view=None, quiet=False):
     target the listener could remember then always had a file name, so the
     auto-create branch could never run.
 
+    `target` is what a context-menu pick passes (see _target_mode); leaving it
+    None keeps whatever is already in effect.
+
     `quiet` is the startup path - a port somebody else already holds must not
     put a complaint in the status bar of every Sublime session.
     """
     file_name = view.file_name() if view is not None else None
     view_id = view.id() if view is not None else None
-    target = file_name or t('listener_auto_target')
+    label = file_name or t('listener_auto_target')
 
     def report(message):
         if quiet:
@@ -514,8 +553,12 @@ def _start_listener(view=None, quiet=False):
 
     with _listener['lock']:
         _listener['view_id'] = view_id
+        if target in (_TARGET_NEW, _TARGET_CURRENT):
+            _listener['target'] = target
+            sublime.status_message('Algorithm Competition Assistant: '
+                                   'companion_target = %s' % target)
         if _listener['server'] is not None:
-            report(t('listener_retarget', file=target))
+            report(t('listener_retarget', file=label))
             return
         port = 12345
         try:
@@ -534,9 +577,9 @@ def _start_listener(view=None, quiet=False):
         _listener['thread'] = thread
         thread.start()
 
-    report(t('listener_started', file=target, port=port))
+    report(t('listener_started', file=label, port=port))
     if not quiet:
-        print('[Algorithm Competition Assistant] ' + t('listener_started', file=target, port=port))
+        print('[Algorithm Competition Assistant] ' + t('listener_started', file=label, port=port))
 
 
 def _stop_listener():
@@ -550,6 +593,7 @@ def _stop_listener():
         _listener['thread'] = None
         _listener['port'] = None
         _listener['view_id'] = None
+        _listener['target'] = None
     threading.Thread(target=server.shutdown, daemon=True).start()
     try:
         server.server_close()
@@ -564,8 +608,10 @@ from .core.cph_target import visible as context_menu_visible
 class CphCompanionListenerCommand(sublime_plugin.TextCommand):
     """Listen to Competitive Companion: 启动/切换目标文件 (幂等, 可反复点击).
 
-    Without a saved file this starts the listener with no target, and every
-    incoming problem then creates its own file.
+    Without a saved file this starts the listener with no target. The context
+    menu passes "target" to pick what one click means for the rest of the
+    session - "new_file" creates a file per problem, "current_file" only ever
+    fills the file under focus; leaving it out keeps `companion_target`.
     """
 
     def is_visible(self, event=None, **kwargs):
@@ -576,8 +622,8 @@ class CphCompanionListenerCommand(sublime_plugin.TextCommand):
         """
         return context_menu_visible(self.view, event)
 
-    def run(self, edit):
-        _start_listener(self.view)
+    def run(self, edit, target=None):
+        _start_listener(self.view, target=target)
 
 
 class CphCompanionStopListenerCommand(sublime_plugin.TextCommand):
