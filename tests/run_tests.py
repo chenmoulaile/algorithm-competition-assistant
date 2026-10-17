@@ -4003,7 +4003,13 @@ def main():
     try:
         _res.base_name = 'Algorithm Competition Assistant.sublime-package'
         _keep_pp = getattr(_sub, 'packages_path', None)
-        _sub.packages_path = lambda: r'D:\Sublime Text\Data\Packages'
+        # The fake packages root has to be absolute *on the host running this*:
+        # a Windows-shaped root on Linux/macOS is a relative path there, which
+        # made the assertion below a property of the runner instead of the code
+        # and turned the job red while the product was fine.
+        _fake_packages = (r'D:\Sublime Text\Data\Packages' if os.name == 'nt'
+                          else '/tmp/Sublime Text/Data/Packages')
+        _sub.packages_path = lambda: _fake_packages
         try:
             res_path = _res.package_resource_path('Highlight/test_config.html')
             file_path = _res.package_file_path(
@@ -4012,9 +4018,13 @@ def main():
                   '.sublime-package' not in res_path
                   and res_path.startswith('Packages/Algorithm Competition Assistant/'),
                   repr(res_path))
+            _want_file = os.path.join(
+                _fake_packages, 'Algorithm Competition Assistant',
+                'Algorithm Competition Assistant.sublime-settings')
             check('a zip install builds edit_settings paths without the suffix',
                   '.sublime-package' not in file_path
-                  and os.path.isabs(file_path), repr(file_path))
+                  and os.path.normpath(file_path) == os.path.normpath(_want_file),
+                  repr(file_path))
         finally:
             if _keep_pp is None:
                 del _sub.packages_path
