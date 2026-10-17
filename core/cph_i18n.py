@@ -691,8 +691,10 @@ STRINGS = {
         'en': 'Failed to start listener on port {port}: {error}',
     },
     'tests_received': {
-        'zh': '已接收题目 "{name}": {count} 个样例 (时间限制 {time}ms, 内存限制 {memory}MB)',
-        'en': 'Received "{name}": {count} test(s) (TL {time}ms, ML {memory}MB)',
+        'zh': '已接收题目 "{name}": {count} 个样例 (时间限制 {time}ms, '
+              '内存限制 {memory}MB)，写入 {file}',
+        'en': 'Received "{name}": {count} test(s) (TL {time}ms, ML {memory}MB)'
+              ' -> {file}',
     },
     # ---- detail view ----
     'detail_no_result': {

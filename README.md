@@ -115,14 +115,18 @@ copy-paste reference if you want to change one.
 默认开），不用先打开或保存任何文件。
 
 1. 浏览器打开题目页，点 Competitive Companion 扩展的绿色 `+`
-2. 当前聚焦的是一个源码文件 → 样例就并进这个文件；没有可用目标（新建未保存、或焦点在
-   `-run` / `-stress` 这类面板页上）→ 按题面新建 `<题目名>.cpp` 并打开，顶部写几行注释：
-   题名、来源链接、时间限制、空间限制，你的 `auto_create_template` 跟在后面
-3. 之后照常自动运行一次，收到的时间/内存限制同时生效（`Ctrl+Alt+B` 也用得到）
+2. 一次点击送去哪儿由 `companion_target` 决定，两种行为是**分开的**：
+   - `"new_file"`（默认）：按题面新建 `<题目名>.cpp` 并打开，顶部写几行注释
+     （题名、来源链接、时间限制、空间限制），你的 `auto_create_template` 跟在后面。
+     重名就打开已有那个再把样例并进去，不会越点越多。
+   - `"current_file"`：只把样例送到当前聚焦的源码文件，**绝不新建**（原本的行为）。
+   - 两种模式下，用 `Listen to Competitive Companion` 在某个文件里固定过的目标都优先。
+3. 之后照常自动运行一次，收到的时间/内存限制同时生效（`Ctrl+Alt+B` 也用得到）；
+   状态栏这次会**写明样例落进了哪个文件**，不用猜。
 
-插件**只会往自己新建的文件里写注释头**，你正在写的源码一个字都不会被动。题面重名时
-直接打开已有文件，不覆盖。新建文件放在哪：`auto_create_dir`，留空则是窗口第一个文件夹；
-两种都没有时状态栏会直说"先打开题目所在的文件夹"，不会静默丢掉样例。
+插件**只会往自己新建的文件里写注释头**，你正在写的源码一个字都不会被动。新建文件放在哪：
+`auto_create_dir`，留空则是窗口第一个文件夹；两种都没有时状态栏会直说"先打开题目所在的
+文件夹"，不会静默丢掉样例。
 
 样例的落盘位置与去重规则和「导入」完全一致：按输入去重、答案只补不覆盖，重复点击
 不会顶掉你手工标记的答案。收到的时间/空间限制写在测试数据旁边的 `<文件名>__tests.limits`
@@ -131,6 +135,9 @@ copy-paste reference if you want to change one.
 想固定监听某个文件，在里面执行一次 `Algorithm Competition Assistant: Listen to Competitive Companion`
 （幂等，不会重复起服务器或撞端口）；`Stop Competitive Companion listener` 随时停止，
 停止后要重新监听需再执行一次命令或重启 Sublime。
+
+`companion_debug_log: true` 会把每次点击的判定过程（模式、样例数、限制、最后落到哪个文件
+或为什么被拒）追加到 `Data/Log/aca-companion.log`，用来回答"样例到底去哪了"；默认关。
 
 **注意**： Competitive Companion 扩展的端口列表里要加入 `12345`（可用设置项 `companion_port`
 修改）——这一步在浏览器里，插件代劳不了。

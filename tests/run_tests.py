@@ -99,6 +99,11 @@ def _install_fake_sublime():
         def size(self):
             return self._size
 
+        def id(self):
+            # Real views have one, and the listener identifies its pinned
+            # target by it.
+            return id(self)
+
         def is_valid(self):
             return True
 
@@ -130,7 +135,9 @@ def _install_fake_sublime():
             return [Region(0)]
 
         def window(self):
-            return Window()
+            # A view belongs to the window it was opened in; every test that
+            # cares drives that through sublime.active_window().
+            return sublime.active_window()
 
     class Window(object):
         """Minimal stand-in so doctor.run() can open its report view."""
@@ -152,6 +159,9 @@ def _install_fake_sublime():
         def run_command(self, *args, **kwargs):
             pass
 
+        def folders(self):
+            return []
+
         def status_message(self, *args, **kwargs):
             pass
 
@@ -160,6 +170,7 @@ def _install_fake_sublime():
     sublime.PhantomSet = PhantomSet
     sublime.Settings = Settings
     sublime.View = View
+    sublime.Window = Window
     sublime.LAYOUT_BLOCK = 1
     sublime.LAYOUT_INLINE = 2
     sublime.HIDDEN = 0
@@ -881,7 +892,11 @@ def main():
     doc.get_settings = lambda: {'run_settings': [
         {'name': 'C++', 'extensions': ['cpp'],
          'compile_cmd': 'g++ {file_nmae} -o x', 'run_cmd': 'x'}]}
+    saved_doctor_window = sys.modules['sublime'].active_window
     try:
+        # A view reports the window it lives in, so doctor needs one to open
+        # its report view in.
+        sys.modules['sublime'].active_window = lambda: sys.modules['sublime'].Window()
         cmd = doc.CphDoctorCommand(sys.modules['sublime'].View())
         # doctor also prints the report to the console; capture it so the
         # check does not depend on the console encoding (a cp1252 Windows
@@ -896,6 +911,7 @@ def main():
               '%s: %s' % (type(e).__name__, e))
     finally:
         doc.get_settings = real_get_settings
+        sys.modules['sublime'].active_window = saved_doctor_window
 
     print('== companion: merge keyed by input ==')
     comp = importlib.import_module(pkg + '.cph_companion')
@@ -1049,8 +1065,11 @@ def main():
               and again is not None and again.file_name() == wanted,
               kept.replace('\n', ' | ')[:120])
 
-        # 4b. in a contest the click means "this problem, into the file I am
-        #     working on" - creating a second file per click would be wrong.
+        # 4b. companion_target decides what one click means, and the two
+        #     answers have to stay apart. Putting "the file under focus" first
+        #     for every click made creation unreachable in real use - a .cpp is
+        #     always focused while competing - which is exactly the reported
+        #     "samples arrive, but no new file is ever created".
         class _FocusedWindow(_AutoWindow):
             def __init__(self, folder, view):
                 _AutoWindow.__init__(self, folder)
@@ -1059,27 +1078,90 @@ def main():
             def active_view(self):
                 return self._view
 
-        settings_mod.init_settings({'auto_create_file': True,
-                                    'auto_create_extension': 'cpp',
-                                    'run_settings': [{'name': 'C++',
-                                                       'extensions': ['cpp']}],
-                                    'auto_create_template': ''})
+        class _PinnedWindow(object):
+            def __init__(self, view):
+                self._view = view
+
+            def views(self):
+                return [self._view]
+
+        base_settings = {'auto_create_file': True,
+                         'auto_create_extension': 'cpp',
+                         'run_settings': [{'name': 'C++', 'extensions': ['cpp']}],
+                         'auto_create_template': ''}
         focused_file = os.path.join(work_dir, 'on_focus.cpp')
         with open(focused_file, 'w', encoding='utf-8') as f:
             f.write(u'// hand written\n')
-        fake_sublime.active_window = lambda: _FocusedWindow(
-            work_dir, fake_sublime.View(file_name=focused_file))
+        cpp_only = {'name': 'C++', 'extensions': ['cpp']}
+
+        settings_mod.init_settings(dict(base_settings, companion_target='current_file'))
+        focus_win = _FocusedWindow(work_dir, fake_sublime.View(file_name=focused_file))
+        fake_sublime.active_window = lambda: focus_win
         hit = comp.resolve_target(u'yet another', '', 1, 1)
-        check('the focused source file receives the problem',
+        check('current_file sends the problem to the file under focus',
               hit is not None and hit.file_name() == focused_file,
               repr(hit.file_name() if hit else None))
-        check('and no extra file is created for it',
-              window.opened == [wanted, wanted], repr(window.opened))
+        check('and that mode never creates a file', focus_win.opened == [],
+              repr(focus_win.opened))
 
+        settings_mod.init_settings(dict(base_settings, companion_target='new_file'))
+        focus_win2 = _FocusedWindow(work_dir, fake_sublime.View(file_name=focused_file))
+        fake_sublime.active_window = lambda: focus_win2
+        fresh = comp.resolve_target(u'a brand new problem', '', 1, 1)
+        check('new_file creates a file even while a cpp is focused',
+              fresh is not None
+              and fresh.file_name() == os.path.join(work_dir,
+                                                   u'a brand new problem.cpp')
+              and focus_win2.opened == [fresh.file_name()],
+              repr((fresh.file_name() if fresh else None, focus_win2.opened)))
+        settings_mod.init_settings(dict(base_settings))
+        default_fresh = comp.resolve_target(u'default mode problem', '', 1, 1)
+        check('creating a file is the default: one click is one new problem',
+              default_fresh is not None
+              and default_fresh.file_name().endswith(u'default mode problem.cpp'),
+              repr(default_fresh.file_name() if default_fresh else None))
+
+        settings_mod.init_settings({'auto_create_file': False,
+                                   'companion_target': 'new_file',
+                                   'run_settings': [cpp_only]})
+        back_on_focus = comp.resolve_target(u'creation is off', '', 1, 1)
+        check('auto_create_file=false falls back to the file under focus',
+              back_on_focus is not None and back_on_focus.file_name() == focused_file,
+              repr(back_on_focus.file_name() if back_on_focus else None))
+        settings_mod.init_settings({'auto_create_file': False,
+                                   'companion_target': 'new_file',
+                                   'run_settings': [cpp_only]})
+        fake_sublime.active_window = lambda: _FocusedWindow(
+            work_dir, fake_sublime.View())
+        check('with nothing focused and creation off there is no target',
+              comp.resolve_target(u'orphan', '', 1, 1) is None)
+
+        # The Listen command is a deliberate instruction about where samples
+        # go, so it outranks both the focus and the mode.
+        pinned_file = os.path.join(work_dir, 'pinned.cpp')
+        with open(pinned_file, 'w', encoding='utf-8') as f:
+            f.write(u'// pinned\n')
+        pinned_view = fake_sublime.View(file_name=pinned_file)
+        fake_sublime.windows = lambda: [_PinnedWindow(pinned_view)]
+        with comp._listener['lock']:
+            comp._listener['view_id'] = pinned_view.id()
+        settings_mod.init_settings(dict(base_settings, companion_target='new_file'))
+        pin_win = _FocusedWindow(work_dir, fake_sublime.View(file_name=focused_file))
+        fake_sublime.active_window = lambda: pin_win
+        pinned = comp.resolve_target(u'pinned problem', '', 1, 1)
+        check('the view the command pinned outranks the focus and the mode',
+              pinned is not None and pinned.file_name() == pinned_file
+              and pin_win.opened == [],
+              repr((pinned.file_name() if pinned else None, pin_win.opened)))
+        with comp._listener['lock']:
+            comp._listener['view_id'] = None
+        fake_sublime.windows = lambda: []
+
+        settings_mod.init_settings(dict(base_settings, companion_target='new_file'))
         fake_sublime.active_window = lambda: _FocusedWindow(
             work_dir, fake_sublime.View())
         untitled = comp.resolve_target(u'untitled focus', '', 1, 1)
-        check('an untitled view falls through to auto-create',
+        check('an untitled view creates the file instead',
               untitled is not None
               and untitled.file_name().endswith(u'untitled focus.cpp'),
               repr(untitled.file_name() if untitled else None))
@@ -1087,10 +1169,16 @@ def main():
         fake_sublime.active_window = lambda: _FocusedWindow(
             work_dir, fake_sublime.View(file_name=os.path.join(work_dir, 'notes.md')))
         notes = comp.resolve_target(u'not a source file', '', 1, 1)
-        check('a file the plugin cannot run is not a target',
+        check('a file the plugin cannot run is no target either',
               notes is not None
               and notes.file_name().endswith(u'not a source file.cpp'),
               repr(notes.file_name() if notes else None))
+
+        settings_mod.init_settings(dict(base_settings, companion_target='current_file'))
+        fake_sublime.active_window = lambda: _FocusedWindow(
+            work_dir, fake_sublime.View(file_name=os.path.join(work_dir, 'notes.md')))
+        check('current_file with only a non-source file focused finds no target',
+              comp.resolve_target(u'nowhere to go', '', 1, 1) is None)
 
         # 5. the setting can turn auto-create off
         settings_mod.init_settings({'auto_create_file': False,
@@ -1172,22 +1260,52 @@ def main():
                       {'input': '5 6\n', 'output': '11\n'}],
         }).encode('utf-8')
         ack = b''
-        comp._start_listener(None, quiet=True)
-        try:
+        post_status = []
+        saved_status_message = fake_sublime.status_message
+        saved_packages_path = getattr(fake_sublime, 'packages_path', None)
+        fake_sublime.packages_path = lambda: os.path.join(work_dir, 'Packages')
+
+        def _post(body, at_port):
             import urllib.request as _url
-            request = _url.Request('http://localhost:%d/' % port, data=payload)
-            response = _url.urlopen(request, timeout=5)
+            response = _url.urlopen(_url.Request('http://localhost:%d/' % at_port,
+                                                 data=body), timeout=5)
             try:
-                ack = response.read()
+                return response.read()
             finally:
                 response.close()
+
+        settings_mod.init_settings(dict(settings_mod.get_settings(),
+                                       companion_debug_log=True))
+        fake_sublime.status_message = lambda text=None, *a, **k: post_status.append(text)
+        comp._start_listener(None, quiet=True)
+        try:
+            ack = _post(payload, port)
         finally:
             comp._stop_listener()
+            fake_sublime.status_message = saved_status_message
+            if saved_packages_path is None:
+                try:
+                    del fake_sublime.packages_path
+                except AttributeError:
+                    pass
+            else:
+                fake_sublime.packages_path = saved_packages_path
         check('the listener answers the extension with ok', ack == b'ok', repr(ack))
         posted = os.path.join(work_dir, u'A. 两数之和.cpp')
         check('the posted problem becomes a file named after its statement',
               os.path.exists(posted) and window.opened[-1] == posted,
               repr(window.opened[-1:]))
+        check('the status bar names the file the samples went into',
+              any(u'A. 两数之和.cpp' in m for m in post_status), repr(post_status))
+        log_lines = []
+        log_path = os.path.join(work_dir, 'Log', 'aca-companion.log')
+        if os.path.exists(log_path):
+            with io.open(log_path, encoding='utf-8') as f:
+                log_lines = f.read().splitlines()
+        check('companion_debug_log records the click and where it landed',
+              log_lines and any(u'A. 两数之和' in line and posted in line
+                                for line in log_lines), repr(log_lines[-1:]))
+
         with open(posted, encoding='utf-8') as f:
             posted_body = f.read()
         check('the created file opens with the statement header and the template',
@@ -1207,6 +1325,46 @@ def main():
         check('the posted limits are remembered for that file',
               posted_limits.get('time_limit_ms') == 1000
               and posted_limits.get('memory_limit_mb') == 256, repr(posted_limits))
+
+        # 8. clicking twice on the same problem must not litter the folder, and
+        #    the log must stay shut while its setting is off.
+        lines_before = 0
+        if os.path.exists(log_path):
+            with io.open(log_path, encoding='utf-8') as f:
+                lines_before = len(f.read().splitlines())
+        listing = sorted(os.listdir(work_dir))
+        settings_mod.init_settings({'auto_create_file': True,
+                                   'auto_create_extension': 'cpp',
+                                   'auto_create_template': '#include <bits/stdc++.h>\n'})
+        fake_sublime.active_window = lambda: window
+        comp._start_listener(None, quiet=True)
+        try:
+            ack2 = _post(payload, port)
+        finally:
+            comp._stop_listener()
+        lines_after = 0
+        if os.path.exists(log_path):
+            with io.open(log_path, encoding='utf-8') as f:
+                lines_after = len(f.read().splitlines())
+        check('a second click on the same problem re-uses its file',
+              ack2 == b'ok' and sorted(os.listdir(work_dir)) == listing,
+              repr(sorted(os.listdir(work_dir))))
+        re_stored = []
+        if os.path.exists(data_file):
+            with io.open(data_file, encoding='utf-8') as f:
+                re_stored = json.loads(f.read())
+        check('and resending does not duplicate its samples',
+              len(re_stored) == 2, repr(re_stored))
+        check('companion_debug_log defaults off: nothing extra is written',
+              lines_after == lines_before, repr((lines_before, lines_after)))
+
+        with io.open(os.path.join(ROOT, 'Algorithm Competition Assistant.sublime-settings'),
+                     encoding='utf-8') as f:
+            shipped_text = f.read()
+        check('the shipped default is the one that creates a file per click',
+              '"companion_target": "new_file"' in shipped_text, 'companion_target missing')
+        check('the debug log switch ships off',
+              '"companion_debug_log": false' in shipped_text, 'companion_debug_log missing')
     finally:
         _stop_and_reset()
         settings_mod.init_settings(saved_settings)

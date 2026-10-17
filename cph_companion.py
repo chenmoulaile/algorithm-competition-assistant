@@ -58,6 +58,33 @@ def _as_int(value):
         return None
 
 
+#: One line per click, for the cases the interface cannot show: which mode was
+#: in effect, and which file (or which refusal) the problem ended up at.
+DEBUG_LOG_NAME = 'aca-companion.log'
+
+
+def _debug_log(message):
+    """Append to <Data>/Log/aca-companion.log when companion_debug_log is on.
+
+    Off by default on purpose: a background HTTP callback writing to the user's
+    disk on every click is not a thing to do silently, and everything worth
+    saying is already in the status bar.
+    """
+    try:
+        if not (get_settings() or {}).get('companion_debug_log', False):
+            return
+        import datetime
+        directory = os.path.join(os.path.dirname(sublime.packages_path()), 'Log')
+        if not os.path.isdir(directory):
+            os.makedirs(directory)
+        stamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        with open(os.path.join(directory, DEBUG_LOG_NAME), 'a',
+                  encoding='utf-8', newline='\n') as handle:
+            handle.write('%s %s\n' % (stamp, message))
+    except Exception as e:
+        print('[Algorithm Competition Assistant] companion log not written: %s' % e)
+
+
 def merge_tests(file_name, incoming):
     """Merge freshly received samples with the stored ones.
 
@@ -223,10 +250,15 @@ def build_handler():
                 target = resolve_target(problem_name, data.get('url') or '',
                                         time_limit_ms, memory_limit_mb)
                 if target is None or not target.file_name():
+                    _debug_log('incoming "%s" tests=%d mode=%s -> no target'
+                               % (problem_name, len(incoming), _target_mode()))
                     sublime.status_message(t('listener_no_target'))
                     return
 
                 file_name = target.file_name()
+                _debug_log('incoming "%s" tests=%d tl=%s ml=%s mode=%s -> %s'
+                           % (problem_name, len(incoming), time_limit_ms,
+                              memory_limit_mb, _target_mode(), file_name))
                 merged = merge_tests(file_name, incoming)
                 if not save_tests(file_name, merged):
                     sublime.status_message(t('import_save_failed'))
@@ -246,9 +278,13 @@ def build_handler():
                     'time_limit_ms': time_limit_ms,
                     'memory_limit_mb': memory_limit_mb,
                 })
+                # Naming the destination is the one thing the user could not
+                # tell: "已接收题目" alone does not say whether it landed in the
+                # file he was looking at or in a newly created one.
                 sublime.status_message(t('tests_received',
                                          name=problem_name or '?',
-                                         count=count, time=tl, memory=ml))
+                                         count=count, time=tl, memory=ml,
+                                         file=os.path.basename(file_name)))
             except Exception as e:
                 print(t('error_handling_post', error=str(e)))
 
@@ -292,6 +328,22 @@ def _statement_header(problem_name, url, time_limit_ms, memory_limit_mb, ext):
     return '\n'.join(lines)
 
 
+def _base_dir(view):
+    """The directory a relative auto_create_dir is resolved against.
+
+    `view` is usually None now (nothing was open when the problem arrived), and
+    a relative path must not silently be resolved against whatever the plugin
+    host's working directory happens to be - the focused problem file's folder
+    is what the setting means.
+    """
+    if view is not None and view.file_name():
+        return os.path.dirname(view.file_name())
+    focused = _focused_source_view()
+    if focused is not None:
+        return os.path.dirname(focused.file_name())
+    return ''
+
+
 def _auto_create_file(view, problem_name, url='', time_limit_ms=None,
                       memory_limit_mb=None):
     """Create '<dir>/<problem name>.<ext>' for an incoming problem.
@@ -317,9 +369,7 @@ def _auto_create_file(view, problem_name, url='', time_limit_ms=None,
     ext = (settings.get('auto_create_extension') or 'cpp').lstrip('.')
 
     window = (view.window() if view is not None else None) or sublime.active_window()
-    base = ''
-    if view is not None and view.file_name():
-        base = os.path.dirname(view.file_name())
+    base = _base_dir(view)
 
     directory = (settings.get('auto_create_dir') or '').strip()
     if directory and not os.path.isabs(directory):
@@ -368,19 +418,21 @@ def _auto_create_file(view, problem_name, url='', time_limit_ms=None,
     return new_view
 
 
-def _focused_source_view():
-    """The file under focus, when it can hold a problem.
-
-    In a contest one click per problem means "this one, into the file I am
-    working on", so a listener that was started by itself must not answer
-    every click with a brand new file. The run / stress / answer panels are
-    scratch views without a file name, and a file the plugin cannot run is
-    not a problem file either, so both fall through.
-    """
+def _focused_view():
+    """Whatever view the user is looking at, file or not."""
     window = sublime.active_window()
     if window is None:
         return None
-    view = window.active_view()
+    return window.active_view()
+
+
+def _focused_source_view():
+    """The problem file under focus, when there is one.
+
+    The run / stress / answer panels are scratch views without a file name,
+    and a file the plugin cannot run is not a problem file either.
+    """
+    view = _focused_view()
     if view is None:
         return None
     file_name = view.file_name()
@@ -392,22 +444,51 @@ def _focused_source_view():
     return view
 
 
-def resolve_target(problem_name, url='', time_limit_ms=None, memory_limit_mb=None):
-    """The view an incoming problem belongs to, creating one when needed.
+#: What one click on the extension means. `new_file` is one file per problem,
+#: the way cph and FastOlympicCodingHook do it; `current_file` only ever fills
+#: the problem file already under focus and never creates anything.
+_TARGET_NEW = 'new_file'
+_TARGET_CURRENT = 'current_file'
 
-    Kept apart from the POST callback so the choice is testable on its own:
-    it used to be written the other way round, requiring the listener to
-    start on a saved file while the auto-create branch only ran for a target
-    with no file name. Those two exclude each other, so a browser click could
-    never create anything.
+
+def _target_mode():
+    settings = get_settings() or {}
+    mode = str(settings.get('companion_target', _TARGET_NEW) or '').strip().lower()
+    return mode if mode in (_TARGET_NEW, _TARGET_CURRENT) else _TARGET_NEW
+
+
+def resolve_target(problem_name, url='', time_limit_ms=None, memory_limit_mb=None):
+    """The view an incoming problem belongs to.
+
+    Order: the file the Listen command pinned - that is a deliberate
+    instruction about where samples go, so it outranks the mode - then what
+    companion_target says. Kept apart from the POST callback so the choice is
+    testable on its own.
+
+    Two mistakes made "click the browser, get a problem file" impossible here.
+    `_start_listener()` refused an unsaved view while the creation branch only
+    ran for a target with no file name: those conditions exclude each other.
+    And once a focused-file lookup was added at the front, it always won - a
+    .cpp is focused during a whole contest - so creation was still unreachable
+    in the only situation that matters.
     """
-    focused = _focused_source_view()
-    if focused is not None:
-        return focused
-    view = _find_view(_listener.get('view_id'))
-    if view is not None and view.file_name():
-        return view
-    return _auto_create_file(view, problem_name, url, time_limit_ms, memory_limit_mb)
+    pinned = _find_view(_listener.get('view_id'))
+    if pinned is not None and pinned.file_name():
+        return pinned
+
+    if _target_mode() == _TARGET_CURRENT:
+        return _focused_source_view()
+
+    arrival = _focused_view()
+    if arrival is not None and arrival.file_name():
+        arrival = None        # a real file is never closed to make room
+    created = _auto_create_file(arrival, problem_name, url,
+                                time_limit_ms, memory_limit_mb)
+    if created is not None:
+        return created
+    # Creation is off (auto_create_file) or has nowhere to write: a focused
+    # problem file still beats dropping the samples on the floor.
+    return _focused_source_view()
 
 
 def _start_listener(view=None, quiet=False):
