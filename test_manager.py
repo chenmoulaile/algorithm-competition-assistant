@@ -175,20 +175,24 @@ def _source_fingerprint(process_manager):
 	return (tuple(parts), cmd)
 
 
-def should_skip_compile(process_manager, force=False):
+def should_skip_compile(process_manager, force=False, fingerprint=None):
 	if force or not get_settings().get('compile_cache_enabled', True):
 		return False
 	entry = _compile_cache.get(process_manager.file)
 	if not entry:
 		return False
-	return entry.get('fingerprint') == _source_fingerprint(process_manager)
+	if fingerprint is None:
+		fingerprint = _source_fingerprint(process_manager)
+	return entry.get('fingerprint') == fingerprint
 
 
-def remember_compile(process_manager):
+def remember_compile(process_manager, fingerprint=None):
 	if not get_settings().get('compile_cache_enabled', True):
 		return
+	if fingerprint is None:
+		fingerprint = _source_fingerprint(process_manager)
 	_compile_cache[process_manager.file] = {
-		'fingerprint': _source_fingerprint(process_manager),
+		'fingerprint': fingerprint,
 	}
 
 
@@ -276,6 +280,15 @@ def _names_source(location, source_file):
 	return _names_source_impl(location, source_file)
 
 
+#: How much of the program's own output `_squash_ws` is allowed to remember.
+#: The cache holds the strings it was given, so it needs a byte ceiling: the
+#: default max_output_bytes is megabytes, and a run with many samples would
+#: otherwise trade CPU for memory without limit.
+_SQUASH_MEMO_MAX_BYTES = 4 * 1024 * 1024
+_squash_memo = {}
+_squash_memo_bytes = [0]
+
+
 def _squash_ws(s):
 	"""Drop every whitespace character, like the judge's answer comparison.
 
@@ -283,10 +296,25 @@ def _squash_ws(s):
 	the "is this answer already accepted?" check must not be stricter than
 	the verdict: byte comparison made an AC sample keep offering 'accept'
 	and refuse to collapse.
+
+	Memoised because a panel refresh asks every card the same question again,
+	so a run of N samples squashed the whole output of every earlier card N
+	times over - the quadratic term of the chain. CPython caches a string's
+	hash per object, which is what makes the repeat lookup free; the byte cap
+	keeps it from growing with the program's output.
 	"""
 	if not s:
 		return ''
-	return ''.join(s.split())
+	cached = _squash_memo.get(s)
+	if cached is not None:
+		return cached
+	result = ''.join(s.split())
+	if _squash_memo_bytes[0] + len(s) > _SQUASH_MEMO_MAX_BYTES:
+		_squash_memo.clear()
+		_squash_memo_bytes[0] = 0
+	_squash_memo[s] = result
+	_squash_memo_bytes[0] += len(s)
+	return result
 
 
 def _count_text_units(s):
@@ -2274,7 +2302,14 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		k = min(k, len(tester.tests))
 		pt = 0
 		_last_test_entry = -1
+		# A chain step pushes one card, but the walk still has to visit the
+		# earlier ones: their text lengths decide where the last card sits and
+		# what region its phantom covers. What it does not have to do is build
+		# their markup and re-decide accept/decline for every stored output -
+		# that made a run of N samples rebuild all N cards once per sample.
+		only = (k - 1) if update_last else None
 		for i in range(k):
+			build = only is None or i == only
 			running = tester.proc_run and i == tester.running_test
 
 			config = tester.tests[i].get_config(
@@ -2284,7 +2319,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				tester.prog_out[i],
 				self.view,
 				running=running
-			)
+			) if build else None
 			_last_test_entry = len(configs)
 			configs.append(config)
 
@@ -2297,23 +2332,27 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			if (not running and not tester.tests[i].fold
 					and str(getattr(tester.tests[i], 'rtcode', '0')) == '0'
 					and tester.prog_out[i]):
-				if tester.tests[i].is_correct_answer(tester.prog_out[i], _float_tolerance):
-					type = 'decline'
+				if build:
+					if tester.tests[i].is_correct_answer(tester.prog_out[i], _float_tolerance):
+						type = 'decline'
+					else:
+						type = 'accept'
+					accdec = tester.tests[i].get_accdec(
+						i,
+						pt,
+						self.on_accdec_action,
+						type,
+						self.view
+					)
 				else:
-					type = 'accept'
-				accdec = tester.tests[i].get_accdec(
-					i,
-					pt,
-					self.on_accdec_action,
-					type,
-					self.view
-				)
+					# None keeps the phantom indices of every later card exact.
+					accdec = None
 				configs.append(accdec)
 
 			if not tester.tests[i].fold:
 				pt += 2
 
-		if not tester.proc_run:
+		if not tester.proc_run and only is None:
 			configs.append(self.get_next_title())
 
 		while len(self.test_phantoms) < len(configs):
@@ -2459,17 +2498,40 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 		self.tester.next_test(v.size() - 1, lambda: self.update_configs(update_last=True))
 
-	def memorize_tests(self):
-		if self.tester and self.dbg_file:
-			tests_data = [x.memorize() for x in (self.tester.get_tests())]
-			if not save_tests(self.dbg_file, tests_data):
-				# Every other save path reports this (cph_companion,
-				# cph_extras, cph_import, cph_stress). Silently dropping it
-				# here meant "my test points are gone" with no explanation.
-				# Not a status_message: a read-only folder fails on every
-				# single run, and the tests are already shown in the view.
-				print('[Algorithm Competition Assistant] %s'
-					% t('tests_save_failed', path=self.dbg_file))
+	def memorize_tests(self, force=False):
+		"""Persist the test cards, coalesced.
+
+		Each finished sample used to serialise every card and rewrite every
+		copy of the file, so N samples cost N writes of N cards - with a
+		multi-megabyte output that is hundreds of megabytes of disk traffic in
+		one run, on the thread that draws the cards. Mid-chain the write is
+		deferred and folded into one; the end of a chain forces it.
+		"""
+		if not (self.tester and self.dbg_file):
+			return
+		self._tests_dirty = True
+		if force:
+			self._flush_tests()
+			return
+		if getattr(self, '_tests_flush_scheduled', False):
+			return
+		self._tests_flush_scheduled = True
+		sublime.set_timeout(self._flush_tests, 250)
+
+	def _flush_tests(self):
+		self._tests_flush_scheduled = False
+		if not getattr(self, '_tests_dirty', False):
+			return
+		self._tests_dirty = False
+		tests_data = [x.memorize() for x in (self.tester.get_tests())]
+		if not save_tests(self.dbg_file, tests_data):
+			# Every other save path reports this (cph_companion,
+			# cph_extras, cph_import, cph_stress). Silently dropping it
+			# here meant "my test points are gone" with no explanation.
+			# Not a status_message: a read-only folder fails on every
+			# single run, and the tests are already shown in the view.
+			print('[Algorithm Competition Assistant] %s'
+				% t('tests_save_failed', path=self.dbg_file))
 
 	def on_insert(self, s):
 		self.view.run_command('cph_test_manager', {'action': 'insert_opd_input', 'text': s})
@@ -2732,6 +2794,9 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		else:
 			sublime.set_timeout(self.update_configs, 100)
 			self.update_summary_bar()
+			# Whatever the chain deferred is on disk before anything else can
+			# touch these cards.
+			self.memorize_tests(force=True)
 			# The chain is over: this is the one moment the whole run's
 			# verdicts are known, so record them for the practice stats.
 			self.record_stats()
@@ -3152,25 +3217,14 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		if memory_limit_mb is not None:
 			process_manager.set_memory_limit(memory_limit_mb)
 
-		def compile(self=self, v=v):
-			cached = False
-			try:
-				if should_skip_compile(process_manager, force_compile):
-					cached = True
-					cmp_data = (0, t('compile_cached'))
-					print('[Algorithm Competition Assistant] compile skipped (source unchanged)')
-				else:
-					cmp_data = process_manager.compile()
-					print('[Algorithm Competition Assistant] compile rc: %s' % (cmp_data[0] if cmp_data else None))
-			except Exception as e:
-				print('[Algorithm Competition Assistant] compile exception: %s' % e)
-				cmp_data = (1, '[Algorithm Competition Assistant] compile failed: %s' % e)
-			finally:
-				self.compiling_since = None
+		def after_compile(cmp_data, cached, fingerprint):
+			"""Apply the compile result. Runs on the main thread, on purpose."""
+			self.compiling_since = None
+			v = self.view
 			self.change_process_status('COMPILED')
 			self.delta_input = 0
 			if cmp_data is None or cmp_data[0] == 0:
-				remember_compile(process_manager)
+				remember_compile(process_manager, fingerprint)
 				# The success path never touched the compile bar, so the
 				# "Compiling..." chip set before this ran stayed on screen for
 				# the whole session - including a cache hit, where it was the
@@ -3217,6 +3271,35 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				v.run_command('cph_test_manager', {'action': 'insert_opd_out', 'text': '\n' + cmp_data[1]})
 				self.set_compile_bar(cmp_data[1], type='error',
 									 chip_text=t('compilation_error'))
+
+		def compile():
+			# The fingerprint is taken once, before the compiler runs: the old
+			# code walked the headers and globbed the extra sources a second
+			# time on every Run just to remember what it had checked.
+			fingerprint = None
+			if get_settings().get('compile_cache_enabled', True):
+				try:
+					fingerprint = _source_fingerprint(process_manager)
+				except Exception:
+					fingerprint = None
+			cached = False
+			try:
+				if should_skip_compile(process_manager, force_compile, fingerprint):
+					cached = True
+					cmp_data = (0, t('compile_cached'))
+					print('[Algorithm Competition Assistant] compile skipped (source unchanged)')
+				else:
+					cmp_data = process_manager.compile()
+					print('[Algorithm Competition Assistant] compile rc: %s' % (cmp_data[0] if cmp_data else None))
+			except Exception as e:
+				print('[Algorithm Competition Assistant] compile exception: %s' % e)
+				cmp_data = (1, '[Algorithm Competition Assistant] compile failed: %s' % e)
+			# g++ was the right thing to run on Sublime's one shared async
+			# worker; the panel is not. Drawing the compile chip, building the
+			# Tester and starting the chain all touch views, and doing that
+			# here queued every other plugin's set_timeout_async work behind a
+			# compile - which is what made a run freeze the editor.
+			sublime.set_timeout(lambda: after_compile(cmp_data, cached, fingerprint), 0)
 
 		self.set_compile_bar(t('compiling'), type='compiling')
 		# Mark compile start only now - the terminate/rerun path above

@@ -1724,6 +1724,142 @@ def main():
         fake_sublime.error_message = saved_error_message
         shutil.rmtree(work_dir, ignore_errors=True)
 
+    print('== panel refresh: one card changed, one card rebuilt ==')
+    mgr = tm.CphTestManagerCommand.__new__(tm.CphTestManagerCommand)
+    mgr.view = sys.modules['sublime'].View()
+    mgr.on_test_action = lambda *a, **k: None
+    mgr.on_accdec_action = lambda *a, **k: None
+    mgr.schedule_auto_fit_panel_width = lambda *a, **k: None
+    mgr.update_summary_bar = lambda *a, **k: None
+    built = []
+    card_cls = tm.CphTestManagerCommand.Test
+    real_get_config = card_cls.get_config
+
+    def counting_config(self, *args, **kwargs):
+        built.append(self.test_string)
+        return real_get_config(self, *args, **kwargs)
+
+    def _card(text):
+        item = card_cls(text)
+        item.rtcode = '0'
+        return item
+
+    card_cls.get_config = counting_config
+    try:
+        tester3 = make_tester([_card('1 2\n'), _card('3 4\n'), _card('5 6\n')])
+        tester3.proc_run = True
+        tester3.test_iter = 2
+        tester3.running_test = 2
+        tester3.prog_out = ['a\n', 'b\n', 'c\n']
+        mgr.tester = tester3
+        mgr.test_phantoms = []
+        del built[:]
+        mgr.update_configs(update_last=True)
+        check('a chain step rebuilds only the card it pushes',
+              len(built) == 1, repr(built))
+        pushed = [i for i, ph in enumerate(mgr.test_phantoms) if ph.phantoms]
+        mgr.test_phantoms = []
+        del built[:]
+        mgr.update_configs()
+        full_pushed = [i for i, ph in enumerate(mgr.test_phantoms) if ph.phantoms]
+        check('the incremental rebuild writes the whole set, as it always did',
+              len(built) == 3 and len(full_pushed) >= 3,
+              repr((len(built), full_pushed)))
+        check('and the slot the chain step pushed is the slot the full rebuild pushes',
+              pushed and pushed[0] == full_pushed[pushed[0]],
+              repr((pushed, full_pushed)))
+        # the answer comparison is what made the walk quadratic; it must not
+        # run for a card nobody is re-rendering
+        asked = []
+        real_is_correct = card_cls.is_correct_answer
+        card_cls.is_correct_answer = lambda self, *a, **k: (asked.append(1),
+                                                            real_is_correct(self, *a, **k))[1]
+        try:
+            mgr.test_phantoms = []
+            del asked[:]
+            mgr.update_configs(update_last=True)
+            check('and it is asked only about the card being drawn',
+                  len(asked) <= 1, repr(asked))
+        finally:
+            card_cls.is_correct_answer = real_is_correct
+    finally:
+        card_cls.get_config = real_get_config
+
+    _squashed_input = ' 1 2\n 3 '
+    _squashed_once = tm._squash_ws(_squashed_input)
+    check('the whitespace squash stays exact and is memoised',
+          _squashed_once == '123'
+          and tm._squash_ws(_squashed_input) is _squashed_once
+          and tm._squash_ws('') == '' and tm._squash_ws(None) == '')
+
+    # The compile worker used to draw the compile chip, build the Tester and
+    # start the chain on Sublime's single shared async worker - behind every
+    # compile, and ahead of every other plugin's async work.
+    tm_src_for_thread = io.open(os.path.join(ROOT, 'test_manager.py'),
+                                encoding='utf-8').read()
+    worker = tm_src_for_thread.split('def compile():')[1].split(
+        "self.set_compile_bar(t('compiling')")[0]
+    check('the async worker only runs the compiler',
+          'sublime.set_timeout(lambda: after_compile(' in worker
+          and 'v.run_command(' not in worker
+          and 'set_compile_bar(' not in worker
+          and '.settings().set(' not in worker,
+          worker[:120])
+
+    class _FakePM(object):
+        file = os.path.join('x', 'a.cpp')
+
+        def get_compile_inputs(self):
+            return [self.file]
+
+        def get_compile_cmd(self):
+            return 'g++ a.cpp'
+
+    walked = []
+    real_fp = tm._source_fingerprint
+    tm._source_fingerprint = lambda pm: (walked.append(1), real_fp(pm))[1]
+    try:
+        stamp = (('x', 1, 1), 'g++ a.cpp')
+        tm.should_skip_compile(_FakePM(), fingerprint=stamp)
+        tm.remember_compile(_FakePM(), fingerprint=stamp)
+        check('a Run that already took the fingerprint does not walk the headers twice',
+              walked == [], repr(walked))
+        tm.should_skip_compile(_FakePM())
+        check('and it is still computed when nobody passed one', len(walked) == 1,
+              repr(walked))
+        pm = _FakePM()
+        tm.remember_compile(pm, stamp)
+        walked[:] = []
+        check('the cache actually hits on a matching fingerprint',
+              tm.should_skip_compile(pm, fingerprint=stamp) is True
+              and walked == [], repr(walked))
+    finally:
+        tm._source_fingerprint = real_fp
+
+    print('== saving the cards: once per chain, not once per sample ==')
+    real_save = tm.save_tests
+    saves = []
+    try:
+        tm.save_tests = lambda f, tests: (saves.append(f), True)[1]
+        mgr.dbg_file = os.path.join('x', 'a.cpp')
+        mgr.tester = tester3
+        mgr._tests_dirty = False
+        mgr._tests_flush_scheduled = False
+        mgr.memorize_tests()
+        mgr.memorize_tests()
+        mgr.memorize_tests()
+        check('three finished samples do not rewrite the file three times',
+              saves == [], repr(saves))
+        mgr.memorize_tests(force=True)
+        check('the chain end writes it, once', len(saves) == 1, repr(saves))
+        # a coalesced timer that fires with nothing pending must be free
+        mgr._tests_flush_scheduled = True
+        mgr._flush_tests()
+        check('and a flush with nothing dirty writes nothing', len(saves) == 1,
+              repr(saves))
+    finally:
+        tm.save_tests = real_save
+
     print('== install layout: who is really loaded ==')
     # Package Control reinstalled the package as a zip and emptied the folder
     # install underneath a running developer (measured here: the folder was
