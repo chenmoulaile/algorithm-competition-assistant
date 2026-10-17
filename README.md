@@ -374,12 +374,21 @@ int main() {
 - 命令面板：`Algorithm Competition Assistant: Start stress test`
 - 快捷键：`Ctrl+Alt+S` (Mac: `Cmd+Alt+S`)
 
-**不需要填路径**：命令会先在当前源文件所在目录里按名字找 std 和生成器
-（`std` / `brute` / `bf` / `sol` / `暴力` 与 `gen` / `data` / `maker` / `rand` / `生成` 等），
-找到就直接开跑，轮数与时间限制用设置里的 `stress_max_rounds` / `stress_time_limit_seconds`。
-目录里有多个候选时会列出来让你选一个；一个都找不到时才会请你挑文件 —— Windows 上直接弹
-系统「打开文件」对话框，**起始目录就是当前源文件所在目录**，其它平台用命令面板浏览
-（`stress_file_picker` 可改成 `native` / `panel`）。
+**正解和生成器从哪来由 `stress_file_source` 决定，三种都写在设置注释里：**
+
+- `pick_once`（默认）：这个 cpp 第一次启动对拍时问你（Windows 用系统「打开文件」对话框，
+  **起始目录就是当前源文件所在目录**），选完记在该题测试数据旁边的 `<文件名>__tests.stress`
+  里，同一文件以后再按 `Ctrl+Alt+S` 就直接开跑、不再问；换个题目文件重新各选一次。
+  同目录已经有唯一一对 std/gen 时连第一次都省了。
+- `same_dir`：只在源文件同目录按名字找（`std` / `brute` / `bf` / `sol` / `暴力` 与
+  `gen` / `data` / `maker` / `rand` / `生成` 等，多个候选取最短名），**永不弹窗**；
+  找不到就直接告诉你它查了哪个目录，然后才让你手动指。
+- `auto`：旧行为 —— 同目录找 → 退回上次用的全局路径 → 仍不确定才问。
+
+选定后轮数与时间限制用设置里的 `stress_max_rounds` / `stress_time_limit_seconds`。
+对话框本身现在按原生分辨率渲染（PowerShell 进程先声明 Per-Monitor V2 DPI 感知），
+高缩放屏上不再是拉伸过的那层虚影；这一步在老机器上会静默跳过，不影响选文件。
+其它平台或 `stress_file_picker` 设成 `panel` 时用 Sublime 面板浏览。
 
 **要问的时候会写清楚问的是哪一个**：正解和生成器分两次选，标题（以及 Sublime 列表的第一行、
 状态栏、控制台）都是 `【第 1/2 步 · 选正解 std】慢但一定对的那个（暴力/bf/sol）`、

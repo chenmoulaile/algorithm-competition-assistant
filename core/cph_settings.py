@@ -147,6 +147,62 @@ def get_limits_file_path(file):
 	return primary + '.limits'
 
 
+# Which std and generator a stress test of THIS file was last run with. Saved
+# per source file, not in the settings: one contest folder has one problem per
+# subfolder and picking them once per problem is what a real session does,
+# while a single global pair would be wrong for all but the last file.
+_stress_files = {}
+
+
+def _stress_files_path(file, create=False):
+	primary = primary_tests_path(file, create=create)
+	if not primary:
+		return None
+	return primary + '.stress'
+
+
+def set_stress_files(file, std_file, generator_file):
+	"""Remember the two programs used to stress-test this source file."""
+	if not file:
+		return
+	_stress_files[file] = {'std_file': std_file or '', 'generator_file': generator_file or ''}
+	path = _stress_files_path(file, create=True)
+	if not path:
+		return
+	try:
+		with open(path, 'w', encoding='utf-8') as f:
+			f.write(sublime.encode_value(_stress_files[file], True))
+	except Exception as e:
+		print('[Algorithm Competition Assistant] stress files not saved: %s (%s)' % (path, e))
+
+
+def get_stress_files(file):
+	"""(std_file, generator_file) for this source file, or (None, None).
+
+	Paths that no longer exist are dropped: a remembered pair from a folder the
+	user has since reorganised must not be started.
+	"""
+	entry = _stress_files.get(file)
+	if entry is None:
+		path = _stress_files_path(file)
+		entry = None
+		if path and os.path.exists(path):
+			try:
+				with open(path, 'r', encoding='utf-8') as f:
+					data = sublime.decode_value(f.read().strip())
+				if isinstance(data, dict):
+					entry = data
+			except Exception:
+				entry = None
+		if entry is None:
+			return (None, None)
+		_stress_files[file] = entry
+	std = entry.get('std_file') or ''
+	gen = entry.get('generator_file') or ''
+	return ((std if std and os.path.exists(std) else None),
+			(gen if gen and os.path.exists(gen) else None))
+
+
 def _limit_value(value):
 	try:
 		return int(value)

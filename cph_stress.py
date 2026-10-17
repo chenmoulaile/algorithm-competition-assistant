@@ -14,6 +14,7 @@ import threading
 import time
 
 from .core.cph_settings import (get_settings, load_all_tests, save_tests,
+                                get_stress_files, set_stress_files,
                                 PACKAGE_NAME, settings_file)
 from .core.cph_stats import record_stress
 from .core.cph_tests_merge import merge_tests
@@ -186,9 +187,72 @@ def _same_program(first, second):
         return False
 
 
+#: How the two programs a stress test needs are found.
+_FILES_SAME_DIR = 'same_dir'
+_FILES_PICK_ONCE = 'pick_once'
+_FILES_AUTO = 'auto'
+
+
+def _files_mode(settings):
+    """same_dir: only beside the source. pick_once: ask once per file, then
+    remember. auto: the old search that also falls back to the global pair."""
+    mode = str((settings or {}).get('stress_file_source', _FILES_PICK_ONCE)
+               or '').strip().lower()
+    return mode if mode in (_FILES_SAME_DIR, _FILES_PICK_ONCE, _FILES_AUTO) \
+        else _FILES_PICK_ONCE
+
+
+def _same_dir_pair(src_dir, user_file):
+    """The std and the generator sitting next to the file under test.
+
+    The first hit wins rather than "exactly one": _candidate_files sorts by
+    shortest name, so `std.cpp` is preferred over `std_old.cpp` - the naming
+    convention the whole package already relies on. Which two files were picked
+    is printed in the status bar, so a folder with several candidates is not a
+    silent choice.
+    """
+    std_hits = _candidate_files(src_dir, 'std', exclude=[user_file])
+    gen_hits = _candidate_files(src_dir, 'gen', exclude=[user_file] + std_hits)
+    return ((std_hits[0] if std_hits else None),
+            (gen_hits[0] if gen_hits else None))
+
+
+def _same_dir_miss_text(src_dir):
+    return t('stress_same_dir_missing', dir=src_dir)
+
+
+def _ask_pair(window, src_dir, std_hits, gen_hits, on_begin, ask):
+    """Ask for std first and the generator second, with each step labelled.
+
+    An empty candidate list is not a dead end: _pick_file then opens the
+    system dialog, starting in the folder of the file under test.
+    """
+    def pick_gen(std_file):
+        _pick_file(window, src_dir, t('choose_generator_file'),
+                   [g for g in gen_hits
+                    if os.path.normcase(g) != os.path.normcase(std_file)],
+                   lambda gen_file: on_begin(std_file, gen_file), ask=ask)
+
+    _pick_file(window, src_dir, t('choose_std_file'), std_hits, pick_gen, ask=ask)
+
+
 _PS_OPEN_FILE = """
 $ErrorActionPreference = 'SilentlyContinue'
 Add-Type -AssemblyName System.Windows.Forms
+# The dialog looked soft and low-resolution on a scaled display because
+# powershell.exe is not DPI-aware: Windows renders the whole window at 100%
+# and stretches the bitmap. Declaring per-monitor awareness before any window
+# exists makes the common dialog draw at the panel's native resolution.
+# Every step is optional - on a host without the compiler or the API the
+# dialog still opens, just as soft as before.
+Add-Type -Namespace 'Native' -Name 'Dpi' -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+[DllImport("shcore.dll")] public static extern int SetProcessDpiAwareness(int awareness);
+[DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+'@
+try {{ [void][Native.Dpi]::SetProcessDpiAwarenessContext([IntPtr](-4)) }} catch {{}}
+try {{ [void][Native.Dpi]::SetProcessDpiAwareness(4) }} catch {{}}
+try {{ [void][Native.Dpi]::SetProcessDPIAware() }} catch {{}}
 $dir = [System.Text.Encoding]::UTF8.GetString(
     [System.Convert]::FromBase64String('{dir}'))
 $title = [System.Text.Encoding]::UTF8.GetString(
@@ -529,15 +593,14 @@ def _start_flow(view, choose=False):
     settings = sublime.load_settings(settings_file)
     src_dir = os.path.dirname(user_file)
 
-    # Look next to the file under test first: that is where the std and the
-    # generator of *this* problem live. Only then fall back to what was used
-    # last time, which may belong to a completely different problem.
-    std_hits = _candidate_files(src_dir, 'std', exclude=[user_file])
-    if not std_hits:
-        std_hits = _remembered_file(settings, 'stress_std_file')
-    gen_hits = _candidate_files(src_dir, 'gen', exclude=[user_file] + std_hits)
-    if not gen_hits:
-        gen_hits = _remembered_file(settings, 'stress_generator_file')
+    # Where std and the generator come from. `pick_once` asks the first time
+    # for this file and remembers the answer beside its test data; `same_dir`
+    # never asks and only accepts a pair found next to the source; `auto` is
+    # the old search (folder, then what was used last time, then ask).
+    mode = _files_mode(get_settings())
+    src_dir = os.path.dirname(user_file)
+    remembered = get_stress_files(user_file) if mode == _FILES_PICK_ONCE \
+        else (None, None)
 
     def begin(std_file, gen_file):
         if not std_file or not os.path.exists(std_file):
@@ -556,6 +619,9 @@ def _start_flow(view, choose=False):
         settings.set('stress_std_file', std_file)
         settings.set('stress_generator_file', gen_file)
         sublime.save_settings(settings_file)
+        # per problem file: the next stress run of THIS file asks nothing,
+        # while a different problem in the same folder keeps its own pair
+        set_stress_files(user_file, std_file, gen_file)
 
         try:
             time_limit = float(get_settings().get('stress_time_limit_seconds', 2) or 2)
@@ -575,15 +641,47 @@ def _start_flow(view, choose=False):
                                   os.path.basename(std_file),
                                   os.path.basename(gen_file)))
         _launch(view, user_file, std_file, gen_file, time_limit, max_rounds)
-    if choose or len(std_hits) != 1 or len(gen_hits) != 1:
-        def pick_gen(std_file):
-            _pick_file(window, src_dir, t('choose_generator_file'),
-                       [g for g in gen_hits
-                        if os.path.normcase(g) != os.path.normcase(std_file)],
-                       lambda gen_file: begin(std_file, gen_file), ask=choose)
 
-        _pick_file(window, src_dir, t('choose_std_file'), std_hits, pick_gen,
-                   ask=choose)
+    if remembered[0] and remembered[1]:
+        begin(remembered[0], remembered[1])
+        return
+
+    if mode == _FILES_SAME_DIR:
+        std_file, gen_file = _same_dir_pair(src_dir, user_file)
+        if std_file and gen_file:
+            begin(std_file, gen_file)
+            return
+        # Nothing to fall back to without asking, and asking is exactly what
+        # this mode refuses - so say where it looked, then let the user point
+        # at the files instead of leaving a key press with no way forward.
+        sublime.error_message(_same_dir_miss_text(src_dir))
+        _ask_pair(window, src_dir, [], [], begin, True)
+        return
+
+    if mode == _FILES_PICK_ONCE:
+        std_file, gen_file = _same_dir_pair(src_dir, user_file)
+        if std_file and gen_file:
+            begin(std_file, gen_file)
+            return
+        std_hits = [std_file] if std_file \
+            else _remembered_file(settings, 'stress_std_file')
+        gen_hits = [gen_file] if gen_file \
+            else _remembered_file(settings, 'stress_generator_file')
+        _ask_pair(window, src_dir, std_hits, gen_hits, begin, False)
+        return
+
+    # Look next to the file under test first: that is where the std and the
+    # generator of *this* problem live. Only then fall back to what was used
+    # last time, which may belong to a completely different problem.
+    std_hits = _candidate_files(src_dir, 'std', exclude=[user_file])
+    if not std_hits:
+        std_hits = _remembered_file(settings, 'stress_std_file')
+    gen_hits = _candidate_files(src_dir, 'gen', exclude=[user_file] + std_hits)
+    if not gen_hits:
+        gen_hits = _remembered_file(settings, 'stress_generator_file')
+
+    if choose or len(std_hits) != 1 or len(gen_hits) != 1:
+        _ask_pair(window, src_dir, std_hits, gen_hits, begin, choose)
         return
 
     begin(std_hits[0], gen_hits[0])

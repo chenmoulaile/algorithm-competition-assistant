@@ -601,6 +601,14 @@ STRINGS = {
               'compared with itself agrees every round, so this stress test '
               'can never find anything. Pick again.',
     },
+    'stress_same_dir_missing': {
+        'zh': '在 {dir} 里没找到唯一的一对 std / gen（正解期望文件名含 std/brute/bf/sol，'
+              '生成器含 gen/data/maker/rand）。改一下文件名，或在设置里把 '
+              'stress_file_source 换成 pick_once 让它问你一次。',
+        'en': 'No single std / gen pair found in {dir} (the correct solution wants a '
+              'name containing std/brute/bf/sol, the generator gen/data/maker/rand). '
+              'Rename them, or set stress_file_source to pick_once to be asked once.',
+    },
     'stress_time_limit': {
         'zh': '对拍时间限制(秒)',
         'en': 'Stress test time limit (seconds)',

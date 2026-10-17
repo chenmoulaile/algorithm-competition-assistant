@@ -1789,6 +1789,89 @@ def main():
 
     shutil.rmtree(layout, ignore_errors=True)
 
+    print('== stress file sources: same folder, or pick once and remember ==')
+    stress2 = importlib.import_module(pkg + '.cph_stress')
+    settings2 = importlib.import_module(pkg + '.core.cph_settings')
+    saved_settings2 = settings2.settings
+    sdir = _tf.mkdtemp()
+    try:
+        for name in ('problem.cpp', 'std.cpp', 'gen.cpp', 'brute_force.cpp',
+                     'data_gen.py'):
+            with io.open(os.path.join(sdir, name), 'w', encoding='utf-8',
+                         newline='\n') as f:
+                f.write('int main(){}\n')
+        same_dir = stress2._same_dir_pair(sdir, os.path.join(sdir, 'problem.cpp'))
+        check('std and gen are found beside the source',
+              same_dir[0] == os.path.join(sdir, 'std.cpp')
+              and same_dir[1] == os.path.join(sdir, 'gen.cpp'), repr(same_dir))
+        check('the shortest name wins when several candidates match',
+              os.path.basename(same_dir[0]) == 'std.cpp'
+              and 'brute' not in os.path.basename(same_dir[0]), repr(same_dir))
+
+        empty = os.path.join(sdir, 'sub')
+        os.makedirs(empty)
+        missing = stress2._same_dir_pair(empty, os.path.join(empty, 'x.cpp'))
+        check('nothing beside the source is reported as missing, not guessed',
+              missing == (None, None), repr(missing))
+
+        # one problem folder per task, std in a subfolder: the search stays
+        # honest about where it looked
+        check('the message names the folder that was searched',
+              'sub' in stress2._same_dir_miss_text(empty))
+
+        # the modes
+        check('the default is to pick once and remember',
+              stress2._files_mode({}) == 'pick_once')
+        check('same_dir and the old hybrid are both selectable',
+              stress2._files_mode({'stress_file_source': 'same_dir'}) == 'same_dir'
+              and stress2._files_mode({'stress_file_source': 'auto'}) == 'auto'
+              and stress2._files_mode({'stress_file_source': 'nonsense'}) == 'pick_once')
+
+        # remembered per source file, and it survives a restart
+        source = os.path.join(sdir, 'problem.cpp')
+        settings2.init_settings({'tests_relative_dir': '', 'tests_folder_name': 'tests'})
+        settings2.set_stress_files(source, os.path.join(sdir, 'std.cpp'),
+                                   os.path.join(sdir, 'gen.cpp'))
+        check('the choice is written beside the test data',
+              os.path.exists(source + '__tests.stress')
+              or os.path.exists(os.path.join(sdir, 'tests',
+                                             'problem.cpp__tests.stress')))
+        settings2._stress_files.clear()
+        back = settings2.get_stress_files(source)
+        check('and read back after a restart',
+              back[0] == os.path.join(sdir, 'std.cpp')
+              and back[1] == os.path.join(sdir, 'gen.cpp'), repr(back))
+
+        settings2._stress_files.clear()
+        gone = os.path.join(sdir, 'deleted.cpp')
+        settings2.set_stress_files(gone, os.path.join(sdir, 'nope.cpp'),
+                                   os.path.join(sdir, 'gen.cpp'))
+        settings2._stress_files.clear()
+        check('a remembered file that no longer exists is dropped on its own, '
+              'so the flow asks again instead of starting a dead path',
+              settings2.get_stress_files(gone) == (None, os.path.join(sdir, 'gen.cpp')),
+              repr(settings2.get_stress_files(gone)))
+
+        src_text = io.open(os.path.join(ROOT, 'cph_stress.py'), encoding='utf-8').read()
+        check('the flow consults the mode before deciding to ask',
+              "mode = _files_mode(get_settings())" in src_text
+              and 'get_stress_files(user_file)' in src_text)
+        shipped2 = io.open(os.path.join(ROOT, 'Algorithm Competition Assistant.sublime-settings'),
+                           encoding='utf-8').read()
+        check('the setting ships with the pick-once default',
+              '"stress_file_source": "pick_once"' in shipped2, 'missing')
+
+        # the picker must not be soft on a scaled display
+        check('the native dialog declares itself DPI aware before opening',
+              'SetProcessDpiAwarenessContext' in stress2._PS_OPEN_FILE
+              and 'SetProcessDPIAware' in stress2._PS_OPEN_FILE)
+        rendered = stress2._PS_OPEN_FILE.format(dir='Zm9v', title='YmFy')
+        check('and the script still formats (no stray braces in the template)',
+              '{dir}' not in rendered and 'OpenFileDialog' in rendered)
+    finally:
+        settings2.init_settings(saved_settings2)
+        shutil.rmtree(sdir, ignore_errors=True)
+
     print('== static checks: the regressions that unit tests cannot reach ==')
     # 1. Every self.X() call must resolve inside its own class. This is the
     #    v1.4.5 bug: a helper was defined on CphViewTesterCommand but called

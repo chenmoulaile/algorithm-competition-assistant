@@ -275,6 +275,15 @@
 	// 自动搜索仍生效：同目录按 std/gen 等命名提示唯一命中时，普通对拍
 	// 不弹任何对话框直接开拍（Stress test with options 则总是询问）。
 	"stress_file_picker": "auto",
+	// 正解 std 和数据生成器从哪来：
+	//   "pick_once" — 这个 cpp 第一次启动对拍时用系统「打开文件」对话框选
+	//                 （先 std 后 gen），选完记在测试数据旁边的
+	//                 `<文件名>__tests.stress` 里，同一文件以后不再问；
+	//                 换个题目文件就重新各选一次
+	//   "same_dir"  — 只在源文件同目录里找 std.cpp / gen.cpp（按命名提示），
+	//                 找到唯一一对就直接开跑，永不弹窗
+	//   "auto"      — 旧行为：同目录找 → 退回上次用的全局路径 → 还不确定才问
+	"stress_file_source": "pick_once",
 	// 上次使用的 std 程序 / 数据生成器路径（对拍命令会自动记住）
 	"stress_std_file": "",
 	"stress_generator_file": "",
