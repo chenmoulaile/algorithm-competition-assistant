@@ -1,0 +1,109 @@
+Algorithm Competition Assistant 2.7.0
+======================================
+
+The judge only ever speaks through a pipe. This version teaches it the other
+way a problem can be posed, and then removes three ways the plugin could tell
+you something that was not true.
+
+* File input/output: NOI / CSP-S problems can be tested without editing them
+
+  A statement that says "read from add.in, write to add.out" could not be run
+  locally at all: the plugin feeds the sample to stdin and reads stdout, so the
+  only way to test it was to rewrite the source into cin/cout form - and then
+  the version you tested was not the version you submitted.
+
+  The mode is set per problem from the View menu (or the command palette:
+  "This problem reads/writes files"). Two Enters, because the names are
+  prefilled from the file you are in (add.cpp -> add.in / add.out), and they are
+  stored in <name>__tests.io beside the test data - the same sidecar mechanism
+  as .limits / .std / .stress, so one problem's names never become another's and
+  a restart keeps them.
+
+  What actually happens: the sample is written into a scratch directory and the
+  program is started inside it, so its freopen finds the file the way the judge
+  would give it. It is never your problem folder - if you downloaded the real
+  data, overwriting add.in with the sample being judged would corrupt the file
+  you are testing against, which is worse than a wrong verdict. The answer is
+  read back from the file it writes. stdout is drained but not judged, because a
+  program that prints a lot and is never read blocks on a full pipe and used to
+  come back as TLE.
+
+  A program that never created the output file is named to you rather than
+  judged as a blank answer: that case is a freopen typo, and a WA would have
+  sent you looking for an algorithm bug. The parallel runner, the benchmark and
+  the panel status line all use the same mode, so one binary is never judged
+  through two channels.
+
+  Stress testing refuses a file-IO problem out loud. Stress feeds rounds through
+  a pipe, so std, gen and your program would each see nothing and "agree" on
+  empty output every round - a run reporting "all rounds consistent" having
+  compared nothing is exactly the failure this release is about.
+
+* A stress test could invent the counterexample it told you to chase
+
+  Only a *negative* return code with an error stream was treated as "did not
+  run", which is the launcher's signature. A reference solution that aborted,
+  tripped an assert or died on an access violation returned non-zero with a
+  truncated stdout, and that truncation was compared as if it defined correct.
+  So the counterexample did not exist, and you went off to "fix" a program that
+  was already right. A std that crashed every round could even print "passed".
+
+  Now a non-zero exit splits three ways: never launched (a broken setup, nothing
+  saved), std died (stop, name the code and its stderr, compare nothing), your
+  program died (a real counterexample - the input that kills your program is the
+  one most worth keeping, and it is saved with no expected answer so the panel
+  judges it RE instead of grading a future run against a truncation). Detection
+  keys on the bracketed errno / exception-name shape, so a program's own
+  perror("fopen") text is still a counterexample rather than a broken setup.
+  Both stderrs are shown on a mismatch; they used to be thrown away.
+
+* A refused write looked like a saved test
+
+  A read-only folder, a full disk or an antivirus that locks the tests file made
+  load_all_tests return [] and save_tests return False, with a print() as the
+  only trace - and the console is not something anyone opens mid-contest. The
+  symptom was "the answer I marked by hand is gone" or "all my samples
+  vanished", indistinguishable from a plugin bug. cph_settings now records the
+  last failure with its file and the OS reason, and one reporter shows it once
+  per distinct failure (a dialog on every run of a read-only folder is a plugin
+  you disable). All six save paths go through it; the Competitive Companion path
+  used to answer the browser with "ok" and flash a status message.
+
+* Unloading the package left the program and the compiler running
+
+  Sublime does not wait for a plugin's daemon threads or its children, so an
+  upgrade or a .py edit on a folder install unloads the package with a run in
+  flight. The orphan kept its own .exe open on Windows and the next compile
+  reported "cannot open output file: Permission denied" without naming the
+  process holding the file. Children and scratch directories are now registered
+  where they are created and reaped on unload, and a stale sweep at startup
+  reclaims the directories of a run that never finished - only ones older than a
+  day, because a second Sublime window may be compiling into a fresh one right
+  now. Killing an exited pid would hit whatever the OS has since assigned it to,
+  so every reap is gated on a liveness check.
+
+* Both ways of reaching an error location were broken where people use them
+
+  "Jump to the last error location" passed the index of the *first* diagnostic,
+  and its is_enabled() only read the current view - while the targets live on the
+  run panel. Standing in main.cpp, which is exactly where you are when a run says
+  "main.cpp:12", it was greyed out forever. The summary line's "首个失败 test 3"
+  was plain text inside a phantom with no navigation callback at all, so the most
+  actionable sentence on the panel could not be clicked.
+
+  The command now resolves the panel to jump from (this file's panel first, then
+  the most recent in the window) and says what to do when there is none; negative
+  targets count from the end so the palette can offer an honest first and last;
+  Ctrl+Alt+J is bound on all three platforms behind the same enable_keybindings
+  gate; and the failing test named by the summary line opens its detail tab.
+
+Seven hardcoded English strings that the language setting never reached are now
+translated, including the one the jump command used to print.
+
+Regression suite: 766 -> 838 checks. The file-IO cases run real processes,
+because that feature is about where bytes land on disk and no fake can prove it:
+the answer comes back from the file, nothing is written next to the source, the
+scratch directory is gone after the read, a missing output file is reported as
+itself, and a program printing 3 MB is still judged from its file. The stress
+cases pin all three exit-code branches, and the unload cases kill a real sleeper
+through the same registry the product uses. Full notes: RELEASE_NOTES_CN.md.
