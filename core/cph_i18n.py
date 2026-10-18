@@ -576,6 +576,23 @@ STRINGS = {
         'zh': '无法运行 {program}: {reason}',
         'en': 'cannot run {program}: {reason}',
     },
+    'stress_program_died': {
+        'zh': '对拍停止: 第 {round} 轮 {program} 异常退出（退出码 {code}）。'
+              '正解/暴力在这里断了，它打出来的东西不能当标准答案，'
+              '所以这一轮**没有做任何比较**，屏幕上这个反例是假的。先修好 {program} 再对拍。',
+        'en': 'stress stopped: {program} died at round {round} (exit code {code}). '
+              'A reference solution that aborts cannot define "correct", so this round '
+              'compared **nothing** and any counterexample would be fake. Fix '
+              '{program} before stress testing again.',
+    },
+    'stress_user_died': {
+        'zh': '对拍失败: 第 {round} 轮你的程序异常退出（退出码 {code}）',
+        'en': 'stress failed: your program died at round {round} (exit code {code})',
+    },
+    'stress_stderr_for': {
+        'zh': '{program} 的错误输出 (stderr)',
+        'en': '{program} stderr',
+    },
     'stress_tle_hint': {
         'zh': '提示: 若编译命令里定义了 LOCAL 之类的调试宏，程序里留在循环内的'
               'debug 输出会非常慢（stderr 不缓冲），本地很容易超时；'
@@ -866,6 +883,13 @@ STRINGS = {
     'stress_counterexample_added': {
         'zh': '已把对拍反例保存为测试点（共 {total} 个）',
         'en': 'saved the counterexample as a test ({total} total)',
+    },
+    'stress_counterexample_crash': {
+        'zh': '这个反例只有输入被存下来：程序是崩掉的，没有可比的标准答案，'
+              '跑测试点时会显示成 RE（共 {total} 个测试点）',
+        'en': 'only the input of this counterexample was saved: the program '
+              'died, so there is no expected output to compare - the test '
+              'shows up as RE ({total} tests in total)',
     },
     'stress_counterexample_too_big': {
         'zh': '反例输入 {size} 字节，超过 stress_max_insert_bytes={limit}，'

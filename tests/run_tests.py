@@ -3127,6 +3127,100 @@ def main():
         check('a user TLE adds the debug-output hint',
               'hint' in text and 'mismatch' not in text,
               text.replace('\n', ' | ')[:200])
+
+        # An exit code of 0 vs a crash used to be the same thing to the loop:
+        # std dying mid-print produced a truncation that was then compared as
+        # if it were the correct answer, so the "counterexample" it reported
+        # did not exist and the user went off to "fix" a program that was
+        # already right. The three cases below are the whole distinction.
+        def run_as3(gen, user, std):
+            del chunks[:]
+            sess = stress._new_session('u.cpp', 's.cpp', 'gen.cpp', 2.0, 3)
+
+            def fake_run(program, data, cwd=None, time_limit=2.0, env=None,
+                         sess=None):
+                if program.endswith('gen.cpp'):
+                    return gen
+                if program.endswith('s.cpp'):
+                    return std
+                return user
+
+            stress._run_program = fake_run
+            stress._run_stress_loop(sess)
+            return ''.join(chunks)
+
+        wrote = []
+        real_load = stress.load_all_tests
+        real_save = stress.save_tests
+        stress.load_all_tests = lambda f: []
+        stress.save_tests = lambda f, tests: (wrote.append([dict(t) for t in tests]),
+                                             True)[1]
+        try:
+            text = run_as3((0, '5 5\n', '', False), (0, '10\n', '', False),
+                           (-11, '', '', False))
+            check('a std that dies is not allowed to mint a counterexample',
+                  'died' in text and 'mismatch' not in text and 'Diff' not in text,
+                  text.replace('\n', ' | ')[:260])
+            check('the std death names its exit code and says nothing was compared',
+                  'exit code -11' in text and 'compared' in text,
+                  text.replace('\n', ' | ')[:260])
+            check('nothing is persisted when std is the one that broke',
+                  wrote == [], repr(wrote)[:200])
+
+            del wrote[:]
+            text = run_as3((0, '5 5\n', '', False), (-6, '', 'Assertion failed\n', False),
+                           (0, '10\n', '', False))
+            check('a user crash is its own failure, not a blank-output diff',
+                  'your program died' in text and 'exit code -6' in text,
+                  text.replace('\n', ' | ')[:260])
+            check('the crashing input is saved with no expected answer',
+                  len(wrote) == 1 and wrote[0][0]['test'] == '5 5\n'
+                  and wrote[0][0]['correct_answers'] == [],
+                  repr(wrote)[:220])
+            check('the saved crash test announces it will read as RE',
+                  'no expected output' in text and 'RE' in text,
+                  text.replace('\n', ' | ')[:260])
+
+            text = run_as3((0, '1 1\n', '', False), (0, '2\n', '', False),
+                           (-1, '', "[WinError 2] The system cannot find the "
+                                    "file specified: 's.exe'", False))
+            check('a std that was never launched is still a setup failure',
+                  'cannot run' in text and 'died' not in text,
+                  text.replace('\n', ' | ')[:260])
+
+            text = run_as3((0, '1 1\n', '', False),
+                           (1, '', 'fopen: No such file or directory\n', False),
+                           (0, '2\n', '', False))
+            check("a program's own 'No such file' text is a counterexample, "
+                  "not a launcher failure",
+                  'your program died' in text and 'cannot run' not in text,
+                  text.replace('\n', ' | ')[:260])
+
+            del wrote[:]
+            text = run_as3((0, '1 2\n', '', False), (0, '3\n', 'slow stderr\n', False),
+                           (0, '4\n', '', False))
+            check('a real mismatch still stores the std output as the answer',
+                  len(wrote) == 1 and wrote[0][0]['correct_answers'] == ['4'],
+                  repr(wrote)[:220])
+            check('a mismatch shows the stderr it used to throw away',
+                  'stderr' in text and 'slow stderr' in text,
+                  text.replace('\n', ' | ')[:300])
+        finally:
+            stress.load_all_tests = real_load
+            stress.save_tests = real_save
+            # The fake above is the only thing keeping a synthetic "u.cpp" from
+            # landing a real tests file in the repository - and an earlier
+            # revision of the crash path did exactly that. Assert it instead of
+            # trusting the patch, so a future change that bypasses the fake
+            # fails here rather than leaving junk next to the suite.
+            stray = [os.path.join(base, 'u.cpp__tests')
+                     for base in (os.getcwd(),
+                                  os.path.dirname(os.path.abspath(__file__)))]
+            found = [p for p in stray if os.path.exists(p)]
+            for p in found:
+                os.remove(p)
+            check('the stress cases never write a real tests file',
+                  not found, repr(found))
     finally:
         fake_sublime.set_timeout, stress._append_stress, \
             stress._compile_program, stress._run_program = saved[:4]

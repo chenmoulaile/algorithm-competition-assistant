@@ -15,14 +15,15 @@ import time
 
 from .core.cph_settings import (get_settings, load_all_tests, save_tests,
                                 get_stress_files, set_stress_files,
-                                usable_program,
+                                usable_program, last_io_error,
                                 PACKAGE_NAME, settings_file)
 from .core.cph_stats import record_stress
 from .core.cph_tests_merge import merge_tests
 from .core.cph_state import register_stress_view, unregister_stress_view
 from .core.cph_target import context_menu_enabled, visible as context_menu_visible
 from .core.cph_i18n import t
-from .core.cph_verdict import normalize_lines, outputs_equal
+from .core.cph_verdict import (normalize_lines, outputs_equal,
+                               is_crash_exit_code, looks_like_crash)
 from .core.cph_build_mode import (get_mode as _build_mode,
                                   transform as _apply_build_mode)
 from .core import cph_checker
@@ -1083,6 +1084,30 @@ def _program_argv(file):
     return parts
 
 
+# "The program did not run at all" versus "the program ran and died" share one
+# non-zero exit code and must not be reported the same way: the first is a
+# broken setup, the second is a real counterexample. Launcher failures are
+# recognisable because Python brackets the OS number ("[Errno 2] ...",
+# "[WinError 2] ...") or names the exception class, and a shell says "not
+# recognized". A program's own perror() text ("fopen: No such file or
+# directory") deliberately does NOT match - that program ran and failed, which
+# is exactly what a stress test is supposed to hand over.
+_NEVER_STARTED_RE = re.compile(
+    r'\[Errno \d+\]|\[WinError \d+\]'
+    r'|^(?:FileNotFoundError|NotADirectoryError|PermissionError|OSError)\b'
+    r'|is not a valid Win32 application'
+    r'|not recognized as an internal or external command'
+    r'|no run command configured',
+    re.I)
+
+
+def _never_started(err):
+    """True when stderr says the program could not be launched at all."""
+    if not err:
+        return False
+    return bool(_NEVER_STARTED_RE.search(err.strip()))
+
+
 def _run_program(program, input_data, cwd=None, time_limit=2.0, env=None,
                  sess=None):
     """Run a program with the run_settings command; program is a source file."""
@@ -1355,14 +1380,25 @@ def _run_stress_loop(sess):
                         lambda: _append_stress(sess, 
                             '[Algorithm Competition Assistant] ' + t('stress_tle_hint') + '\n'), 0)
                 continue
-            if ret1 < 0 and user_err:
-                # The program never started (missing binary, bad command):
-                # comparing its empty output as a wrong answer hid this.
+            if ret1 != 0:
+                # Two failures share one non-zero exit code and must not be
+                # reported the same way. A program that was never launched
+                # (missing binary, bad run_cmd) is a broken setup: comparing
+                # its empty output invented a counterexample that does not
+                # exist. A program that did run and then died - a signal, an
+                # NTSTATUS crash, abort(), or a plain `return 1` - failed on
+                # *this* input, and the input that crashes your program is the
+                # most valuable thing a stress run can hand you.
+                if _never_started(user_err):
+                    sublime.set_timeout(
+                        lambda e=user_err: _append_stress(sess, 
+                            '[Algorithm Competition Assistant] ' + t('stress_cannot_run',
+                                                   program=os.path.basename(user_file),
+                                                   reason=e.strip()[:300]) + '\n'), 0)
+                    break
                 sublime.set_timeout(
-                    lambda e=user_err: _append_stress(sess, 
-                        '[Algorithm Competition Assistant] ' + t('stress_cannot_run',
-                                               program=os.path.basename(user_file),
-                                               reason=e.strip()[:300]) + '\n'), 0)
+                    lambda rc=ret1, e=user_err, o=user_out: _on_stress_crash(
+                        round_count, inp, rc, o, e, sess), 0)
                 break
 
             ret2, std_out, std_err, tle2 = _run_program(
@@ -1372,12 +1408,31 @@ def _run_stress_loop(sess):
                     lambda r=round_count: _append_stress(sess, 
                         '[Algorithm Competition Assistant] Round %d: std program TLE\n' % r), 0)
                 continue
-            if ret2 < 0 and std_err:
+            if ret2 != 0:
+                # The reference solution is what "correct" means in this whole
+                # setup. When it dies, the bytes it managed to print before
+                # dying are a truncation, and comparing that against a program
+                # that ran cleanly reports a counterexample - the user then
+                # "fixes" a solution that was already right. std running out of
+                # time is skipped above; std *dying* is a bug in std, so stop,
+                # name the exit code and its stderr, and save nothing.
+                if _never_started(std_err):
+                    sublime.set_timeout(
+                        lambda e=std_err: _append_stress(sess, 
+                            '[Algorithm Competition Assistant] ' + t('stress_cannot_run',
+                                                   program=os.path.basename(std_file),
+                                                   reason=e.strip()[:300]) + '\n'), 0)
+                    break
                 sublime.set_timeout(
-                    lambda e=std_err: _append_stress(sess, 
-                        '[Algorithm Competition Assistant] ' + t('stress_cannot_run',
-                                               program=os.path.basename(std_file),
-                                               reason=e.strip()[:300]) + '\n'), 0)
+                    lambda rc=ret2, e=std_err: _append_stress(sess,
+                        '\n' + '=' * 60 + '\n[Algorithm Competition Assistant] '
+                        + t('stress_program_died', round=round_count,
+                            program=os.path.basename(std_file), code=rc) + '\n'
+                        + '[' + t('stress_stderr_for',
+                                  program=os.path.basename(std_file)) + ']\n'
+                        + (e.strip()[:2000] if e.strip() else '(empty stderr)') + '\n'
+                        + '=' * 60 + '\n'), 0)
+                _stop_stress(sess)
                 break
 
             compared += 1
@@ -1403,8 +1458,9 @@ def _run_stress_loop(sess):
                     'checker_message': checker_msg,
                 }
                 sublime.set_timeout(
-                    lambda m=checker_msg: _on_stress_failed(
-                        round_count, inp, user_out, std_out, m, sess), 0)
+                    lambda m=checker_msg, ue=user_err, se=std_err: _on_stress_failed(
+                        round_count, inp, user_out, std_out, m, sess,
+                        user_err=ue, std_err=se), 0)
                 break
 
             if round_count <= 10 or round_count % 10 == 0:
@@ -1498,8 +1554,71 @@ def _utf8_size(text):
         return len(text)
 
 
+def _stderr_block(sess, name, stream):
+    """A labelled stderr section, or '' when there was nothing on that stream."""
+    if not stream or not stream.strip():
+        return ''
+    return '\n[' + t('stress_stderr_for', program=name) + ']\n' + \
+        stream.strip()[:2000] + '\n'
+
+
+def _save_counterexample(sess, inp, answer, crash=False):
+    """Persist the failing input as a regression test; return the report text.
+
+    The mismatch path and the crash path need the same three things - the size
+    cap, the merge (which never overwrites an answer marked by hand) and an
+    honest sentence about whether the write actually landed - so they share one
+    implementation. Without the last one a counterexample that never reached
+    the disk looked exactly like one that did.
+    """
+    text = ''
+    try:
+        if not get_settings().get('stress_save_counterexample', True):
+            return text
+        user_file = sess.get('user_file')
+        if not user_file:
+            return text
+        limit = _insert_limit()
+        size = _utf8_size(inp)
+        if limit >= 0 and size > limit:
+            # Say why nothing was saved instead of failing silently.
+            return '\n[Algorithm Competition Assistant] ' + \
+                t('stress_counterexample_too_big', size=size, limit=limit) + '\n'
+        merged, _conflicts = merge_tests(load_all_tests(user_file), [{
+            'test': inp,
+            'correct_answers': [answer] if answer else [],
+            # Keep the generator seed with the counterexample so
+            # 'Stress: replay last seed' can reproduce it exactly.
+            'seed': sess.get('current_seed')}])
+        if save_tests(user_file, merged):
+            if crash and not answer:
+                # A crashed program has no expected output. Storing its partial
+                # stdout would make every later run "wrong" against a
+                # truncation, so the test is saved with no answer and the panel
+                # judges it as RE - which is the honest record.
+                text += '\n[Algorithm Competition Assistant] ' + \
+                    t('stress_counterexample_crash', total=len(merged)) + '\n'
+            else:
+                text += '\n[Algorithm Competition Assistant] ' + \
+                    t('stress_counterexample_added', total=len(merged)) + '\n'
+        else:
+            # `save_tests` returns False when the file refused the write
+            # (read-only, no permission, full disk). That used to be a console
+            # line, and a console nobody opens looks like a saved test.
+            err = last_io_error() or {}
+            text += '\n[Algorithm Competition Assistant] ' + \
+                t('stress_counterexample_save_failed',
+                  reason=('%s: %s' % (err.get('path') or '?', err.get('reason') or '?'))
+                  if err else 'the tests file refused the write') + '\n'
+    except Exception as e:
+        print_safe('[Algorithm Competition Assistant] failed to save counterexample: %s' % e)
+        text += '\n[Algorithm Competition Assistant] ' + \
+            t('stress_counterexample_save_failed', reason=str(e)[:200]) + '\n'
+    return text
+
+
 def _on_stress_failed(round_count, inp, user_out, std_out, checker_message='',
-                       sess=None):
+                       sess=None, user_err='', std_err=''):
     # Keep everything needed to reproduce this counterexample later
     # ('Stress: replay last counterexample').
     sess['last_counterexample'] = {
@@ -1541,43 +1660,54 @@ def _on_stress_failed(round_count, inp, user_out, std_out, checker_message='',
             text += '  user: %s\n' % u
             text += '  std:  %s\n' % s
 
-    # Save the counterexample as a permanent test case: finding a
-    # counterexample is only useful if it comes back as a regression test.
-    # A huge multi-case sample is misery to debug inside __tests, though, so
-    # stress_max_insert_bytes keeps oversized inputs out of the tests file
-    # (they are still printed above, and their seed can still be replayed).
-    try:
-        if get_settings().get('stress_save_counterexample', True):
-            user_file = sess.get('user_file')
-            if user_file:
-                limit = _insert_limit()
-                size = _utf8_size(inp)
-                if limit >= 0 and size > limit:
-                    # Say why nothing was saved instead of failing silently.
-                    text += '\n[Algorithm Competition Assistant] ' + \
-                        t('stress_counterexample_too_big', size=size,
-                          limit=limit) + '\n'
-                else:
-                    answer = std_out.strip()
-                    merged, _conflicts = merge_tests(load_all_tests(user_file), [{
-                        'test': inp,
-                        'correct_answers': [answer] if answer else [],
-                        # Keep the generator seed with the counterexample so
-                        # 'Stress: replay last seed' can reproduce it exactly.
-                        'seed': sess.get('current_seed')}])
-                    if save_tests(user_file, merged):
-                        text += '\n[Algorithm Competition Assistant] ' + \
-                            t('stress_counterexample_added', total=len(merged)) + '\n'
-    except Exception as e:
-        # The counterexample was already printed above, so the user has seen
-        # it. A failure to *persist* it is different: the message used to go
-        # to print_safe() only, which lands in the Sublime console nobody
-        # opens, so a silently-unsaved counterexample looked exactly like a
-        # saved one. It now appears in the stress page as well.
-        print_safe('[Algorithm Competition Assistant] failed to save counterexample: %s' % e)
-        text += '\n[Algorithm Competition Assistant] ' + \
-            t('stress_counterexample_save_failed', reason=str(e)[:200]) + '\n'
+    # Both streams used to be thrown away. A sanitizer report, an interpreter
+    # traceback or a "wrong answer on the last line because the answer is
+    # still being computed" message lives on stderr, and without it a diff of
+    # two truncated outputs reads like a random disagreement.
+    text += _stderr_block(sess, os.path.basename(sess.get('user_file') or 'user'), user_err)
+    text += _stderr_block(sess, os.path.basename(sess.get('std_file') or 'std'), std_err)
 
+    text += _save_counterexample(sess, inp, (std_out or '').strip())
+    _append_stress(sess, text)
+    _stop_stress(sess)
+
+
+def _on_stress_crash(round_count, inp, rc, user_out, user_err, sess):
+    """Report a counterexample that is a crash rather than a wrong answer.
+
+    The run stops before std is reached, so there is nothing to compare and no
+    expected output to store. This is still the input the user asked the stress
+    test to find: an input that kills the program is worth more than one that
+    merely disagrees, and it used to be reported as a plain mismatch (or, when
+    stderr happened to be empty, silently compared as an empty answer).
+    """
+    name = os.path.basename(sess.get('user_file') or '')
+    sess['last_counterexample'] = {
+        'seed': sess.get('current_seed'),
+        'input': inp,
+        'user_out': user_out,
+        'std_out': '',
+        'round': round_count,
+    }
+
+    text = '\n' + '=' * 60 + '\n'
+    text += '[Algorithm Competition Assistant] ' + \
+        t('stress_user_died', round=round_count, code=rc) + '\n'
+    text += '=' * 60 + '\n\n'
+    if is_crash_exit_code(rc) or looks_like_crash(user_err) or looks_like_crash(user_out):
+        # Name the verdict the test panel will give for this same input, so the
+        # number in the report connects to something the user can point at.
+        text += 'RE\n'
+    seed = sess.get('current_seed')
+    if seed is not None:
+        text += '[Algorithm Competition Assistant] ' + t('stress_seed', seed=seed) + '\n\n'
+    text += '[' + t('stress_input') + ']\n'
+    text += inp + '\n'
+    if (user_out or '').strip():
+        text += '\n[' + t('stress_user_output') + ']\n' + user_out + '\n'
+    text += _stderr_block(sess, name or 'user', user_err)
+
+    text += _save_counterexample(sess, inp, '', crash=True)
     _append_stress(sess, text)
     _stop_stress(sess)
 

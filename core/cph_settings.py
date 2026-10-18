@@ -173,7 +173,7 @@ def set_stress_files(file, std_file, generator_file):
 		with open(path, 'w', encoding='utf-8') as f:
 			f.write(sublime.encode_value(_stress_files[file], True))
 	except Exception as e:
-		print('[Algorithm Competition Assistant] stress files not saved: %s (%s)' % (path, e))
+		_note_io_error('write', path, e, what='the std/gen pairing')
 
 
 def usable_program(path):
@@ -253,8 +253,7 @@ def set_remembered_std(file, std):
 		with open(path, 'w', encoding='utf-8') as f:
 			f.write(sublime.encode_value({'std': std}, True))
 	except Exception as e:
-		print('[Algorithm Competition Assistant] std rung not saved: %s (%s)'
-			  % (path, e))
+		_note_io_error('write', path, e, what='the remembered -std')
 
 
 def get_remembered_std(file):
@@ -312,7 +311,7 @@ def _write_limits_file(file_name, limits):
 		with open(path, 'w', encoding='utf-8') as f:
 			f.write(sublime.encode_value(limits, True))
 	except Exception as e:
-		print('[Algorithm Competition Assistant] limits not saved: %s (%s)' % (path, e))
+		_note_io_error('write', path, e, what='the problem limits')
 
 
 def set_problem_limits(file_name, time_limit_ms, memory_limit_mb):
@@ -398,6 +397,30 @@ def get_tests_paths(file):
 	return paths
 
 
+# The last failure to read or write a tests file. A `print()` lands in a console
+# nobody opens, and on a folder install the only symptom of a refused write was
+# "the answer I marked by hand vanished" - indistinguishable from a bug in the
+# judging code. Any caller that puts tests on disk can now name the path and the
+# reason instead of going quiet.
+_last_io_error = {}
+
+
+def last_io_error(clear=False):
+	"""The most recent sidecar failure as {'kind','what','path','reason'} or None."""
+	if clear:
+		_last_io_error.clear()
+	return dict(_last_io_error) if _last_io_error else None
+
+
+def _note_io_error(kind, target, reason, what='tests'):
+	_last_io_error['kind'] = kind
+	_last_io_error['what'] = what
+	_last_io_error['path'] = target or ''
+	_last_io_error['reason'] = str(reason)[:300]
+	print('[Algorithm Competition Assistant] Failed to %s %s in %s: %s'
+	      % (kind, what, target, reason))
+
+
 def get_tests_file_path(file):
 	if not file:
 		return None
@@ -438,7 +461,7 @@ def load_all_tests(file):
 				seen.add(key)
 				merged.append(test)
 		except Exception as e:
-			print('[Algorithm Competition Assistant] Failed to load tests from %s: %s' % (p, e))
+			_note_io_error('read', p, e)
 
 	return merged
 
@@ -465,6 +488,7 @@ def is_meaningful_test(test):
 
 
 def save_tests(file, tests):
+	_last_io_error.clear()
 	if not file:
 		return False
 
@@ -476,6 +500,7 @@ def save_tests(file, tests):
 	target_path = primary_tests_path(file, create=True)
 
 	if target_path is None:
+		_note_io_error('write', None, 'no writable tests directory for this file')
 		return False
 
 	# load_all_tests() merges EVERY candidate file, so writing only one of
@@ -496,5 +521,5 @@ def save_tests(file, tests):
 				f.write(sublime.encode_value(tests, True))
 			ok = True
 		except Exception as e:
-			print('[Algorithm Competition Assistant] Failed to save tests to %s: %s' % (path_, e))
+			_note_io_error('write', path_, e)
 	return ok
