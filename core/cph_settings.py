@@ -97,7 +97,7 @@ def try_load_settings():
 		sublime.set_timeout_async(try_load_settings, 200)
 	else:
 		init_settings(_settings)
-		sublime.status_message('Algorithm Competition Assistant: settings loaded')
+		sublime.status_message('Algorithm Competition Assistant: ' + t('settings_loaded'))
 
 
 # Per-problem limits received from Competitive Companion.

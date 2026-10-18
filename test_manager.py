@@ -3046,6 +3046,10 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		# here avoids an AttributeError half way through the setup, which
 		# left an empty -run tab behind.
 		if v.window() is None:
+			# The panel was closed between the click and this callback. It used
+			# to be a console line only, so the button simply did nothing and
+			# the user clicked it again, and again.
+			sublime.status_message('[Algorithm Competition Assistant] ' + t('run_view_gone'))
 			print('[Algorithm Competition Assistant] the run view has no window any more, ignoring')
 			return
 
@@ -3054,7 +3058,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		# is auto-cleared after 30s so the user is never stuck forever.
 		compiling_since = getattr(self, 'compiling_since', None)
 		if compiling_since is not None and (time() - compiling_since) < 30:
-			sublime.status_message('[Algorithm Competition Assistant] compiling in progress, wait or press again after 30s')
+			sublime.status_message('[Algorithm Competition Assistant] ' + t('compile_reentry_warn'))
 			return
 
 		if v.get_status('process_status') == 'RUNNING' or \

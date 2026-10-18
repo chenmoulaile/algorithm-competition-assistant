@@ -202,7 +202,7 @@ class CphCalibrateMachineCommand(sublime_plugin.TextCommand):
 	"""
 
 	def run(self, edit):
-		sublime.status_message('[Algorithm Competition Assistant] calibrating...')
+		sublime.status_message('[Algorithm Competition Assistant] ' + t('calibrating'))
 
 		def worker():
 			factor, score, seconds, error = calibrate_measure()

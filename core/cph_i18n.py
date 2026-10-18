@@ -514,6 +514,42 @@ STRINGS = {
         'zh': '请先保存当前文件',
         'en': 'Please save the current file first',
     },
+    'build_mode_now': {
+        'zh': '编译模式：{mode} ｜ {detail}',
+        'en': 'build mode: {mode} | {detail}',
+    },
+    'build_mode_debug_detail': {
+        'zh': 'debug（-O0 -g -fsanitize=undefined -fsanitize-trap=undefined '
+              '-D_GLIBCXX_ASSERTIONS）：崩溃行号可点，未定义行为当场抓到',
+        'en': 'debug (-O0 -g -fsanitize=undefined -fsanitize-trap=undefined '
+              '-D_GLIBCXX_ASSERTIONS) - crash lines are clickable, UB is caught',
+    },
+    'build_mode_release_detail': {
+        'zh': 'release（-O2）：计时与评测机可比',
+        'en': 'release (-O2) - timings match the judge',
+    },
+    'opt_build_mode': {
+        'zh': '切换 Debug / Release 编译模式（当前：{mode}）',
+        'en': 'Debug/Release build mode (now: {mode})',
+    },
+    'calibrating': {
+        'zh': '正在校准本机速度（要跑几轮基准，稍等）...',
+        'en': 'calibrating this machine (a few benchmark rounds)...',
+    },
+    'settings_loaded': {
+        'zh': '设置已加载',
+        'en': 'settings loaded',
+    },
+    'compile_reentry_warn': {
+        'zh': '正在编译，请等它结束；若确实卡住了，30 秒后可以再按一次',
+        'en': 'a compile is in progress, wait for it; if it really hung you can '
+              'press again after 30s',
+    },
+    'run_view_gone': {
+        'zh': '这道题的运行面板已经不在了（被关掉了），先把源码再跑一次',
+        'en': 'this problem\'s run panel is gone (it was closed); run the source '
+              'again to get it back',
+    },
     'stress_running': {
         'zh': '对拍进行中...',
         'en': 'Stress testing...',

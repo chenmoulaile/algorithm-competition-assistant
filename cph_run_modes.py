@@ -11,6 +11,13 @@ import sublime
 import sublime_plugin
 
 from .core.cph_build_mode import MODE_DEBUG, MODE_RELEASE, get_mode, toggle as toggle_build_mode
+from .core.cph_i18n import t
+
+#: Palette captions are Python strings (a menu caption is static JSON and can
+#: never follow the `language` setting), so they all start with the package
+#: name. Same constant as cph_options.py - root modules may not import each
+#: other, so it is repeated deliberately.
+PREFIX = 'Algorithm Competition Assistant: '
 
 
 def _is_run_view(view):
@@ -48,7 +55,7 @@ class _RunModeMixin(object):
 			return
 
 		if not view.file_name():
-			sublime.status_message('[Algorithm Competition Assistant] save the file first')
+			sublime.status_message('[Algorithm Competition Assistant] ' + t('save_file_first'))
 			return
 		view.run_command('cph_view_tester', args)
 
@@ -110,15 +117,15 @@ class CphToggleBuildModeCommand(sublime_plugin.TextCommand):
 		view = self.view
 		file_name = view.file_name()
 		if not file_name:
-			sublime.status_message('[Algorithm Competition Assistant] save the file first')
+			sublime.status_message('[Algorithm Competition Assistant] ' + t('save_file_first'))
 			return
 		mode = toggle_build_mode(file_name)
 		if mode == MODE_DEBUG:
-			detail = ('debug (-O0 -g -fsanitize=undefined -fsanitize-trap=undefined '
-			          '-D_GLIBCXX_ASSERTIONS) - crash lines are clickable, UB is caught')
+			detail = t('build_mode_debug_detail')
 		else:
-			detail = 'release (-O2) - timings match the judge'
-		sublime.status_message('[Algorithm Competition Assistant] build mode: %s  |  %s' % (mode, detail))
+			detail = t('build_mode_release_detail')
+		sublime.status_message('[Algorithm Competition Assistant] '
+							   + t('build_mode_now', mode=mode, detail=detail))
 
 		# The compile cache key includes the command, so the next run
 		# recompiles automatically; just refresh the panel's status label.
@@ -132,7 +139,7 @@ class CphToggleBuildModeCommand(sublime_plugin.TextCommand):
 	def description(self):
 		file_name = self.view.file_name()
 		mode = get_mode(file_name) if file_name else MODE_RELEASE
-		return 'Debug/Release build mode (now: %s)' % mode
+		return PREFIX + t('opt_build_mode', mode=mode)
 
 
 class CphTestMenuCommand(sublime_plugin.TextCommand):
@@ -144,7 +151,7 @@ class CphTestMenuCommand(sublime_plugin.TextCommand):
 			view.run_command('cph_test_manager', {'action': 'show_test_menu'})
 			return
 		if not view.file_name():
-			sublime.status_message('[Algorithm Competition Assistant] save the file first')
+			sublime.status_message('[Algorithm Competition Assistant] ' + t('save_file_first'))
 			return
 		view.run_command('cph_view_tester', {'action': 'make_opd'})
 

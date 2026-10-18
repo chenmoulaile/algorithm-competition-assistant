@@ -6316,6 +6316,62 @@ def main():
         _sub.status_message = _keep_status
         i18n.set_lang('zh')
 
+    # The `language` setting only reaches the user through t(). A literal
+    # English sentence inside a status_message is otherwise invisible to every
+    # check in this file: the UI still works, it just answers in the wrong
+    # language for the whole session - which is how 'save the file first',
+    # 'build mode: %s', 'calibrating...' and five siblings shipped in a
+    # Chinese UI. Scan the call sites instead of remembering to look.
+    _BRAND = ('[Algorithm Competition Assistant]',
+              'Algorithm Competition Assistant:')
+
+    def _hb_looks_like_prose(text):
+        body = text.strip()
+        for prefix in _BRAND:
+            if body.startswith(prefix):
+                body = body[len(prefix):]
+                break
+        words = [w for w in re.split(r'[^A-Za-z]+', body) if len(w) >= 3]
+        # Two real words and a space: 'settings loaded', 'calibrating...',
+        # 'the tests file is gone'. A separator or a lone %s is not prose.
+        return len(words) >= 2 and ' ' in body.strip()
+
+    _hb_literal_ui = []
+    for _hb_dirpath, _hb_dirnames, _hb_filenames in os.walk(ROOT):
+        _hb_dirnames[:] = [d for d in _hb_dirnames
+                           if d not in ('.git', '__pycache__', '.workbuddy', 'tests')]
+        for _hb_file in sorted(_hb_filenames):
+            if not _hb_file.endswith('.py'):
+                continue
+            _hb_path = os.path.join(_hb_dirpath, _hb_file)
+            try:
+                _hb_tree = ast.parse(io.open(_hb_path, encoding='utf-8').read())
+            except (SyntaxError, UnicodeDecodeError, IOError):
+                continue
+            for _hb_call in ast.walk(_hb_tree):
+                if not isinstance(_hb_call, ast.Call):
+                    continue
+                _hb_attr = getattr(_hb_call.func, 'attr', None) or \
+                    getattr(_hb_call.func, 'id', None)
+                if _hb_attr not in ('status_message', 'error_message'):
+                    continue
+                _hb_dumped = ast.dump(_hb_call)
+                # t() / _i18n_t() anywhere in the call means the text is
+                # translated, even when a literal separator is glued onto it.
+                if re.search(r"Name\(id='(?:_?i18n_t|t)'\)", _hb_dumped):
+                    continue
+                _hb_strings = []
+                for _hb_node in ast.walk(_hb_call):
+                    if isinstance(_hb_node, ast.Constant) and \
+                            isinstance(_hb_node.value, str):
+                        _hb_strings.append(_hb_node.value)
+                if any(_hb_looks_like_prose(s) for s in _hb_strings):
+                    _hb_literal_ui.append('%s:%d' % (
+                        os.path.relpath(_hb_path, ROOT).replace('\\', '/'),
+                        _hb_call.lineno))
+    check('no user-facing message bypasses the translation table',
+          not _hb_literal_ui, '; '.join(_hb_literal_ui[:12]))
+
     # The calibration and verdict lines, executed rather than grepped.
     _keep_get_settings = tm.get_settings
     cal = importlib.import_module(pkg + '.core.cph_calibrate')

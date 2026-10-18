@@ -76,7 +76,8 @@ class CphTestEditCommand(sublime_plugin.TextCommand):
 		if event == 'test-save':
 			source = self._find_source_view()
 			if source is None:
-				sublime.status_message('[Algorithm Competition Assistant] source run view is gone')
+				sublime.status_message('[Algorithm Competition Assistant] '
+									   + _i18n_t('run_view_gone'))
 				return
 
 			content = self._content()
