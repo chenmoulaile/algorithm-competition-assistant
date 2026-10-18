@@ -618,6 +618,20 @@ STRINGS = {
               'compared with itself agrees every round, so this stress test '
               'can never find anything. Pick again.',
     },
+    'stress_files_mode_refused': {
+        'zh': '这一题设成了「文件输入输出」（{input} / {output}），对拍开不了。'
+              '对拍是把数据从管道喂进去、再从管道读答案；按文件读写的三个程序都'
+              '看不到那份数据，每一轮都会"一致"，那场对拍是自欺欺人。'
+              '要本地对拍就把这几份程序改成读写 stdin/stdout（交题前再改回来），'
+              '或用菜单里"本题评测方式"改回标准输入。',
+        'en': 'this problem is set to file input/output ({input} / {output}), so '
+              'a stress test cannot start. Stress feeds every round through a '
+              'pipe: programs that read and write files would see nothing, and '
+              'both sides would "agree" on empty output every round. For a local '
+              'stress run make std, gen and your program use stdin/stdout '
+              '(switch back before submitting), or set this problem back to '
+              'standard input.',
+    },
     'stress_same_dir_missing': {
         'zh': '在 {dir} 里没找到唯一的一对 std / gen（正解期望文件名含 std/brute/bf/sol，'
               '生成器含 gen/data/maker/rand）。改一下文件名，或在设置里把 '
@@ -927,6 +941,17 @@ STRINGS = {
               'a compile error or RE puts the location on the run panel, and '
               'Ctrl+Alt+J takes you there',
     },
+    'io_output_missing': {
+        'zh': '【文件输入输出】程序没有写出 {name}。这一题按文件评测，答案要从 '
+              '{name} 读回来；检查代码里 freopen("{name}", "w", stdout) 写没写、'
+              '文件名和题面是否一致（题面写 .ans 就别写 .out）。输入 {input} '
+              '已经放到运行目录里了。',
+        'en': '[file IO] the program never wrote {name}. This problem is judged '
+              'from that file, so the answer had to be read back from it - check '
+              'that the code calls freopen("{name}", "w", stdout) and that the '
+              'name matches the statement (if it says .ans, do not write .out). '
+              'The input {input} was put in the run directory.',
+    },
     'stats_save_failed': {
         'zh': '练习统计没能保存: {error}（本次运行不计入统计）',
         'en': 'practice statistics could not be saved: {error} '
@@ -1046,6 +1071,47 @@ STRINGS = {
     'opt_off': {
         'zh': '关',
         'en': 'off',
+    },
+    'opt_io_mode': {
+        'zh': '本题评测方式（stdin / 文件）',
+        'en': 'This problem reads/writes files (IO mode)',
+    },
+    'opt_io_files': {
+        'zh': '文件输入输出',
+        'en': 'File input/output',
+    },
+    'opt_io_stdin': {
+        'zh': '标准输入（管道）',
+        'en': 'Standard input (pipe)',
+    },
+    'opt_io_switch': {
+        'zh': '切换评测方式',
+        'en': 'Switch how this problem is judged',
+    },
+    'opt_io_switch_to_files': {
+        'zh': '改成「文件输入输出」（NOI / CSP-S：freopen add.in add.out）',
+        'en': 'switch to file input/output (NOI / CSP-S: freopen add.in, add.out)',
+    },
+    'opt_io_switch_to_stdin': {
+        'zh': '改回「标准输入」',
+        'en': 'switch back to standard input',
+    },
+    'opt_io_names': {
+        'zh': '输入 / 输出文件名',
+        'en': 'Input / output file names',
+    },
+    'opt_io_stdin_no_names': {
+        'zh': '标准输入模式不需要文件名：样例直接喂给 stdin。要按文件评测就先切换',
+        'en': 'a stdin run needs no file names: the sample goes to stdin directly. '
+              'Switch to file input/output first',
+    },
+    'opt_io_input_prompt': {
+        'zh': '输入文件名（题面里写的那个，如 add.in）：',
+        'en': 'Input file name (the one in the statement, e.g. add.in):',
+    },
+    'opt_io_output_prompt': {
+        'zh': '输出文件名（题面里写的那个，如 add.out）：',
+        'en': 'Output file name (the one in the statement, e.g. add.out):',
     },
     'opt_next_start': {
         'zh': '下次启动生效',

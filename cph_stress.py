@@ -15,7 +15,7 @@ import time
 
 from .core.cph_settings import (get_settings, load_all_tests, save_tests,
                                 get_stress_files, set_stress_files,
-                                usable_program, last_io_error,
+                                usable_program, last_io_error, get_problem_io,
                                 PACKAGE_NAME, settings_file)
 from .core.cph_stats import record_stress
 from .core.cph_tests_merge import merge_tests
@@ -619,6 +619,18 @@ def _start_flow(view, choose=False):
             sublime.error_message(t('stress_same_file',
                                     file=os.path.basename(std_file)))
             _start_flow(view, True)
+            return
+        # Stress feeds every round through a pipe. A problem that is judged from
+        # add.in / add.out would therefore read a file that is not there and
+        # print nothing - and since std and the generator get the same empty
+        # treatment, every round would "agree". A run that reports "1000 rounds
+        # all consistent" having compared nothing is the exact failure mode this
+        # batch exists to remove, so it is refused instead of being run.
+        io_spec = get_problem_io(user_file)
+        if (io_spec or {}).get('mode') == 'files':
+            sublime.error_message(t('stress_files_mode_refused',
+                                    input=io_spec.get('input') or '',
+                                    output=io_spec.get('output') or ''))
             return
         # per problem file, and nowhere else. This used to also write the pair
         # into stress_std_file / stress_generator_file, which turned the last

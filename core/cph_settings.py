@@ -279,6 +279,92 @@ def get_remembered_std(file):
 	return None
 
 
+# --------------------------------------------------------------------------
+# 文件输入输出（NOI / CSP-S 复赛那种 add.in / add.out）
+#
+# 题面会指定文件名，而且每题不一样，所以这份配置跟着题目文件走 —— 和 .limits
+# / .std / .stress 完全同一套做法：存在测试数据旁边，重启不丢，也不会因为给 A 题
+# 设过就把 B 题的读写名改掉。
+# --------------------------------------------------------------------------
+_problem_io = {}
+
+
+def get_io_file_path(file_name, create=False):
+	"""`<tests file>.io`. `create` only for the writer: a read must not leave an
+	elsewhere-empty `tests/` folder in every directory the user ever runs in."""
+	path = primary_tests_path(file_name, create=create)
+	return (path + '.io') if path else None
+
+
+def _read_io_file(file_name):
+	path = get_io_file_path(file_name)
+	if not path:
+		return {}
+	try:
+		if not os.path.exists(path):
+			return {}
+		with open(path, 'r', encoding='utf-8') as f:
+			data = sublime.decode_value(f.read().strip())
+	except Exception:
+		return {}
+	return data if isinstance(data, dict) else {}
+
+
+def default_io_names(file_name):
+	"""The names a C++/NOI-style problem usually wants: add.cpp -> add.in/add.out."""
+	base = os.path.basename(file_name or '')
+	root = os.path.splitext(base)[0] or 'data'
+	return root + '.in', root + '.out'
+
+
+def get_problem_io(file_name):
+	"""{'mode': 'stdin'|'files', 'input': name, 'output': name} for this problem."""
+	spec = _problem_io.get(file_name)
+	if spec is None:
+		spec = _read_io_file(file_name)
+		if spec:
+			_problem_io[file_name] = spec
+	if not isinstance(spec, dict):
+		return {'mode': 'stdin', 'input': '', 'output': ''}
+	mode = spec.get('mode')
+	if mode not in ('stdin', 'files'):
+		mode = 'stdin'
+	input_name = (spec.get('input') or '').strip()
+	output_name = (spec.get('output') or '').strip()
+	if mode == 'files' and not input_name:
+		# A half-saved spec (name forgotten, file hand-edited) must not run a
+		# program that then reads nothing: fall back to the conventional names
+		# for this source file and say which ones are being used.
+		input_name, output_name = default_io_names(file_name)
+	if mode == 'files' and not output_name:
+		output_name = os.path.splitext(input_name)[0] + '.out'
+	return {'mode': mode, 'input': input_name, 'output': output_name}
+
+
+def set_problem_io(file_name, mode, input_name=None, output_name=None):
+	"""Remember how this problem is evaluated; returns the stored spec."""
+	if not file_name:
+		return None
+	spec = get_problem_io(file_name)
+	mode = mode if mode in ('stdin', 'files') else 'stdin'
+	spec = {'mode': mode,
+			'input': (input_name or '').strip() if mode == 'files' else '',
+			'output': (output_name or '').strip() if mode == 'files' else ''}
+	if mode == 'files' and not spec['input']:
+		spec['input'], spec['output'] = default_io_names(file_name)
+	if mode == 'files' and not spec['output']:
+		spec['output'] = os.path.splitext(spec['input'])[0] + '.out'
+	_problem_io[file_name] = spec
+	path = get_io_file_path(file_name, create=True)
+	if path:
+		try:
+			with open(path, 'w', encoding='utf-8') as f:
+				f.write(sublime.encode_value(spec, True))
+		except Exception as e:
+			_note_io_error('write', path, e, what='the file-IO settings')
+	return spec
+
+
 def _limit_value(value):
 	try:
 		return int(value)

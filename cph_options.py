@@ -20,7 +20,10 @@ import sublime
 import sublime_plugin
 
 from .core.cph_i18n import t
-from .core.cph_settings import companion_log_path, settings_file
+from .core.cph_settings import (companion_log_path, settings_file,
+							   get_problem_io, set_problem_io,
+							   default_io_names, get_io_file_path,
+							   notify_io_error)
 
 
 def _settings():
@@ -222,3 +225,88 @@ class CphCompanionOptionsCommand(sublime_plugin.WindowCommand):
 				sublime.status_message(t('opt_log_missing'))
 
 		self.window.show_quick_panel(items, choose)
+
+
+class CphIoModeCommand(sublime_plugin.TextCommand):
+	"""这一题怎么评测：管道（stdin）还是文件（NOI / CSP-S 复赛那种）。
+
+	配置跟着题目文件走，存在 `<名>__tests.io` 里，和 `.limits` / `.std` /
+	`.stress` 同一套做法：给 A 题设过 add.in/add.out，不会把 B 题也拖进文件模式。
+	面板上点一次就切，不用开 JSON，也不用记设置项叫什么名字。
+	"""
+
+	def description(self):
+		return PREFIX + t('opt_io_mode')
+
+	def run(self, edit):
+		file_name = self.view.file_name()
+		if not file_name:
+			sublime.status_message('[Algorithm Competition Assistant] '
+								   + t('save_file_first'))
+			return
+		spec = get_problem_io(file_name)
+		files = spec.get('mode') == 'files'
+		inp, outp = default_io_names(file_name)
+		items = [
+			[t('opt_io_switch'),
+			 t('opt_io_switch_to_stdin') if files else t('opt_io_switch_to_files')],
+			[t('opt_io_names'),
+			 ('%s -> %s' % (spec.get('input') or inp, spec.get('output') or outp))
+			 if files else t('opt_io_stdin')],
+		]
+
+		def choose(index):
+			if index < 0:
+				return
+			if index == 0:
+				if files:
+					set_problem_io(file_name, 'stdin')
+					self.view.erase_status('cph_io')
+					self.window.status_message('[Algorithm Competition Assistant] '
+											   + t('opt_io_stdin'))
+				else:
+					self._ask_names(file_name, inp, outp)
+				return
+			if not files:
+				sublime.status_message('[Algorithm Competition Assistant] '
+									   + t('opt_io_stdin_no_names'))
+				return
+			self._ask_names(file_name, spec.get('input') or inp,
+							spec.get('output') or outp)
+
+		self.window.show_quick_panel(items, choose)
+
+	def _ask_names(self, file_name, inp, outp):
+		"""两次输入，都预填好：题面里就写着这两个名字，通常一次回车就完事。"""
+		def ask_output(input_name):
+			self.window.show_input_panel(
+				t('opt_io_output_prompt'),
+				os.path.splitext(input_name)[0] + '.out',
+				lambda text: self._store(file_name, input_name,
+										 (text or '').strip()),
+				None, None)
+
+		self.window.show_input_panel(
+			t('opt_io_input_prompt'), inp,
+			lambda text: ask_output((text or '').strip() or inp), None, None)
+
+	def _store(self, file_name, input_name, output_name):
+		spec = set_problem_io(file_name, 'files', input_name, output_name)
+		if spec is None:
+			return
+		# The mode is remembered next to the test data; if that file could not be
+		# written the setting is only alive until Sublime closes, and "it went
+		# back to stdin after a restart" is exactly the kind of thing nobody
+		# suspects. Say which file refused and why (same reporter the tests use).
+		notify_io_error(file_name)
+		self.window.status_message('[Algorithm Competition Assistant] %s: %s -> %s'
+								   % (t('opt_io_files'), spec['input'], spec['output']))
+		# 把当前模式挂在状态栏上：比赛里一旦走错通道（题面要求文件、却在按管道
+		# 评测），当场就能看出来，而不是拿到一堆看不懂的 WA。
+		self.view.set_status('cph_io', '%s: %s -> %s'
+							 % (t('opt_io_files'), spec['input'], spec['output']))
+
+	def is_visible(self):
+		from .core.cph_settings import is_run_supported_ext
+		name = self.view.file_name()
+		return bool(name) and is_run_supported_ext(name)

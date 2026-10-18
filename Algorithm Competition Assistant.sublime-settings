@@ -385,6 +385,12 @@
 	// ================= 测试数据存储 =================
 	// 传统模式: 测试数据存在 "foo.cpp__tests"（同目录）
 	"tests_file_suffix": "__tests",
+	// 文件输入输出（NOI / CSP-S 复赛那种要自己 freopen 的题）**不在这里设**：
+	// 每题的读写名都不一样，所以它跟着题目文件走，存在测试数据旁边的
+	// <名>__tests.io 里。入口是 View 菜单（或命令面板）里的
+	// "This problem reads/writes files"，两次回车就设好（默认按源码文件名猜：
+	// add.cpp -> add.in / add.out）。设过之后运行面板状态栏会写明
+	// "文件输入输出 add.in->add.out"，改回标准输入是同一个面板里那一行。
 	// 相对源代码目录的子目录（留空 = 直接放同目录）
 	"tests_relative_dir": "",
 	// cph-ng 模式: 测试数据存放在 "tests/foo.cpp__tests"

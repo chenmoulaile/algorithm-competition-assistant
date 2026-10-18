@@ -115,6 +115,10 @@
 						"command": "cph_companion_options"
 					},
 					{
+						"caption": "This problem reads/writes files (NOI / CSP-S IO mode)...",
+						"command": "cph_io_mode"
+					},
+					{
 						"caption": "Check environment (doctor)",
 						"command": "cph_doctor"
 					},

@@ -131,6 +131,13 @@ class ProcessManager(object):
 		# Keys this manager registered in cph_state (run + compile), so it can
 		# drop them itself once the child is reaped.
 		self._live_keys = set()
+		# How the next run is fed and collected: a stdin pipe (the default, and
+		# what every online judge's "standard input" problem uses) or named files
+		# (NOI / CSP-S style, where the program itself opens add.in). See
+		# set_io_spec().
+		self.io_spec = {'mode': 'stdin', 'input': '', 'output': ''}
+		self.io_input_text = ''
+		self.io_dir = None
 		self.test_counter = 0
 		self.write = self.insert
 		self.run = self.run_file
@@ -628,6 +635,118 @@ class ProcessManager(object):
 			except Exception as e:
 				return (1, '[Algorithm Competition Assistant] failed to run compile command: %s\n(cmd: %s)' % (e, cmd))
 
+	def set_io_spec(self, spec, input_text=None):
+		"""Choose between a stdin run and a named-file run for the next run().
+
+		File IO is how NOI / CSP-S problems are judged: the program itself opens
+		`add.in` and writes `add.out`. The plugin cannot feed that through a
+		pipe, so the sample has to exist as a file the program will find.
+		"""
+		mode = (spec or {}).get('mode') or 'stdin'
+		self.io_spec = {'mode': mode if mode in ('stdin', 'files') else 'stdin',
+						'input': (spec or {}).get('input') or '',
+						'output': (spec or {}).get('output') or ''}
+		if input_text is not None:
+			self.io_input_text = input_text
+
+	def set_io_input(self, input_text):
+		"""The sample the next file-IO run puts into the input file."""
+		self.io_input_text = input_text or ''
+
+	def is_io_files(self):
+		return (getattr(self, 'io_spec', None) or {}).get('mode') == 'files'
+
+	def _io_dir_for(self):
+		"""The scratch directory a file-IO run reads and writes inside, or None.
+
+		It is never the problem folder: a contestant who downloaded the real data
+		has an `add.in` sitting there, and overwriting it with the sample being
+		judged would quietly corrupt the file they are testing against. The
+		program is started inside this directory instead, so its `freopen` finds
+		what the judge would have given it.
+		"""
+		if not self.is_io_files():
+			return None
+		root = tempfile.mkdtemp(prefix='cph-io-')
+		cph_state.register_temp_dir(root)
+		self.io_dir = root
+		input_name = self.io_spec.get('input') or 'data.in'
+		# An empty file is written on purpose: a judge always hands the program a
+		# file, so freopen must not fail just because this test point is empty.
+		try:
+			with open(os.path.join(root, input_name), 'wb') as f:
+				f.write((getattr(self, 'io_input_text', '') or '').encode('utf-8'))
+		except Exception as e:
+			print('[Algorithm Competition Assistant] could not write %s: %s'
+				  % (input_name, e))
+		return root
+
+	def release_io_dir(self):
+		root = getattr(self, 'io_dir', None)
+		if not root:
+			return
+		self.io_dir = None
+		cph_state.unregister_temp_dir(root)
+		try:
+			import shutil
+			shutil.rmtree(root, ignore_errors=True)
+		except Exception as e:
+			print('[Algorithm Competition Assistant] could not remove %s: %s'
+				  % (root, e))
+
+	def io_output(self):
+		"""(text, existed) for the file the program was told to write.
+
+		existed is False when the program never created it. That is not the same
+		as an empty output: it means the name in the statement and the name in the
+		code disagree - `freopen` missing, or `.out` where the problem said `.ans`
+		- and judging it as "printed nothing" would send the user hunting a wrong
+		algorithm for a typo in a string literal.
+		"""
+		if not self.is_io_files():
+			return ('', False)
+		output_name = self.io_spec.get('output') or ''
+		root = getattr(self, 'io_dir', None)
+		if not output_name or not root:
+			return ('', False)
+		target = os.path.join(root, output_name)
+		try:
+			if not os.path.exists(target):
+				return ('', False)
+			with open(target, 'rb') as f:
+				data = f.read()
+		except Exception as e:
+			print('[Algorithm Competition Assistant] could not read %s: %s' % (target, e))
+			return ('', False)
+		# Decoded exactly like the pipe: bytes in, UTF-8 out, undecodable bytes
+		# replaced rather than raising in the middle of a verdict.
+		return (_decode_output(data), True)
+
+	def collect_output(self):
+		"""(text, note): the program's answer, however this run produced it.
+
+		stdin runs answer on stdout. A file-IO run answers in the file it was
+		told to write, and stdout is whatever debug printing it left behind - so
+		the pipe is drained (a full pipe would block the program) and the file
+		is what gets judged. When the file never appeared the note explains that
+		in preference to a blank answer reading like a wrong algorithm.
+		"""
+		if not self.is_io_files():
+			return (self.read(), '')
+		text, existed = self.io_output()
+		if existed:
+			# The answer is in hand and the program is gone: the scratch
+			# directory has nothing left to give, and a parallel batch makes one
+			# manager per test case, so leaving them behind would litter the temp
+			# root one hundred directories deep.
+			self.release_io_dir()
+			return (text, '')
+		# The name is quoted back because the usual cause is a disagreement
+		# between the statement and the code: freopen missing, or ".out" written
+		# where the problem said ".ans".
+		return ('', t('io_output_missing', name=self.io_spec.get('output') or '?',
+					 input=self.io_spec.get('input') or '?'))
+
 	def run_file(self, args=[]):
 		if self.is_run:
 			# Recover from a stale flag instead of crashing: if the old
@@ -641,6 +760,10 @@ class ProcessManager(object):
 			else:
 				raise AssertionError('cant run process because is already running')
 		cmd = self.get_run_cmd(' '.join(args))
+		# File-IO problems run inside a scratch directory that holds the sample
+		# under the name the statement gives; stdin problems keep running next
+		# to the source as they always did.
+		run_cwd = self._io_dir_for() or os.path.split(self.file)[0]
 
 		self.is_run = True
 		self.terminated = False
@@ -695,7 +818,7 @@ class ProcessManager(object):
 			stdout=PIPE,
 			stderr=stderr_target,
 			bufsize=0,
-			cwd=os.path.split(self.file)[0],
+			cwd=run_cwd,
 			startupinfo=startupinfo,
 			preexec_fn=preexec_fn,
 			creationflags=creationflags
@@ -750,6 +873,12 @@ class ProcessManager(object):
 	def insert(self, s):
 		proc = getattr(self, 'process', None)
 		if proc is None or proc.poll() is not None:
+			return
+		if self.is_io_files():
+			# The sample is already in the file the program opens. Feeding it to
+			# stdin as well would be worse than useless: a program that reads
+			# only files never drains the pipe, so a large input fills it and the
+			# write blocks forever - a hang that looks like a TLE.
 			return
 		if getattr(self, 'stdin_closed', False):
 			# The pipe broke earlier in this run; stop retrying (and stop

@@ -11,7 +11,7 @@ from time import time, sleep
 import threading
 
 from .Modules.ProcessManager import ProcessManager
-from .core.cph_settings import package_name, get_settings, get_tests_paths, load_all_tests, save_tests, is_run_supported_ext, get_problem_limits, notify_io_error
+from .core.cph_settings import package_name, get_settings, get_tests_paths, load_all_tests, save_tests, is_run_supported_ext, get_problem_limits, notify_io_error, get_problem_io
 from .core.cph_target import visible as context_menu_visible
 from .core.cph_jump import (diagnostics as parse_diagnostics,
 							links_html, one_link, set_targets, handle_event as handle_jump_event)
@@ -230,6 +230,14 @@ def run_view_status_label(run_file, time_limit_ms, memory_limit_mb):
 		cal = calibrate_label(tl) if tl else ''
 		if cal:
 			parts.append(cal)
+		# Which channel the answer comes from belongs next to the limits: a
+		# problem whose statement says `add.in / add.out` and a panel judging
+		# stdin output are two different runs, and the WA that follows looks
+		# exactly like an algorithm bug.
+		io_spec = get_problem_io(run_file)
+		if (io_spec or {}).get('mode') == 'files':
+			parts.append('%s %s->%s' % (t('opt_io_files'), io_spec.get('input'),
+										io_spec.get('output')))
 		return ' · '.join(parts)
 	except Exception:
 		return ''
@@ -968,6 +976,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				)
 				watchdog.daemon = True
 				watchdog.start()
+			files_io = bool(getattr(proc, 'is_io_files', lambda: False)())
 			try:
 				while proc.is_stopped() is None:
 					if gen != self._active_gen:
@@ -976,7 +985,13 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 						s = proc.read(bfsize=1)
 					else:
 						s = proc.read(_OUT_CHUNK)
-					self.__on_out(s, gen)
+					# A file-IO run is answered in a file. Its stdout is debug
+					# printing at best, and showing it as the program's answer
+					# would judge the wrong thing - but the pipe is still drained
+					# above, because a program whose stdout fills up blocks and
+					# would then be reported as TLE.
+					if not files_io:
+						self.__on_out(s, gen)
 				# Final drain. The process is gone so whatever is left is
 				# already in the pipe, but a single bounded read would drop
 				# everything past the first chunk: keep going until EOF.
@@ -985,7 +1000,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 						s = proc.read(_OUT_CHUNK)
 						if not s:
 							break
-						self.__on_out(s, gen)
+						if not files_io:
+							self.__on_out(s, gen)
 				except Exception:
 					pass
 			except Exception as e:
@@ -993,6 +1009,18 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				# and on_stop below: an exception here used to leak a thread
 				# polling a dead pid and leave the status stuck on RUNNING.
 				print('[Algorithm Competition Assistant] output listener error: %s' % e)
+			if files_io and gen == self._active_gen:
+				# Read the answer back from the file the program wrote (or say
+				# that it never created it - not the same thing at all).
+				try:
+					text, note = proc.collect_output()
+				except Exception as e:
+					print('[Algorithm Competition Assistant] file output not read: %s' % e)
+					text, note = ('', '')
+				if note:
+					self.__on_out('\n' + note + '\n', gen)
+				elif text:
+					self.__on_out(text, gen)
 			if gen != self._active_gen:
 				return
 			# Only the time the program was actually working with its input
@@ -1084,18 +1112,34 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			# user still has to paste the sample, and that wait must not
 			# count as runtime or trip the TLE watchdog.
 			input_text = tests[id].test_string
+			# NOI / CSP-S style problems are judged from files: the program
+			# itself opens add.in and writes add.out, so the sample has to exist
+			# as a file it can find and the answer has to be read back from the
+			# file it produces. Everything else keeps running over a pipe, with
+			# no change to what a stdin problem does. The source file comes from
+			# the manager this tester drives, not from the panel: a duck-typed
+			# tester (the interactive path, the suite's fakes) has no dbg_file.
+			io_spec = get_problem_io(getattr(self.process_manager, 'file', None))
+			files_io = (io_spec or {}).get('mode') == 'files'
+			if files_io and type(self.process_manager) == ProcessManager:
+				self.process_manager.set_io_spec(io_spec, input_text)
+			elif type(self.process_manager) == ProcessManager:
+				self.process_manager.set_io_spec({'mode': 'stdin'})
 			self.process_manager.run()
 			# The program's clock starts when the process came to life, never
 			# before it: creating the child costs tens of milliseconds on
 			# Windows and none of that is the program's doing. Feeding the
 			# sample is included, because on a judge the program spends its
 			# own time reading stdin.
-			self._clock_start = None if self.awaiting_input else self._spawn_moment()
+			# A file-IO run has nothing to wait for: the sample was on disk
+			# before the program started, so the clock starts now even for an
+			# empty test point (the judge would have given it an empty file too).
+			self._clock_start = None if (self.awaiting_input and not files_io) else self._spawn_moment()
 			self.process_manager.write(input_text)
 			# The stored sample is the whole input, so the program must see
 			# EOF - exactly like on the judge. An EMPTY sample is the
 			# placeholder waiting for the user to paste, so stdin stays open.
-			if input_text and input_text.strip():
+			if (input_text and input_text.strip()) or files_io:
 				self.process_manager.close_stdin()
 			if self._clock_start is None and input_text and input_text.strip():
 				self._clock_start = self._spawn_moment()
@@ -1570,6 +1614,11 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 		def make_manager():
 			manager = ProcessManager(file, build_sys, run_settings=run_settings)
+			# Parallel runs and the benchmark build their own managers, and a
+			# file-IO problem has to be a file-IO problem on every path: the
+			# serial panel, Ctrl+Alt+Shift+P and Ctrl+Alt+Shift+K must not
+			# disagree about where the answer comes from for the same binary.
+			manager.set_io_spec(get_problem_io(file))
 			if separate_stderr:
 				manager.set_separate_stderr(True)
 			if time_limit_ms is not None:

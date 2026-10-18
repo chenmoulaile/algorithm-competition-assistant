@@ -62,6 +62,13 @@ def _run_one(make_manager, input_text, expected, time_limit_ms, memory_limit_mb,
         if memory_limit_mb:
             manager.set_memory_limit(memory_limit_mb)
 
+        # A file-IO problem reads its sample from a file, so the sample has to
+        # be on disk before the program starts. For a stdin run this only
+        # remembers the text; the manager is duck-typed here, so ask softly.
+        set_io_input = getattr(manager, 'set_io_input', None)
+        if set_io_input is not None:
+            set_io_input(input_text)
+
         manager.run_file()
         # The program's own clock, taken from the manager the instant Popen
         # returned. Starting it before the spawn (as this path used to) charged
@@ -94,7 +101,17 @@ def _run_one(make_manager, input_text, expected, time_limit_ms, memory_limit_mb,
         runtime = measured() if measured is not None else None
         if runtime is None:
             runtime = int((time.time() - started) * 1000)
-        stdout = manager.read()
+        collect = getattr(manager, 'collect_output', None)
+        if collect is not None:
+            # stdin runs: (pipe text, ''). File-IO runs: the file the program
+            # wrote, and when that file never appeared a note saying so - which
+            # is shown as the output rather than judging a blank answer, because
+            # "you did not write add.out" is not the same as "wrong answer".
+            stdout, io_note = collect()
+            if io_note:
+                stdout = '\n' + io_note + '\n'
+        else:
+            stdout = manager.read()
         stderr = manager.get_stderr()
         try:
             memory = manager.finish_memory_sampling()

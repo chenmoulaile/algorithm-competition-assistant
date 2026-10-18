@@ -141,6 +141,9 @@
 		"command": "cph_companion_options"
 	},
 	{
+		"command": "cph_io_mode"
+	},
+	{
 		"caption": "Algorithm Competition Assistant: Check environment (doctor)",
 		"command": "cph_doctor"
 	},

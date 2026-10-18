@@ -3477,6 +3477,14 @@ def main():
     check('begin() refuses to start when std and gen are the same file',
           '_same_program(std_file, gen_file)' in stress_src
           and "t('stress_same_file'" in stress_src)
+    # A file-IO problem stress tested through a pipe sees no data at all, and
+    # std and the generator get the same nothing: every round "agrees" on empty
+    # output. That is a pass that means nothing, so it is refused up front.
+    check('begin() refuses a file-IO problem instead of faking a pass',
+          'get_problem_io(user_file)' in stress_src
+          and "t('stress_files_mode_refused'" in stress_src
+          and i18n.STRINGS.get('stress_files_mode_refused', {}).get('zh')
+          and i18n.STRINGS['stress_files_mode_refused']['en'])
 
     print('== round 5: answer matching, empty placeholder, RE vs TLE, run clock ==')
 
@@ -4531,15 +4539,123 @@ def main():
     pm_src = open(os.path.join(ROOT, 'Modules', 'ProcessManager.py'),
                   encoding='utf-8').read()
     check('ProcessManager can signal EOF', 'def close_stdin(self)' in pm_src)
-    check('the serial run closes stdin after a stored sample',
-          'self.process_manager.close_stdin()' in tm_src
-          and 'if input_text and input_text.strip():' in tm_src)
     par_src = open(os.path.join(ROOT, 'core', 'cph_parallel.py'),
                    encoding='utf-8').read()
     check('the parallel run closes stdin too', 'manager.close_stdin()' in par_src)
-    check('an empty sample keeps stdin open for a manual paste',
-          "if input_text and input_text.strip():\n\t\t\t\tself.process_manager.close_stdin()"
-          in tm_src)
+
+    # The rules themselves, by behaviour: a source-text match went red the
+    # moment file IO joined the condition, and a green string match had never
+    # proved the rule anyway.
+    class _IoProbeProcess(FakeProcess):
+        """A ProcessManager stand-in that records how it was asked to run."""
+
+        def __init__(self, source_file):
+            self.file = source_file
+            self.writes = []
+            self.closed = 0
+            self.specs = []
+
+        def set_calls(self, *args):
+            pass
+
+        def set_io_spec(self, spec, input_text=None):
+            self.specs.append((spec.get('mode'), spec.get('input') or '',
+                               spec.get('output') or ''))
+
+        def is_io_files(self):
+            return bool(self.specs) and self.specs[-1][0] == 'files'
+
+        def run(self, *args, **kwargs):
+            pass
+
+        def write(self, s):
+            self.writes.append(s)
+
+        def close_stdin(self):
+            self.closed += 1
+
+        def is_stopped(self):
+            return 0
+
+    _noop = lambda *a, **k: None
+    _Tester = tm.CphTestManagerCommand.Tester
+    _Test = tm.CphTestManagerCommand.Test
+    # insert_test only tells a *real* ProcessManager which channel this problem
+    # is judged through - a duck-typed stand-in would not understand the call.
+    # These cases therefore take that class's place for the duration, so what
+    # is exercised is the production control flow, not a copy of it.
+    _saved_pm = tm.ProcessManager
+    tm.ProcessManager = _IoProbeProcess
+    io_tmp = tempfile.mkdtemp(prefix='cph_io_')
+    try:
+        probe = _IoProbeProcess(os.path.join('tmp', 'plain.cpp'))
+        _Tester(probe, _noop, _noop, _noop, _noop, sync_out=False,
+                tests=[_Test('1 2\n')], epoch=71).insert_test(0)
+        check('the serial run writes the stored sample and signals EOF',
+              probe.writes == ['1 2\n'] and probe.closed == 1,
+              '%s %s' % (probe.writes, probe.closed))
+        check('a plain problem is judged over a pipe',
+              probe.specs == [('stdin', '', '')], repr(probe.specs))
+
+        probe_empty = _IoProbeProcess(os.path.join('tmp', 'empty.cpp'))
+        _tester_empty = _Tester(probe_empty, _noop, _noop, _noop, _noop,
+                                sync_out=False, tests=[_Test('')], epoch=72)
+        _tester_empty.awaiting_input = True
+        _tester_empty.insert_test(0)
+        check('an empty sample keeps stdin open for a manual paste',
+              probe_empty.closed == 0 and _tester_empty._clock_start is None,
+              '%s %s' % (probe_empty.closed, _tester_empty._clock_start))
+
+        source = os.path.join(io_tmp, 'add.cpp')
+        io.open(source, 'w', encoding='utf-8').close()
+        gate_settings.set_problem_io(source, 'files', 'add.in', 'add.out')
+        probe_files = _IoProbeProcess(source)
+        _tester_files = _Tester(probe_files, _noop, _noop, _noop, _noop,
+                                sync_out=False, tests=[_Test('')], epoch=73)
+        _tester_files.awaiting_input = True
+        _tester_files.insert_test(0)
+        check('the file-IO choice reaches the manager before the program starts',
+              probe_files.specs == [('files', 'add.in', 'add.out')],
+              repr(probe_files.specs))
+        # There is no paste to wait for: the sample was a file before the
+        # program started, exactly as on the judge.
+        check('a file-IO run closes stdin and starts the clock even when empty',
+              probe_files.closed == 1 and _tester_files._clock_start is not None,
+              '%s %s' % (probe_files.closed, _tester_files._clock_start))
+        # The sidecar travels with the test data, which may live in a `tests/`
+        # subfolder - so ask where it went instead of guessing the name.
+        io_sidecar = gate_settings.get_io_file_path(source)
+        check('and the per-problem sidecar is what carries it',
+              io_sidecar and os.path.exists(io_sidecar)
+              and io_sidecar.endswith('__tests.io'), repr(io_sidecar))
+        # The pairing follows the file, never the session: a second problem
+        # must not inherit the first one's file names.
+        other = os.path.join(io_tmp, 'traffic.cpp')
+        io.open(other, 'w', encoding='utf-8').close()
+        check('another problem still runs on stdin',
+              gate_settings.get_problem_io(other)['mode'] == 'stdin')
+        check('with no names saved it falls back to the conventional ones',
+              gate_settings.get_problem_io(source) == {'mode': 'files',
+                                                  'input': 'add.in',
+                                                  'output': 'add.out'},
+              repr(gate_settings.get_problem_io(source)))
+        gate_settings._problem_io.clear()
+        with io.open(io_sidecar, 'w', encoding='utf-8') as f:
+            f.write('{"mode": "files"}')
+        spec = gate_settings.get_problem_io(source)
+        check('a half-saved spec (names forgotten) gets the conventional ones',
+              spec['input'] == 'add.in' and spec['output'] == 'add.out',
+              repr(spec))
+        with io.open(io_sidecar, 'w', encoding='utf-8') as f:
+            f.write('{"mode": "bogus"}')
+        gate_settings._problem_io.clear()
+        check('an unknown mode falls back to stdin instead of guessing',
+              gate_settings.get_problem_io(source)['mode'] == 'stdin')
+        gate_settings._problem_io.clear()
+    finally:
+        tm.ProcessManager = _saved_pm
+        shutil.rmtree(io_tmp, ignore_errors=True)
+        gate_settings._problem_io.clear()
     # ...and the real thing: a reader-to-EOF must not be a TLE any more
     pm_mod = importlib.import_module(pkg + '.Modules.ProcessManager')
     tmp = tempfile.mkdtemp()
@@ -4573,6 +4689,108 @@ def main():
     check('a program that reads to EOF finishes instead of hanging',
           code == 0 and out.strip() == '3', 'rc=%s out=%r' % (code, out))
     shutil.rmtree(tmp, ignore_errors=True)
+
+    # File input/output, the way NOI / CSP-S actually judge: the program opens
+    # the sample by name and writes its answer to a file. This runs a real
+    # process, because the whole feature is about where the bytes land on disk
+    # and no fake can prove that.
+    io_real = tempfile.mkdtemp(prefix='cph_io_real_')
+    saved_platform2 = sys.modules['sublime'].platform
+    sys.modules['sublime'].platform = lambda: ('windows' if os.name == 'nt' else 'linux')
+    try:
+        add_src = os.path.join(io_real, 'add.py')
+        with open(add_src, 'w', encoding='utf-8') as f:
+            f.write('data = open("add.in").read().split()\n'
+                    'open("add.out", "w").write(str(int(data[0]) + int(data[1])) + "\\n")\n')
+        entry_io = [{'name': 'Python', 'extensions': ['py'], 'compile_cmd': None,
+                     'run_cmd': sys.executable.replace('\\', '/') + ' "{source_file}"',
+                     'time_limit_ms': 20000, 'memory_limit_mb': 256}]
+        manager_io = pm_mod.ProcessManager(add_src, 'source.python',
+                                           run_settings=entry_io)
+        manager_io.set_io_spec({'mode': 'files', 'input': 'add.in',
+                                'output': 'add.out'}, '2 3\n')
+        manager_io.run_file()
+        manager_io.insert('2 3\n')
+        manager_io.close_stdin()
+        deadline = time.time() + 20
+        while manager_io.is_stopped() is None and time.time() < deadline:
+            time.sleep(0.02)
+        answer, note = manager_io.collect_output()
+        check('a file-IO problem is judged from the file it writes',
+              answer.strip() == '5' and note == '', 'out=%r note=%r' % (answer, note))
+        check('the sample never lands next to the source',
+              not os.path.exists(os.path.join(io_real, 'add.in'))
+              and not os.path.exists(os.path.join(io_real, 'add.out')),
+              sorted(os.listdir(io_real)))
+        check('and the scratch directory is gone once the answer is read',
+              manager_io.io_dir is None, repr(manager_io.io_dir))
+
+        # A program that never creates the output file: not an empty answer.
+        silent_src = os.path.join(io_real, 'silent.py')
+        with open(silent_src, 'w', encoding='utf-8') as f:
+            f.write('print(123)\n')
+        quiet = pm_mod.ProcessManager(silent_src, 'source.python',
+                                      run_settings=entry_io)
+        quiet.set_io_spec({'mode': 'files', 'input': 'add.in', 'output': 'add.out'},
+                          '1 1\n')
+        quiet.run_file()
+        quiet.close_stdin()
+        deadline = time.time() + 20
+        while quiet.is_stopped() is None and time.time() < deadline:
+            time.sleep(0.02)
+        answer, note = quiet.collect_output()
+        check('a missing answer file is reported, not judged as a blank output',
+              answer == '' and 'add.out' in note, 'out=%r note=%r' % (answer, note))
+        check('and the note names the input file that was provided',
+              'add.in' in note, repr(note))
+
+        # stdout is not the answer in this mode, but it must still be drained
+        # while the program runs: a program whose stdout fills the pipe blocks,
+        # and we would report that as a TLE of a program that merely printed a
+        # lot. The panel does this on its output pump thread, so this case pumps
+        # the same way.
+        noisy_src = os.path.join(io_real, 'noisy.py')
+        with open(noisy_src, 'w', encoding='utf-8') as f:
+            f.write('for i in range(40000): print("x" * 80)\n'
+                    'open("add.out", "w").write("ok\\n")\n')
+        loud = pm_mod.ProcessManager(noisy_src, 'source.python', run_settings=entry_io)
+        loud.set_io_spec({'mode': 'files', 'input': 'add.in', 'output': 'add.out'}, '')
+        loud.run_file()
+        loud.close_stdin()
+        drained = 0
+        deadline = time.time() + 40
+        while loud.is_stopped() is None and time.time() < deadline:
+            drained += len(loud.read(4096) or '')
+        while True:
+            tail = loud.read(65536)
+            if not tail:
+                break
+            drained += len(tail)
+        answer, note = loud.collect_output()
+        check('the file wins over stdout and a chatty program is not blocked',
+              answer.strip() == 'ok' and note == '',
+              'rc=%s out=%r note=%r drained=%d' % (loud.is_stopped(), answer[:40],
+                                                   note, drained))
+        check('the stdout of a file-IO run is still pulled off the pipe',
+              drained > 100000, 'drained=%d' % drained)
+
+        # The mode belongs to the problem, never to the session.
+        stdin_only = pm_mod.ProcessManager(add_src, 'source.python',
+                                           run_settings=entry_io)
+        stdin_only.set_io_spec({'mode': 'stdin'})
+        stdin_only.run_file()
+        stdin_only.insert('7 8\n')
+        stdin_only.close_stdin()
+        deadline = time.time() + 20
+        while stdin_only.is_stopped() is None and time.time() < deadline:
+            time.sleep(0.02)
+        answer, note = stdin_only.collect_output()
+        check('switching back to stdin reads the pipe again',
+              note == '' and stdin_only.io_dir is None,
+              'note=%r dir=%r out=%r' % (note, stdin_only.io_dir, answer[:40]))
+    finally:
+        sys.modules['sublime'].platform = saved_platform2
+        shutil.rmtree(io_real, ignore_errors=True)
 
     # 2. A script checker ("python checker.py") used to be pushed through the
     #    C++ compile command, so a perfectly good Python SPJ never ran.
