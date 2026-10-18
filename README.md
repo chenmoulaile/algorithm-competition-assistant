@@ -59,6 +59,7 @@ opens the package keymap beside your own override, so you can copy the entry and
 | **运行错误定位（RE 位置）** | ❌ | ✅ 从程序输出解析 `文件:行号`（Python 回溯 / Java 栈 / sanitizer 诊断），解析不到就用 gdb 回放崩溃现场 |
 | 详情视图 + **逐行 diff** | ❌ | ✅ 独立标签页，可选中可复制 |
 | **编译缓存** | ❌ 每次都重编 | ✅ 源文件/命令未变则跳过编译 |
+| **编译标准自动档（少等 1.4~2 秒/次）** | ❌ 写死什么就编什么 | ✅ 低档先编，需要才升，按题目文件记住 |
 | 只重跑失败 / 跑完全部 / 强制重编 | ❌ | ✅ 三个命令 + 快捷键 |
 | **浮点容差**（`float_tolerance`） | ❌ | ✅ 浮点题不再因 `0.1+0.2 != 0.3` 误判 |
 | 输出体积上限（防卡死） | ❌ | ✅ `max_output_bytes` |
@@ -187,6 +188,13 @@ opens the package keymap beside your own override, so you can copy the entry and
 ### 6. 运行模式与效率
 
 - **编译缓存**：源文件（含多文件依赖）与编译命令没变时跳过编译；需要时 `Ctrl+Alt+Shift+R` 强制重编
+- **编译标准自动档**（`auto_std_switch`，默认开）：先用 `std_floor`（默认 `c++17`）编，只有编译器自己
+  说"这个语法要 C++NN 才有"（或源码里写了 `#include <expected>` / `std::println` 这类新标准才有的东西）
+  才升档，并把这道文件编得过的档位记在 `<名>__tests.std` 里。写死 `-std=c++23` 的代价是**每次 Run 白等
+  1.4~2 秒**（实测解析 `<bits/stdc++.h>`：c++17 1.29s，c++20 2.43s，c++23 2.53s；整份题解完整编译
+  1.69s vs 3.12s）。普通拼写/语法错误**不会**触发重试，报错原样给你；`Ctrl+Alt+Shift+R` 会把档位忘掉
+  从头试，`auto_std_switch: false` 则完全按你命令里那一档编。预编译头试过，更慢（3.12s→3.46s，
+  还要 151 MB 的 .gch），所以没做
 - **只重跑失败 / 跑完全部**：`Ctrl+Alt+R` 只重跑没 AC 的点，`Ctrl+Alt+Shift+B` 跑完全部（默认第一个失败即停，可用 `stop_on_first_failure` 改）
 - **浮点容差**：设置 `float_tolerance`（如 `1e-6`），数字型输出按相对/绝对误差比较
 - **输出上限**：`max_output_bytes`（默认 8MB）防止疯狂输出卡死编辑器，超出部分会被截断并给出提示
@@ -345,7 +353,7 @@ opens the package keymap beside your own override, so you can copy the entry and
 | `Ctrl+Alt+Shift+V` | 把题目题面转成 Markdown 打开 |
 | `Ctrl+Alt+Shift+K` | Benchmark 当前测试点（跑 N 次报最快/平均/最慢） |
 | `Ctrl+Alt+Shift+T` | 比赛计时器（状态栏倒计时，可停止） |
-| `Ctrl+Alt+Shift+R` | 强制重新编译后运行（忽略编译缓存） |
+| `Ctrl+Alt+Shift+R` | 强制重新编译后运行（忽略编译缓存，并重置这道文件的编译标准档） |
 | `Ctrl+Alt+G` | 切换 Debug / Release 编译模式（状态栏显示当前模式） |
 | `Ctrl+Alt+D` | 环境自检（编译器 / 端口 / 路径 / 资源） |
 | `Ctrl+Alt+M` | 键盘选择测试点并运行 / 详情 / 编辑（不用鼠标） |
@@ -409,6 +417,12 @@ int main() {
   **起始目录就是当前源文件所在目录**），选完记在该题测试数据旁边的 `<文件名>__tests.stress`
   里，同一文件以后再按 `Ctrl+Alt+S` 就直接开跑、不再问；换个题目文件重新各选一次。
   同目录已经有唯一一对 std/gen 时连第一次都省了。
+  **配对只跟着文件走**：插件不再把你选的 std/gen 写回 `stress_std_file` /
+  `stress_generator_file`，那两个设置只是"备选项"列在面板第一行，不会替你决定。
+  （以前它会写回：于是给 A 题选过的 std/gen 变成了 B 题的默认答案，一按 `Ctrl+Alt+S`
+  就拿别人家的正解开跑，屏幕上还毫无提示。）
+  0 字节的 `std.cpp` 不算候选也不算"记过的配对"——空文件当正解，第一轮必然"发现反例"，
+  而那个反例是编出来的。
 - `same_dir`：只在源文件同目录按名字找（`std` / `brute` / `bf` / `sol` / `暴力` 与
   `gen` / `data` / `maker` / `rand` / `生成` 等，多个候选取最短名），**永不弹窗**；
   找不到就直接告诉你它查了哪个目录，然后才让你手动指。

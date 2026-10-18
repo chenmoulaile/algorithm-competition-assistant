@@ -16,6 +16,7 @@ from .core.cph_target import visible as context_menu_visible
 from .core.cph_jump import (diagnostics as parse_diagnostics,
 							links_html, one_link, set_targets, handle_event as handle_jump_event)
 from .core.cph_build_mode import label as build_mode_label
+from .core.cph_std_ladder import reset as std_ladder_reset
 from .core.cph_calibrate import label as calibrate_label
 from .core.cph_parallel import run_batch as run_parallel_batch
 from .core.cph_checker import (config as checker_config,
@@ -3257,6 +3258,11 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			# code walked the headers and globbed the extra sources a second
 			# time on every Run just to remember what it had checked.
 			fingerprint = None
+			if force_compile:
+				# 'force recompile' also forgets the -std this file had climbed
+				# to: the key means start over, and it is the way back down when
+				# the code no longer uses anything newer than the floor.
+				std_ladder_reset(process_manager.file)
 			if get_settings().get('compile_cache_enabled', True):
 				try:
 					fingerprint = _source_fingerprint(process_manager)
@@ -3271,6 +3277,15 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				else:
 					cmp_data = process_manager.compile()
 					print('[Algorithm Competition Assistant] compile rc: %s' % (cmp_data[0] if cmp_data else None))
+					if getattr(process_manager, 'std_escalated', False):
+						# the command changed while we were compiling, so the binary
+						# on disk is not the one the pre-compile fingerprint describes;
+						# caching that would skip the next Run of a file that has never
+						# been built at its own standard
+						try:
+							fingerprint = _source_fingerprint(process_manager)
+						except Exception:
+							fingerprint = None
 			except Exception as e:
 				print('[Algorithm Competition Assistant] compile exception: %s' % e)
 				cmp_data = (1, '[Algorithm Competition Assistant] compile failed: %s' % e)

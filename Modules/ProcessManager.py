@@ -19,6 +19,7 @@ from .memprobe import MemorySampler, bytes_to_mb, sample_memory_bytes
 from .build_artifact import output_path_from_compile_cmd, resolve_artifact, retarget_command
 from ..core.cph_i18n import t
 from ..core.cph_build_mode import get_mode as _build_mode, transform as _apply_build_mode
+from ..core.cph_std_ladder import apply as _std_apply, escalate as _std_escalate
 from ..core.cph_gdb_trace import (find_gdb as _find_gdb, find_crash as _find_crash,
                                    replay as _replay_under_gdb,
                                    names_source as _names_source)
@@ -141,6 +142,11 @@ class ProcessManager(object):
 		# or TLE watchdog) so the verdict logic can tell it apart from a
 		# genuine non-zero exit of the program itself
 		self.terminated = False
+
+		# Set when a compile had to be retried at a higher -std, so the
+		# caller knows the artifact it just built is not described by the
+		# fingerprint it took before the compiler ran.
+		self.std_escalated = False
 
 		# Extract time/memory limits from run_settings
 		self.time_limit_ms = None
@@ -343,7 +349,12 @@ class ProcessManager(object):
 				# Debug / Release switch (see core/cph_build_mode). Applied
 				# here so every consumer - the run itself, the compile cache
 				# fingerprint and doctor - sees the same command.
-				return _apply_build_mode(cmd, _build_mode(self.file))
+				cmd = _apply_build_mode(cmd, _build_mode(self.file))
+				# -std ladder (see core/cph_std_ladder): the command carries the
+				# standard this file has proven it needs, which is usually the
+				# cheap one. Also resolved here on purpose: the compile cache
+				# fingerprints the command, so a rung change re-compiles.
+				return _std_apply(cmd, self.file)[0]
 		else:
 			return -1
 
@@ -550,6 +561,26 @@ class ProcessManager(object):
 							returncode = rc2
 							compile_result = (note + compile_result.rstrip()
 											  + '\n' + out2)
+						cmd = fallback
+				if returncode != 0 and isinstance(cmd, str):
+					# The other failure that is not the user's fault: the cheap -std the
+					# ladder picked cannot see a construct that only exists in a newer
+					# standard. Retry at the rung the compiler itself named - and only
+					# then, so a plain typo still gets its own diagnostics on the first
+					# attempt, which is what makes the fast default safe.
+					upgrade, note = _std_escalate(cmd, self.file, compile_result)
+					if upgrade and upgrade != cmd:
+						rc2, out2 = self._popen_compile(upgrade)
+						if rc2 == 0:
+							returncode, compile_result = rc2, note + out2
+							# the artifact on disk belongs to the newer standard now, so
+							# the compile cache has to be re-fingerprinted
+							self.std_escalated = True
+						else:
+							returncode = rc2
+							compile_result = (compile_result.rstrip() + '\n' + note + out2)
+						cmd = upgrade
+
 				if returncode == 0:
 					compile_result = compile_result + self._artifact_note(cmd)
 				return (returncode, compile_result)

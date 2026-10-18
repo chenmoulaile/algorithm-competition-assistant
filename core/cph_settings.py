@@ -176,11 +176,26 @@ def set_stress_files(file, std_file, generator_file):
 		print('[Algorithm Competition Assistant] stress files not saved: %s (%s)' % (path, e))
 
 
+def usable_program(path):
+	"""A remembered stress program must exist and actually contain something.
+
+	The empty `std.cpp` a template leaves behind is the exact file the picker
+	used to remember, and stress testing against it "proves" that any output is
+	a counterexample.
+	"""
+	if not path:
+		return False
+	try:
+		return os.path.isfile(path) and os.path.getsize(path) > 0
+	except OSError:
+		return False
+
+
 def get_stress_files(file):
 	"""(std_file, generator_file) for this source file, or (None, None).
 
 	Paths that no longer exist are dropped: a remembered pair from a folder the
-	user has since reorganised must not be started.
+	user has since reorganised must not be started. Neither is an empty file.
 	"""
 	entry = _stress_files.get(file)
 	if entry is None:
@@ -199,8 +214,68 @@ def get_stress_files(file):
 		_stress_files[file] = entry
 	std = entry.get('std_file') or ''
 	gen = entry.get('generator_file') or ''
-	return ((std if std and os.path.exists(std) else None),
-			(gen if gen and os.path.exists(gen) else None))
+	return ((std if usable_program(std) else None),
+			(gen if usable_program(gen) else None))
+
+
+# Which -std this source file actually compiles with. Per file like the pair
+# above: the problem that needs C++23 must not drag every other problem's
+# compile up to the expensive standard, and the one that does not must not pay
+# for a standard it never uses.
+_remembered_std = {}
+
+
+def _remembered_std_path(file, create=False):
+	primary = primary_tests_path(file, create=create)
+	if not primary:
+		return None
+	return primary + '.std'
+
+
+def set_remembered_std(file, std):
+	"""Remember (or, with None, forget) the compile standard of this file."""
+	if not file:
+		return
+	path = _remembered_std_path(file)
+	if not std:
+		_remembered_std.pop(file, None)
+		if path and os.path.exists(path):
+			try:
+				os.remove(path)
+			except OSError:
+				pass
+		return
+	_remembered_std[file] = std
+	path = _remembered_std_path(file, create=True)
+	if not path:
+		return
+	try:
+		with open(path, 'w', encoding='utf-8') as f:
+			f.write(sublime.encode_value({'std': std}, True))
+	except Exception as e:
+		print('[Algorithm Competition Assistant] std rung not saved: %s (%s)'
+			  % (path, e))
+
+
+def get_remembered_std(file):
+	"""The remembered -std for this file, or None."""
+	if not file:
+		return None
+	std = _remembered_std.get(file)
+	if std:
+		return std
+	path = _remembered_std_path(file)
+	if not path or not os.path.exists(path):
+		return None
+	try:
+		with open(path, 'r', encoding='utf-8') as f:
+			data = sublime.decode_value(f.read().strip())
+	except Exception:
+		return None
+	if isinstance(data, dict) and data.get('std'):
+		_remembered_std[file] = data['std']
+		return data['std']
+	return None
 
 
 def _limit_value(value):

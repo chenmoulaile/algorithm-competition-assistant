@@ -2067,8 +2067,241 @@ def main():
     finally:
         cs.init_settings(saved_contest)
 
-    print('== install layout: who is really loaded ==')
-    # Package Control reinstalled the package as a zip and emptied the folder
+    print('== the -std ladder: pay for the new standard only when the code needs it ==')
+    # Measured on his machine (g++ 15.2 MSYS2, day9/B, <bits/stdc++.h>):
+    #   -fsyntax-only  c++11 1.11  c++17 1.29  c++20 2.43  c++23 2.53 s
+    #   full compile   c++17 1.69              c++23 3.12 s (avg 3.78)
+    # so the wait is header parsing that grows with the standard, and his file
+    # uses nothing newer than C++11. A precompiled header was measured too:
+    # 3.12 s -> 3.46 s and a 151 MB .gch, so that road is closed.
+    ladder = importlib.import_module(pkg + '.core.cph_std_ladder')
+    CMD = ('g++ "{source_file}" -std=c++23 -O2 -DLOCAL -o "{file_name}.exe"')
+    check('the configured standard is read out of the command',
+          ladder.configured_std(CMD) == 'c++23'
+          and ladder.configured_std('g++ "{source_file}" -O2') is None,
+          repr(ladder.configured_std(CMD)))
+    check('gnu++ and c++2b spellings normalise to a rung',
+          ladder.normalize_std('gnu++20') == 'c++20'
+          and ladder.normalize_std('c++2b') == 'c++23'
+          and ladder.normalize_std('c++98') is None,
+          repr([ladder.normalize_std('gnu++20'), ladder.normalize_std('c++2b')]))
+    check('the ladder runs from the floor up to what the command already asks for',
+          ladder.rungs(CMD, {'std_floor': 'c++17'}) == ['c++17', 'c++20', 'c++23'],
+          repr(ladder.rungs(CMD, {'std_floor': 'c++17'})))
+    check('a command that is already at the floor has nothing to try',
+          ladder.rungs('g++ a.cpp -std=c++17 -o a.exe', {}) == [],
+          repr(ladder.rungs('g++ a.cpp -std=c++17 -o a.exe', {})))
+    check('substituting keeps every other flag and the output path',
+          ladder.with_std(CMD, 'c++17')
+          == 'g++ "{source_file}" -std=c++17 -O2 -DLOCAL -o "{file_name}.exe"',
+          repr(ladder.with_std(CMD, 'c++17')))
+    check('a gnu++ command is rewritten in its own spelling',
+          '-std=gnu++17' in ladder.with_std('g++ a.cpp -std=gnu++23 -O2', 'c++17'),
+          repr(ladder.with_std('g++ a.cpp -std=gnu++23 -O2', 'c++17')))
+    check('a command without -std is never touched',
+          ladder.with_std('g++ a.cpp -O2', 'c++17') == 'g++ a.cpp -O2',
+          repr(ladder.with_std('g++ a.cpp -O2', 'c++17')))
+
+    # GCC's own words, captured on this machine with real C++20/23 code
+    EXPECTED = ("t.cpp:3:17: note: 'std::expected' is only available from "
+                "C++23 onwards\n")
+    PRINTLN = ("t.cpp:3:17: error: 'println' is not a member of 'std'\n"
+               "t.cpp:3:17: note: 'std::println' is only available from C++23 onwards\n")
+    EXT = ("warning: use of 'auto' in parameter declaration only available "
+           "with '-std=c++20' or '-fconcepts' [-Wc++20-extensions]\n")
+    HDR = 't.cpp:2:10: fatal error: mdspan: No such file or directory\n'
+    KEYWORD = "t.cpp:1:24: error: expected '(' before 'consteval'\n"
+    TYPO = "t.cpp:2:17: error: 'vectr' is not a member of 'std'\n"
+    SYNTAX = "t.cpp:2:17: error: expected primary-expression before ';' token\n"
+    for text, want, why in ((EXPECTED, True, 'the version note'),
+                            (PRINTLN, True, 'not a member + note'),
+                            (EXT, True, 'extension warning naming -std'),
+                            (HDR, True, 'a header that only exists in C++20/23'),
+                            (KEYWORD, True, 'a newer keyword'),
+                            (TYPO, False, 'a typo in a std name'),
+                            (SYNTAX, False, 'plain syntax error')):
+        got = ladder.needs_newer_std(text)
+        check('%s asks for a newer standard' % why if want
+              else '%s is not mistaken for a standard problem' % why,
+              got is want, repr(got))
+    check('the note names the standard to jump straight to',
+          ladder.requested_std(EXPECTED) == 'c++23'
+          and ladder.requested_std(EXT) == 'c++20',
+          repr([ladder.requested_std(EXPECTED), ladder.requested_std(EXT)]))
+
+    # escalation is per file, remembered, and stops at the configured standard
+    lad_settings = importlib.import_module(pkg + '.core.cph_settings')
+    saved_lad = lad_settings.get_settings()
+    lad_dir = _tf.mkdtemp()
+    lad_src = os.path.join(lad_dir, 'main.cpp')
+    io.open(lad_src, 'w', encoding='utf-8', newline='\n').write('int main(){}\n')
+    try:
+        lad_settings.init_settings({'tests_relative_dir': '',
+                                    'tests_folder_name': 'tests',
+                                    'auto_std_switch': True,
+                                    'std_floor': 'c++17'})
+        check('a new file starts at the floor, not at the expensive standard',
+              ladder.apply(CMD, lad_src) == (ladder.with_std(CMD, 'c++17'), 'c++17'),
+              repr(ladder.apply(CMD, lad_src)))
+        fast, slow = ladder.apply(CMD, lad_src)
+        used, note = ladder.escalate(fast, lad_src, EXPECTED)
+        check('the compiler asking for C++23 moves this file straight to C++23',
+              used == ladder.with_std(CMD, 'c++23') and '-std=c++20' not in used
+              and note, repr((used, note)))
+        check('and the rung is remembered beside the test data, like the other sidecars',
+              ladder.apply(CMD, lad_src)[1] == 'c++23'
+              and os.path.exists(os.path.join(lad_dir, 'tests',
+                                              'main.cpp__tests.std')),
+              repr(ladder.apply(CMD, lad_src)))
+        again, note2 = ladder.escalate(slow, lad_src, EXPECTED)
+        check('nothing is retried once the file is already at the top',
+              again is None and note2 == '', repr((again, note2)))
+        check('the note names both standards so the status bar can show the swap',
+              'c++17' in note and 'c++23' in note, repr(note))
+        lad_settings.set_remembered_std(lad_src, None)
+        check('a reset (the force-recompile key) drops the file back to the floor',
+              ladder.apply(CMD, lad_src)[1] == 'c++17', repr(ladder.apply(CMD, lad_src)))
+        check('a typo is never escalated - the error is shown as it is',
+              ladder.escalate(fast, lad_src, TYPO)[0] is None,
+              repr(ladder.escalate(fast, lad_src, TYPO)))
+        # a command whose own ceiling is C++20 must never wander into C++23
+        lad_settings.set_remembered_std(lad_src, None)
+        cmd20 = 'g++ "{source_file}" -std=c++20 -O2 -o "{file_name}.exe"'
+        fast20, _r = ladder.apply(cmd20, lad_src)
+        up, note20 = ladder.escalate(fast20, lad_src, EXPECTED)
+        check('a command that stops at C++20 is not climbed past',
+              up == ladder.with_std(cmd20, 'c++20') and '-std=c++23' not in up,
+              repr(up))
+        at_top, _r = ladder.apply(cmd20, lad_src)
+        check('once a file is at the ceiling its command asked for, the real '
+              'error is shown instead of a third compile',
+              at_top == cmd20 and ladder.escalate(at_top, lad_src, EXPECTED)[0] is None,
+              repr(at_top))
+
+        # the wasted probe is avoided up front when the source itself says what
+        # it wants: #include <expected> is not a guess, it is a requirement
+        hint_dir = _tf.mkdtemp()
+        sources = {
+            'plain2.cpp': '#include <bits/stdc++.h>' + chr(10) + 'int main(){}' + chr(10),
+            'uses23.cpp': '#include <bits/stdc++.h>' + chr(10) + '#include <expected>'
+                          + chr(10) + 'int main(){}' + chr(10),
+            'uses20.cpp': '#include <span>' + chr(10) + 'int main(){}' + chr(10),
+            'localprint.cpp': '#include "print.h"' + chr(10) + '#include <cstdio>'
+                              + chr(10) + 'int main(){}' + chr(10),
+            'stdprint.cpp': '#include <cstdio>' + chr(10)
+                            + 'int main(){std::println("x");}' + chr(10),
+            'bitbitset.cpp': '#include <bitset>' + chr(10) + 'int main(){}' + chr(10),
+        }
+        for fname in sources:
+            io.open(os.path.join(hint_dir, fname), 'w', encoding='utf-8',
+                    newline='\n').write(sources[fname])
+        check('a plain source gets no suggestion',
+              ladder.suggested_rung(os.path.join(hint_dir, 'plain2.cpp')) is None,
+              repr(ladder.suggested_rung(os.path.join(hint_dir, 'plain2.cpp'))))
+        check('#include <expected> is read as C++23 before the compiler runs',
+              ladder.suggested_rung(os.path.join(hint_dir, 'uses23.cpp')) == 'c++23',
+              repr(ladder.suggested_rung(os.path.join(hint_dir, 'uses23.cpp'))))
+        check('#include <span> is read as C++20',
+              ladder.suggested_rung(os.path.join(hint_dir, 'uses20.cpp')) == 'c++20',
+              repr(ladder.suggested_rung(os.path.join(hint_dir, 'uses20.cpp'))))
+        check('#include <bitset> is not mistaken for the C++20 <bit>',
+              ladder.suggested_rung(os.path.join(hint_dir, 'bitbitset.cpp')) is None,
+              repr(ladder.suggested_rung(os.path.join(hint_dir, 'bitbitset.cpp'))))
+        check('a local "print.h" is not mistaken for the C++23 header',
+              ladder.suggested_rung(os.path.join(hint_dir, 'localprint.cpp')) is None,
+              repr(ladder.suggested_rung(os.path.join(hint_dir, 'localprint.cpp'))))
+        check('std::println in the source is read as C++23',
+              ladder.suggested_rung(os.path.join(hint_dir, 'stdprint.cpp')) == 'c++23',
+              repr(ladder.suggested_rung(os.path.join(hint_dir, 'stdprint.cpp'))))
+
+        hint_src = os.path.join(hint_dir, 'uses23.cpp')
+        lad_settings.set_remembered_std(hint_src, None)
+        hinted, hinted_rung = ladder.apply(CMD, hint_src)
+        check("a first Run of a file that clearly wants C++23 does not waste a "
+              "compile on the floor",
+              hinted_rung == 'c++23' and hinted == ladder.with_std(CMD, 'c++23'),
+              repr((hinted, hinted_rung)))
+        lad_settings.set_remembered_std(hint_src, 'c++17')
+        check('a rung the file already earned beats the hint',
+              ladder.apply(CMD, hint_src)[1] == 'c++17',
+              repr(ladder.apply(CMD, hint_src)))
+        lad_settings.set_remembered_std(hint_src, None)
+
+        lad_settings.init_settings({'auto_std_switch': False, 'std_floor': 'c++17'})
+        check('with the switch off the command is exactly what the user wrote',
+              ladder.apply(CMD, lad_src) == (CMD, 'c++23'),
+              repr(ladder.apply(CMD, lad_src)))
+    finally:
+        lad_settings.init_settings(saved_lad)
+
+    # ProcessManager integration: the retry has to happen inside compile(), so
+    # the whole product path - get_compile_cmd resolving the cheap rung, the
+    # failure being judged, the newer rung being tried and remembered - is one
+    # call for the caller. Stubbed, because CI must not depend on a g++ and on
+    # the exact words of whatever version the runner happens to ship.
+    pm_mod = importlib.import_module(pkg + '.Modules.ProcessManager')
+    pm_dir = _tf.mkdtemp()
+    pm_src = os.path.join(pm_dir, 'm.cpp')
+    io.open(pm_src, 'w', encoding='utf-8', newline='\n').write('int main(){}\n')
+    pm_entry = [{'name': 'C++', 'extensions': ['cpp'],
+                 'compile_cmd': 'g++ "{source_file}" -std=c++23 -O2 -o "{file_name}.exe"',
+                 'run_cmd': ''}]
+    saved_pm_settings = lad_settings.get_settings()
+    lad_settings.init_settings({'tests_relative_dir': '',
+                                'tests_folder_name': 'tests',
+                                'auto_std_switch': True,
+                                'std_floor': 'c++17'})
+    try:
+        pm = pm_mod.ProcessManager(pm_src, 'source.c++', run_settings=pm_entry)
+        attempts = []
+
+        def fake_popen(cmd):
+            attempts.append(cmd)
+            if '-std=c++17' in cmd:
+                return (1, EXPECTED)
+            return (0, '')
+
+        real_popen = pm._popen_compile
+        pm._popen_compile = fake_popen
+        try:
+            rc, out = pm.compile()
+            check('a run resolves the cheap standard first',
+                  attempts and '-std=c++17' in attempts[0], repr(attempts))
+            check('and the same call retries at the standard the compiler asked for',
+                  rc == 0 and len(attempts) == 2 and '-std=c++23' in attempts[1],
+                  repr((rc, attempts)))
+            check('the note about the swap reaches the compile output',
+                  'c++23' in (out or ''), repr((out or '')[:80]))
+            check('the manager says the artifact was built at another rung, '
+                  'so the compile cache gets re-fingerprinted',
+                  pm.std_escalated is True, repr(pm.std_escalated))
+            check('and the resolved command now is the newer one, which is what '
+                  'the cache fingerprint reads',
+                  '-std=c++23' in pm.get_compile_cmd(), repr(pm.get_compile_cmd()))
+            del attempts[:]
+            rc, out = pm.compile()
+            check('the next run of the same file starts at the remembered rung, '
+                  'so the ladder is paid for once per problem',
+                  len(attempts) == 1 and '-std=c++23' in attempts[0], repr(attempts))
+            del attempts[:]
+            pm._popen_compile = lambda cmd: (attempts.append(cmd) or (1, TYPO))
+            rc, out = pm.compile()
+            check('a typo costs exactly one compile and shows its own error',
+                  len(attempts) == 1 and rc == 1 and 'vectr' in out, repr(attempts))
+            pm._popen_compile = real_popen
+        finally:
+            pm._popen_compile = real_popen
+        lad_settings.set_remembered_std(pm_src, None)
+        del attempts[:]
+        pm._popen_compile = lambda cmd: (attempts.append(cmd) or (1, TYPO))
+        rc, out = pm.compile()
+        check('with the rung forgotten the file is back on the cheap one',
+              len(attempts) == 1 and '-std=c++17' in attempts[0], repr(attempts))
+        pm._popen_compile = real_popen
+    finally:
+        lad_settings.init_settings(saved_pm_settings)
+
+    print('== install layout: who is really loaded ==')    # Package Control reinstalled the package as a zip and emptied the folder
     # install underneath a running developer (measured here: the folder was
     # still there, completely empty, after a restart) - the symptom being
     # "my changes do nothing", with no error anywhere.
@@ -2194,6 +2427,122 @@ def main():
               'so the flow asks again instead of starting a dead path',
               settings2.get_stress_files(gone) == (None, os.path.join(sdir, 'gen.cpp')),
               repr(settings2.get_stress_files(gone)))
+
+        # ---- the leak that made every problem share one pair --------------
+        # Measured on his own folder: day9/A ran with A's pair, then B started
+        # with the *same* two files without a dialog. Two facts add up to that:
+        # begin() wrote every choice back into the global settings, and pick_once
+        # offered those globals as candidates - one candidate with ask=False is
+        # used silently by _pick_file. A real session log showed the answer in
+        # B's own sidecar: gen from a different contest's folder entirely.
+        launched = []
+        asked = []
+        saved = []
+        real_launch = stress2._launch
+        real_ask = stress2._ask_pair
+        real_save = fake_sublime.save_settings
+        real_load = fake_sublime.load_settings
+        real_window = fake_sublime.active_window
+
+        class _FlowWindow(object):
+            def status_message(self, text=None, *a, **k):
+                pass
+
+        pins = {'stress_std_file': os.path.join(sdir, 'std.cpp'),
+                'stress_generator_file': os.path.join(sdir, 'gen.cpp')}
+        pin_store = fake_sublime.Settings(pins)
+        stress2._launch = lambda v, u, s, g, t, r: launched.append((u, s, g))
+        stress2._ask_pair = lambda w, d, s, g, cb, a: asked.append(
+            (os.path.basename(d), tuple(os.path.basename(x) for x in s),
+             tuple(os.path.basename(x) for x in g), a))
+        fake_sublime.save_settings = lambda name: saved.append(name)
+        fake_sublime.load_settings = lambda name: pin_store
+        fake_sublime.active_window = lambda: _FlowWindow()
+        settings2.init_settings({'tests_relative_dir': '',
+                                 'tests_folder_name': 'tests',
+                                 'stress_file_source': 'pick_once'})
+        try:
+            def flow(path):
+                v = fake_sublime.View(file_name=path)
+                stress2._start_flow(v)
+                return v
+
+            def write_source(folder, name):
+                if not os.path.isdir(folder):
+                    os.makedirs(folder)
+                p = os.path.join(folder, name)
+                io.open(p, 'w', encoding='utf-8', newline='\n').write('int main(){}\n')
+                return p
+
+            # a new problem, nothing beside it, the globals pointing at another
+            # problem's pair: it must ask, and it must not just run the globals
+            quiet = write_source(_tf.mkdtemp(), 'lonely.cpp')
+            flow(quiet)
+            check('a problem with no pair of its own is asked, not silently '
+                  'started with the previous problem\'s files',
+                  len(asked) == 1 and launched == [], repr((asked, launched)))
+            check('the remembered global pair only prefills the choice, it is '
+                  'never an automatic answer',
+                  asked and asked[0][3] is True, repr(asked))
+
+            # per-file memory is authoritative, and it belongs to that file only
+            other = write_source(_tf.mkdtemp(), 'other.cpp')
+            std_b = write_source(os.path.dirname(other), 'refA.cpp')
+            gen_b = write_source(os.path.dirname(other), 'rndA.cpp')
+            settings2.set_stress_files(other, std_b, gen_b)
+            flow(other)
+            check('a file that was stress tested before starts straight away '
+                  'with its OWN pair',
+                  launched == [(other, std_b, gen_b)], repr(launched))
+            del launched[:]
+            del asked[:]
+            third = write_source(os.path.dirname(other), 'third.cpp')
+            flow(third)
+            check('a second file in the same folder does not inherit that pair '
+                  'through the settings',
+                  launched == [], repr(launched))
+
+            # ... and the flow no longer rewrites the user's settings per choice
+            check('starting a stress test does not write the global pair back '
+                  'into the settings file',
+                  saved == []
+                  and pin_store.get('stress_std_file') == pins['stress_std_file'],
+                  repr(saved))
+
+            # an empty std.cpp is a placeholder, not a program
+            zero = _tf.mkdtemp()
+            write_source(zero, 'p.cpp')
+            io.open(os.path.join(zero, 'std.cpp'), 'w', encoding='utf-8').write('')
+            write_source(zero, 'gen.cpp')
+            pair = stress2._same_dir_pair(zero, os.path.join(zero, 'p.cpp'))
+            check('a 0-byte std.cpp is never chosen as the reference program',
+                  pair[0] is None and pair[1] == os.path.join(zero, 'gen.cpp'),
+                  repr(pair))
+
+            # and the same rule on the way back in: his B sidecar remembered
+            # exactly this - day9\std.cpp, empty, plus another contest's gen
+            empt = _tf.mkdtemp()
+            src = write_source(empt, 'e.cpp')
+            blank = os.path.join(empt, 'std.cpp')
+            io.open(blank, 'w', encoding='utf-8').write('')
+            real_gen = write_source(empt, 'gen.cpp')
+            settings2.set_stress_files(src, blank, real_gen)
+            settings2._stress_files.clear()
+            check('a remembered 0-byte std is dropped, so the flow asks again',
+                  settings2.get_stress_files(src) == (None, real_gen),
+                  repr(settings2.get_stress_files(src)))
+            del launched[:]
+            del asked[:]
+            flow(src)
+            check('and it asks instead of stress testing against no output at all',
+                  launched == [] and len(asked) == 1, repr((launched, asked)))
+        finally:
+            stress2._launch = real_launch
+            stress2._ask_pair = real_ask
+            fake_sublime.save_settings = real_save
+            fake_sublime.load_settings = real_load
+            fake_sublime.active_window = real_window
+            settings2.init_settings(saved_settings2)
 
         src_text = io.open(os.path.join(ROOT, 'cph_stress.py'), encoding='utf-8').read()
         check('the flow consults the mode before deciding to ask',
@@ -3754,7 +4103,8 @@ def main():
           all('"%s"' % key in settings_text for key in (
               'benchmark_runs', 'auto_run_on_save', 'auto_format_on_save',
               'auto_create_file', 'stats_days', 'contest_duration_minutes',
-              'subtasks', 'build_mode', 'parallel_workers')))
+              'subtasks', 'build_mode', 'parallel_workers',
+              'auto_std_switch', 'std_floor')))
     check('the extra default languages ship',
           [e['name'] for e in shipped.get('run_settings', [])][-4:]
           == ['Rust', 'Go', 'Pascal', 'JavaScript (Node.js)'],

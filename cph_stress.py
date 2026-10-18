@@ -15,6 +15,7 @@ import time
 
 from .core.cph_settings import (get_settings, load_all_tests, save_tests,
                                 get_stress_files, set_stress_files,
+                                usable_program,
                                 PACKAGE_NAME, settings_file)
 from .core.cph_stats import record_stress
 from .core.cph_tests_merge import merge_tests
@@ -144,6 +145,10 @@ def _candidate_files(directory, kind, exclude=()):
         if os.path.splitext(name)[1].lower().lstrip('.') not in exts:
             continue
         if os.path.normcase(os.path.abspath(full)) in skip:
+            continue
+        # A 0-byte std.cpp is the placeholder every template leaves behind, not
+        # a reference program: against it any output is a "counterexample".
+        if not usable_program(full):
             continue
         stem = os.path.splitext(name)[0].lower()
         for hint in hints:
@@ -609,11 +614,11 @@ def _start_flow(view, choose=False):
                                     file=os.path.basename(std_file)))
             _start_flow(view, True)
             return
-        settings.set('stress_std_file', std_file)
-        settings.set('stress_generator_file', gen_file)
-        sublime.save_settings(settings_file)
-        # per problem file: the next stress run of THIS file asks nothing,
-        # while a different problem in the same folder keeps its own pair
+        # per problem file, and nowhere else. This used to also write the pair
+        # into stress_std_file / stress_generator_file, which turned the last
+        # problem's files into the default for every later one: a fresh problem
+        # then "stress tested" against another problem's std and generator,
+        # without a dialog and without a hint on screen.
         set_stress_files(user_file, std_file, gen_file)
 
         try:
@@ -656,11 +661,17 @@ def _start_flow(view, choose=False):
         if std_file and gen_file:
             begin(std_file, gen_file)
             return
+        # Nothing complete beside the source: ask. The partial same-folder hit
+        # and the last pair used anywhere are offered as the first rows, but a
+        # single candidate is NOT an automatic answer here - that shortcut is
+        # what ran a new problem against the previous problem's std and
+        # generator. One Enter press costs nothing; a wrong reference program
+        # costs the conclusion of the whole stress run.
         std_hits = [std_file] if std_file \
             else _remembered_file(settings, 'stress_std_file')
         gen_hits = [gen_file] if gen_file \
             else _remembered_file(settings, 'stress_generator_file')
-        _ask_pair(window, src_dir, std_hits, gen_hits, begin, False)
+        _ask_pair(window, src_dir, std_hits, gen_hits, begin, True)
         return
 
     # Look next to the file under test first: that is where the std and the

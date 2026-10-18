@@ -1,0 +1,56 @@
+Algorithm Competition Assistant 2.6.0
+======================================
+
+Two things that were only ever waiting: a stress test that quietly used the wrong
+reference program, and 1.4-2 seconds on every Run for a standard the code does
+not use.
+
+* The std/gen pair now belongs to one file
+
+  Measured in his own folder: after one stress run of problem A, problem B started
+  with A's files, no dialog, nothing on screen. Two facts added up to that. The
+  choice was written back into the global stress_std_file / stress_generator_file
+  settings, and pick_once offered those globals as candidates - and one candidate
+  used to be adopted without asking. The sidecar in that folder is the evidence:
+  std_file pointed at the 0-byte std.cpp, generator_file at another contest's
+  gen.cpp.
+
+  Now: the pair is written only to this file's own <name>__tests.stress (the same
+  sidecar mechanism as __tests and .limits), the settings are prefill only and are
+  never auto-adopted, and a 0-byte std.cpp is neither a candidate nor a usable
+  memory - stress testing against an empty file "finds" a counterexample that was
+  invented. A new problem either hits its own memory, or a real non-empty pair in
+  its folder, or it is asked. One Enter, versus a conclusion that could waste the
+  whole session.
+
+* -std is now chosen per file, cheapest first (auto_std_switch, default on)
+
+  Parsing <bits/stdc++.h> gets slower with every standard, and that is where the
+  wait lives. Measured here, -fsyntax-only: c++17 1.29 s, c++20 2.43 s, c++23
+  2.53 s; a full compile of the same solution: 1.69 s versus 3.12 s. His problem
+  B uses nothing newer than C++11 while his compile_cmd said -std=c++23, so every
+  Run paid 1.4-2 s for syntax he never writes.
+
+  How it decides:
+  1. the source is read first - #include <expected>, std::println, consteval and
+     friends start the file at the rung they need, so no failed compile at all;
+  2. otherwise it starts at std_floor (default c++17);
+  3. it steps up only when the compiler itself says so ("only available from C++23
+     onwards", a missing <mdspan>-class header, a newer keyword). A typo still
+     costs one compile and shows its own diagnostics - that is what makes the fast
+     default safe to ship;
+  4. the rung that worked is remembered in <name>__tests.std for that file, so the
+     next Run of the same problem starts there. Ctrl+Alt+Shift+R forgets it, and it
+     never climbs above the -std you wrote in compile_cmd.
+
+  End to end, real g++, real product path:
+
+    his problem B (no new syntax)   3.12 s (avg 3.78)  ->  1.84-2.28 s on c++17
+    a file using std::expected      3.12 s             ->  2.48 s, one compile
+
+* Rejected after measuring: precompiled headers. On this machine c++23 went from
+  3.12 s to 3.46 s with a 151 MB .gch that itself takes 9.8 s to build. Slower.
+
+Regression suite: 717 -> 766 checks. The ProcessManager case is stubbed, so CI
+does not depend on whichever g++ the runner ships, and it pins both the escalation
+path and the rule that a typo compiles once. Full notes: RELEASE_NOTES_CN.md.

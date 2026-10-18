@@ -783,6 +783,12 @@ STRINGS = {
         'zh': '编译缓存命中，已跳过编译',
         'en': 'compile skipped (cache hit)',
     },
+    'std_switched': {
+        'zh': '这份代码用到 {to} 才有的语法：已从 {frm} 改用 -std={to} 重编'
+              '（记在这道题自己的 .std 里，别的文件不受影响）',
+        'en': 'this code needs {to}: recompiled with -std={to} (was {frm}), '
+              'remembered in this file\'s .std sidecar only',
+    },
     'output_truncated_warn': {
         'zh': '输出过大，已截断显示',
         'en': 'output too large, truncated',
