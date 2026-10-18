@@ -19,7 +19,9 @@ from .core.cph_settings import (get_settings, load_all_tests, save_tests,
                                 PACKAGE_NAME, settings_file)
 from .core.cph_stats import record_stress
 from .core.cph_tests_merge import merge_tests
-from .core.cph_state import register_stress_view, unregister_stress_view
+from .core.cph_state import (register_stress_view, unregister_stress_view,
+                             register_live, unregister_live,
+                             register_temp_dir, unregister_temp_dir)
 from .core.cph_target import context_menu_enabled, visible as context_menu_visible
 from .core.cph_i18n import t
 from .core.cph_verdict import (normalize_lines, outputs_equal,
@@ -58,6 +60,9 @@ def _new_session(user_file, std_file, gen_file, time_limit, max_rounds,
         # The program running right now, so Stop can kill it instead of
         # waiting out its time limit.
         'current_proc': None,
+        # cph_state keys of the processes this run spawned, so finishing (or
+        # unloading) can release both the tracking entry and the scratch dir.
+        'live_keys': set(),
         # Scratch directory the stress binaries are built into.
         'build_root': None,
         'build_seq': 0,
@@ -906,6 +911,25 @@ def _compile_program(file, time_limit=30, sess=None):
         return False, None, str(e)[:200]
 
 
+def _track_proc(sess, proc):
+    """Register a round's process so unloading the plugin reaps it.
+
+    The stress worker is a daemon thread: Sublime does not wait for it when
+    the package unloads, so an upgrade or a .py edit on a folder install used
+    to leave the current round's program - and the scratch directory it writes
+    into - behind. On Windows that orphan then holds its own .exe open.
+    """
+    if sess is None or proc is None:
+        return
+    key = 'stress:%s:%s' % (sess.get('stress_view_id'), getattr(proc, 'pid', '?'))
+    try:
+        sess.setdefault('live_keys', set()).add(key)
+        register_live(key, lambda p=proc: p.poll() is None,
+                      lambda p=proc: _kill_tree(p))
+    except Exception as e:
+        print('[Algorithm Competition Assistant] stress child not tracked: %s' % e)
+
+
 def _kill_tree(proc):
     """Kill a program and everything it started.
 
@@ -1042,6 +1066,7 @@ def _popen_capture(cmd, cwd, input_text=None, shell=False, timeout=30, env=None,
     )
     if sess is not None:
         sess['current_proc'] = proc
+        _track_proc(sess, proc)
     data = input_text.encode('utf-8', 'replace') if isinstance(input_text, str) else input_text
     try:
         out, err = _communicate_abortable(proc, data, timeout, abort)
@@ -1163,11 +1188,15 @@ def _finish_stress(sess):
     """Release everything a run owned, whether it ended or was stopped."""
     root = sess.get('build_root')
     if root:
+        unregister_temp_dir(root)
         try:
             import shutil
             shutil.rmtree(root, ignore_errors=True)
         except Exception:
             pass
+    for key in sess.get('live_keys') or ():
+        unregister_live(key)
+    sess['live_keys'] = set()
     sess['build_root'] = None
     sess['build_seq'] = 0
     sess['current_proc'] = None
@@ -1206,6 +1235,9 @@ def _run_stress_loop(sess):
         # Every stress binary gets its own scratch directory, so the .exe in
         # the source directory stays free for the user to rebuild.
         sess['build_root'] = tempfile.mkdtemp(prefix='cph-stress-')
+        # Registered so a plugin unload while a round is running still removes
+        # it - the worker is a daemon thread and is not waited for.
+        register_temp_dir(sess['build_root'])
     except Exception:
         sess['build_root'] = None
     try:
@@ -1808,3 +1840,36 @@ class CphStressEvents(sublime_plugin.EventListener):
                 killer = threading.Thread(target=_kill_tree, args=(proc,))
                 killer.daemon = True
                 killer.start()
+
+
+def plugin_unloaded():
+    """Release every stress run this package owns before the host goes away.
+
+    Sublime calls the hook in each module of the package, which is why this one
+    has to live here: `_sessions` cannot be reached from plugin_init, because
+    root-level modules must not import each other (see core/cph_state.py). The
+    worker thread is a daemon, so nothing else would ever kill the round in
+    flight or remove the scratch directory it compiles into - and on Windows
+    that orphan keeps its own .exe open, which is the "cannot open output file:
+    Permission denied" the next compile reports with no clue where it came from.
+    """
+    for view_id in list(_sessions.keys()):
+        sess = _sessions.pop(view_id, None)
+        if sess is None:
+            continue
+        try:
+            unregister_stress_view(view_id)
+        except Exception:
+            pass
+        sess['stop_requested'] = True
+        try:
+            proc = sess.get('current_proc')
+            if proc is not None:
+                _kill_tree(proc)
+        except Exception as e:
+            print('[Algorithm Competition Assistant] stress process survived the unload: %s' % e)
+        for key in sess.get('live_keys') or ():
+            unregister_live(key)
+        root = sess.get('build_root')
+        if root:
+            unregister_temp_dir(root)

@@ -3240,6 +3240,151 @@ def main():
     check('stress ignores an unknown placeholder',
           '{typo}' not in stress_cmd and stress_cmd.rstrip().endswith('a'), stress_cmd)
 
+    print('== unload hands the child processes back ==')
+    # Sublime does not wait for a plugin's threads or its children: upgrading
+    # the package, or editing a .py on a folder install, unloads it while a
+    # program or a g++ is still running. The orphan keeps its own .exe open on
+    # Windows, and the next compile reports "cannot open output file: Permission
+    # denied" without a word about the process holding the file.
+    _st = state_mod
+    _done = []
+
+    class _FakeProc(object):
+        def __init__(self, alive=True):
+            self._alive = alive
+            self.pid = 4242
+
+        def poll(self):
+            return None if self._alive else 0
+
+    _st._live.clear()
+    _st.register_live('a', lambda: True, lambda: _done.append('a'))
+    _st.register_live('dead', lambda: False, lambda: _done.append('dead'))
+    check('the registry holds what a run started',
+          _st.live_count() == 2, str(_st.live_count()))
+    n_killed, n_pruned, n_errors = _st.kill_all_live()
+    check('unloading kills the live child and prunes the dead one',
+          n_killed == 1 and n_pruned == 1 and _done == ['a'] and _st.live_count() == 0,
+          '%s/%s/%s %s' % (n_killed, n_pruned, n_errors, _done))
+
+    def _boom():
+        raise RuntimeError('refuses to die')
+
+    del _done[:]
+    _st.register_live('boom', lambda: True, _boom)
+    _st.register_live('ok', lambda: True, lambda: _done.append('ok'))
+    n_killed, n_pruned, n_errors = _st.kill_all_live()
+    check('one process that refuses to die does not keep the others alive',
+          n_killed == 1 and n_errors == 1 and _done == ['ok'],
+          '%s/%s/%s %s' % (n_killed, n_pruned, n_errors, _done))
+    check('a second unload attempt has nothing left to kill',
+          _st.live_count() == 0 and _st.kill_all_live() == (0, 0, 0))
+
+    _st._live.clear()
+    for _i in range(70):
+        _st.register_live('k%d' % _i, lambda: False, lambda: None)
+    check('registering past the cap forgets the processes that already ended',
+          _st.live_count() < 70 and _st.live_count() <= _st._LIVE_CAP,
+          str(_st.live_count()))
+
+    # The real seam, on a real process: ProcessManager is what every Run and
+    # every parallel test goes through, so a run must register itself there.
+    real_platform = 'windows' if os.name == 'nt' else 'linux'
+    saved_platform = sys.modules['sublime'].platform
+    sys.modules['sublime'].platform = lambda: real_platform
+    tmp_live = tempfile.mkdtemp(prefix='cph_live_')
+    sleeper = os.path.join(tmp_live, 'sleeper.py')
+    with open(sleeper, 'w', encoding='utf-8') as f:
+        f.write('import time\ntime.sleep(120)\n')
+    try:
+        entry_live = [{'name': 'Python', 'extensions': ['py'], 'compile_cmd': None,
+                       'run_cmd': sys.executable.replace('\\', '/') + ' "{source_file}"',
+                       'time_limit_ms': 60000, 'memory_limit_mb': 256}]
+        mgr_live = pm_mod.ProcessManager(sleeper, 'source.python',
+                                         run_settings=entry_live)
+        _st._live.clear()
+        mgr_live.run_file()
+        check('a run registers the program it started',
+              _st.live_count() == 1, repr(sorted(_st._live.keys())))
+        _st.kill_all_live()
+        proc_live = getattr(mgr_live, 'process', None)
+        deadline = time.time() + 15
+        while proc_live is not None and proc_live.poll() is None \
+                and time.time() < deadline:
+            time.sleep(0.05)
+        check('the tracked process really dies when the plugin unloads',
+              proc_live is not None and proc_live.poll() is not None,
+              str(getattr(proc_live, 'poll', lambda: None)()))
+
+        # ProcessManager is not the only spawner: a stress round uses its own
+        # Popen, and a scratch directory is only removable if it was written
+        # down somewhere. Both must survive a run that is interrupted.
+        _st._live.clear()
+        sess_live = stress._new_session('u.cpp', 's.cpp', 'gen.cpp', 2.0, 3)
+        sess_live['stress_view_id'] = 777
+        quick = os.path.join(tmp_live, 'quick.py')
+        with open(quick, 'w', encoding='utf-8') as f:
+            f.write('print(1)\n')
+        stress._popen_capture([sys.executable, quick], tmp_live,
+                              input_text='', timeout=20, sess=sess_live)
+        check('a stress round registers its process too',
+              _st.live_count() == 1 and len(sess_live.get('live_keys') or ()) == 1,
+              '%s %s' % (_st.live_count(), sorted(sess_live.get('live_keys') or ())))
+        sess_live['build_root'] = tempfile.mkdtemp(prefix='cph-stress-')
+        stress.register_temp_dir(sess_live['build_root'])
+        root_live = sess_live['build_root']
+        stress._finish_stress(sess_live)
+        check('finishing a stress run releases both the process and the scratch dir',
+              _st.live_count() == 0 and not os.path.exists(root_live),
+              '%s %s' % (_st.live_count(), root_live))
+
+        _st._temp_dirs.clear()
+        dir_live = tempfile.mkdtemp(prefix='cph-stress-')
+        _st.register_temp_dir(dir_live)
+        check('a scratch directory is remembered', _st.temp_dir_count() == 1)
+        _st.clean_temp_dirs()
+        check('and removed when the plugin goes away',
+              not os.path.exists(dir_live) and _st.temp_dir_count() == 0)
+
+        # The stale sweep: a crashed run's directory is ours to remove, a fresh
+        # one belongs to a window that may still be compiling into it.
+        old = time.time() - 3 * 86400
+        stale = tempfile.mkdtemp(prefix='cph-stress-')
+        fresh = tempfile.mkdtemp(prefix='cph-stress-')
+        kept = tempfile.mkdtemp(prefix='cph-doctor-')
+        foreign = tempfile.mkdtemp(prefix='cph-not-a-')
+        for one in (stale, kept, foreign):
+            os.utime(one, (old, old))
+        removed = _st.sweep_stale_temp_dirs(_st.SCRATCH_PREFIXES,
+                                            older_than_seconds=86400, keep=[kept])
+        check('a stale scratch directory from a crashed run is removed',
+              not os.path.exists(stale), repr(removed))
+        check('a fresh one is left alone', os.path.isdir(fresh))
+        check('a directory named in keep survives even when old', os.path.isdir(kept))
+        check('a prefix that is not ours is never touched', os.path.isdir(foreign))
+        check('every feature that builds outside the source tree is swept',
+              all(p in _st.SCRATCH_PREFIXES
+                  for p in ('cph-stress-', 'cph-checker-', 'cph-interactor-',
+                            'cph-calibrate-', 'cph-doctor-')),
+              repr(_st.SCRATCH_PREFIXES))
+        for one in (fresh, kept, foreign):
+            shutil.rmtree(one, ignore_errors=True)
+    finally:
+        sys.modules['sublime'].platform = saved_platform
+        shutil.rmtree(tmp_live, ignore_errors=True)
+        _st._live.clear()
+        _st._temp_dirs.clear()
+
+    _unload_src = open(os.path.join(ROOT, 'plugin_init.py'), encoding='utf-8').read()
+    check('the entry point reaps children on unload',
+          'kill_all_live()' in _unload_src and 'clean_temp_dirs()' in _unload_src)
+    check('and sweeps the leftovers of a previous session at startup',
+          'sweep_stale_temp_dirs(' in _unload_src)
+    check('the stress module stops its own sessions, because root modules '
+          'cannot import each other',
+          'def plugin_unloaded()' in open(os.path.join(ROOT, 'cph_stress.py'),
+                                          encoding='utf-8').read())
+
     print('== stress picker: every step says which file it wants ==')
     # Setting a stress test up asked for two files in a row with nothing on
     # screen to tell them apart: the titles were jargon ("选择 std (标准) 文件"),

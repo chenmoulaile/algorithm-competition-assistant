@@ -32,6 +32,22 @@ def plugin_unloaded():
         clear_cache()
     except Exception:
         pass
+    # Sublime does not wait for this plugin's threads or its child processes.
+    # An unload - an upgrade, a .py edit on a folder install, Package Control
+    # touching the package - used to leave the program in flight and the g++ it
+    # spawned running. On Windows that orphan keeps its own .exe open, and the
+    # next compile reports "cannot open output file: Permission denied" without
+    # a word about the process still holding the file.
+    try:
+        from .core import cph_state
+        killed, pruned, errors = cph_state.kill_all_live()
+        removed = cph_state.clean_temp_dirs()
+        if killed or removed or errors:
+            print('[Algorithm Competition Assistant] unload cleanup: %d child '
+                  'process(es) killed, %d scratch dir(s) removed, %d could not '
+                  'be reaped' % (killed, removed, errors))
+    except Exception as e:
+        print('[Algorithm Competition Assistant] unload cleanup failed: %s' % e)
 
 
 def _init():
@@ -78,6 +94,19 @@ def _init():
         try_load_settings()
     except Exception as e:
         print('[Algorithm Competition Assistant] Error loading settings: %s' % str(e))
+
+    try:
+        # Scratch directories left by a run that never finished - a crash, a
+        # machine that lost power, a taskkill from outside - otherwise stay in
+        # the temp root forever and nobody looks there. Deferred, and only
+        # stale ones are touched: a second Sublime window may be compiling into
+        # a fresh directory right now.
+        from .core import cph_state
+        sublime.set_timeout_async(
+            lambda: cph_state.sweep_stale_temp_dirs(cph_state.SCRATCH_PREFIXES),
+            8000)
+    except Exception as e:
+        print('[Algorithm Competition Assistant] scratch sweep not scheduled: %s' % e)
 
     try:
         # Say which install is actually running. Package Control has emptied

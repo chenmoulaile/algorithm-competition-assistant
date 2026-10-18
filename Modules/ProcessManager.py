@@ -18,6 +18,7 @@ import shlex
 from .memprobe import MemorySampler, bytes_to_mb, sample_memory_bytes
 from .build_artifact import output_path_from_compile_cmd, resolve_artifact, retarget_command
 from ..core.cph_i18n import t
+from ..core import cph_state
 from ..core.cph_build_mode import get_mode as _build_mode, transform as _apply_build_mode
 from ..core.cph_std_ladder import apply as _std_apply, escalate as _std_escalate
 from ..core.cph_gdb_trace import (find_gdb as _find_gdb, find_crash as _find_crash,
@@ -127,6 +128,9 @@ class ProcessManager(object):
 		self.syntax = syntax
 		self.file = file
 		self.is_run = False
+		# Keys this manager registered in cph_state (run + compile), so it can
+		# drop them itself once the child is reaped.
+		self._live_keys = set()
 		self.test_counter = 0
 		self.write = self.insert
 		self.run = self.run_file
@@ -469,6 +473,40 @@ class ProcessManager(object):
 		else:
 			return -1
 
+	def _track_live(self, proc, what):
+		"""Register one child so plugin_unloaded can reap it.
+
+		Sublime does not wait for this process when the package unloads (an
+		upgrade, a .py edit on a folder install, a restart that is not a
+		quit): the program and any compiler it spawned keep running, and on
+		Windows the orphan holds its own .exe open - the next compile then
+		fails with "cannot open output file: Permission denied" without
+		naming the process that is holding it.
+		"""
+		if proc is None:
+			return None
+		key = '%s:%s:%s' % (what, id(self), getattr(proc, 'pid', '?'))
+		try:
+			self._live_keys.add(key)
+			cph_state.register_live(
+				key,
+				lambda p=proc: p.poll() is None,
+				lambda p=proc, s=self: s._kill_tree(p))
+		except Exception as e:
+			print('[Algorithm Competition Assistant] child process not tracked: %s' % e)
+		return key
+
+	def _untrack_live(self):
+		for key in list(getattr(self, '_live_keys', ()) or ()):
+			try:
+				cph_state.unregister_live(key)
+			except Exception:
+				pass
+			try:
+				self._live_keys.discard(key)
+			except Exception:
+				pass
+
 	def _kill_tree(self, p):
 		"""Kill a shell-spawned child *and* whatever that shell started.
 
@@ -522,6 +560,9 @@ class ProcessManager(object):
 			startupinfo=startupinfo,
 			preexec_fn=preexec_fn
 		)
+		# A compile the user walked away from is still a live g++ holding the
+		# output file open (see _track_live).
+		self._track_live(p, 'compile')
 		# Timeout so a hanging compiler doesn't freeze the plugin forever
 		try:
 			compile_result = _decode_output(p.communicate(timeout=30)[0])
@@ -665,6 +706,7 @@ class ProcessManager(object):
 		# from the runtime the verdict is judged on.
 		self.spawn_time = time.time()
 		self.exit_time = None
+		self._track_live(self.process, 'run')
 
 		# Remember the process group now: once the direct child is reaped,
 		# os.getpgid(pid) raises ProcessLookupError and a backgrounded
@@ -766,6 +808,9 @@ class ProcessManager(object):
 		# must not land in the runtime the verdict is made from.
 		if rc is not None and self.exit_time is None:
 			self.exit_time = time.time()
+			# Nothing is left for an unload to reap; keep the registry small
+			# instead of carrying dead pids until the cap forces a prune.
+			self._untrack_live()
 		return rc
 
 	def runtime_ms(self):
@@ -973,3 +1018,4 @@ class ProcessManager(object):
 		# not mark a fresh run as idle.
 		if proc is getattr(self, 'process', None):
 			self.is_run = False
+		self._untrack_live()
