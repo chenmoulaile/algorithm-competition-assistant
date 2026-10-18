@@ -22,7 +22,7 @@ from .core.cph_settings import get_settings
 from .core.cph_stats import (record_run, reset as stats_reset,
 							 summary_localized as stats_summary_localized)
 from .core.cph_tests_merge import merge_tests
-from .core.cph_settings import load_all_tests, save_tests
+from .core.cph_settings import load_all_tests, save_tests, notify_io_error
 
 
 def _settings():
@@ -59,8 +59,9 @@ def _add_samples_to(view, pairs):
 			   for inp, out in pairs]
 	merged, _conflicts = merge_tests(load_all_tests(file_name), entries)
 	if not save_tests(file_name, merged):
-		sublime.status_message('[Algorithm Competition Assistant] ' + t('fetch_failed',
-													 url=file_name, error='save'))
+		# 'save' as the whole error told the user nothing about a sample set
+		# that is not on disk. Name the file and the reason.
+		notify_io_error(file_name)
 		return 0
 	# Refresh an already-open run panel so the new tests show up.
 	window = view.window()

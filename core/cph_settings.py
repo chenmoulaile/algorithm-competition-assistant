@@ -14,6 +14,8 @@ import sublime
 from os import path
 import os
 
+from .cph_i18n import t
+
 
 _package_root = path.dirname(path.dirname(__file__))
 root_dir = _package_root
@@ -406,10 +408,16 @@ _last_io_error = {}
 
 
 def last_io_error(clear=False):
-	"""The most recent sidecar failure as {'kind','what','path','reason'} or None."""
+	"""The most recent sidecar failure as {'kind','what','path','reason'} or None.
+
+	The snapshot is taken BEFORE anything is cleared: clearing first made the
+	function return None on every `clear=True` call, which is exactly how a
+	failure report ends up reporting nothing.
+	"""
+	snapshot = dict(_last_io_error) if _last_io_error else None
 	if clear:
 		_last_io_error.clear()
-	return dict(_last_io_error) if _last_io_error else None
+	return snapshot
 
 
 def _note_io_error(kind, target, reason, what='tests'):
@@ -419,6 +427,45 @@ def _note_io_error(kind, target, reason, what='tests'):
 	_last_io_error['reason'] = str(reason)[:300]
 	print('[Algorithm Competition Assistant] Failed to %s %s in %s: %s'
 	      % (kind, what, target, reason))
+
+
+# A read-only folder, a full disk or a "synced with OneDrive" directory fails
+# the same write on *every* run. A dialog on every run is a plugin the user
+# disables, so one distinct failure is announced once per session and the rest
+# go to the console - where they cost nothing and stay available for a doctor
+# report. Different files and different reasons are different failures.
+_io_notified = set()
+
+
+def notify_io_error(fallback, kind=None, always=False):
+	"""Announce the last sidecar failure once; return the sentence shown.
+
+	`kind` filters: a load site must not report an older write failure it
+	happened to leave in the slot, or the message blames the wrong operation.
+	"""
+	err = last_io_error()
+	if not err:
+		return ''
+	if kind and err.get('kind') != kind:
+		# Not this site's failure - leave it in the slot for the site that
+		# actually caused it instead of consuming someone else's error.
+		return ''
+	_last_io_error.clear()
+	reason = (err.get('reason') or '').strip() or t('io_reason_unknown')
+	target = err.get('path') or fallback
+	if err.get('kind') == 'read':
+		msg = t('tests_read_failed', path=target, reason=reason)
+	else:
+		msg = t('tests_save_failed', path=target, reason=reason)
+	key = (err.get('kind'), target, reason)
+	if not always and key in _io_notified:
+		print('[Algorithm Competition Assistant] %s' % msg)
+		return msg
+	if len(_io_notified) > 64:
+		_io_notified.clear()
+	_io_notified.add(key)
+	sublime.error_message('[Algorithm Competition Assistant] %s' % msg)
+	return msg
 
 
 def get_tests_file_path(file):

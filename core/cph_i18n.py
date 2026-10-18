@@ -904,10 +904,21 @@ STRINGS = {
         'en': 'the counterexample could not be saved to __tests: {reason}',
     },
     'tests_save_failed': {
-        'zh': '测试点没能写入 {path}（文件只读或目录权限不足），'
-              '这次运行结果不会保留',
-        'en': 'test points could not be written to {path} '
-              '(read-only file or no permission) - they will not be kept',
+        'zh': '测试点没能写入 {path}（{reason}），这次的改动不会保留',
+        'en': 'test points could not be written to {path} ({reason}) '
+              '- they will not be kept',
+    },
+    'tests_read_failed': {
+        'zh': '测试点文件读不出来：{path}（{reason}）。'
+              '面板这次用的样例可能不全 - 修好那个文件里的 JSON，'
+              '或者删掉它重新导入样例',
+        'en': 'the tests file could not be read: {path} ({reason}). '
+              'The panel may be missing test points - fix the JSON in that '
+              'file, or delete it and import the samples again',
+    },
+    'io_reason_unknown': {
+        'zh': '文件只读或目录权限不足',
+        'en': 'read-only file or no permission',
     },
     'stats_save_failed': {
         'zh': '练习统计没能保存: {error}（本次运行不计入统计）',

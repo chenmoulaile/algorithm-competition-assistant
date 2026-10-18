@@ -29,7 +29,8 @@ import time
 
 from .core.cph_i18n import t
 from .core.cph_settings import (get_settings, is_run_supported_ext, load_all_tests,
-								save_tests, set_problem_limits, settings_file)
+								save_tests, set_problem_limits, settings_file,
+								notify_io_error)
 from .core.cph_tests_merge import merge_tests as merge_stored_with
 from .core.cph_state import set_listener
 
@@ -318,7 +319,12 @@ def build_handler():
                               memory_limit_mb, _target_mode(), file_name))
                 merged = merge_tests(file_name, incoming)
                 if not save_tests(file_name, merged):
-                    sublime.status_message(t('import_save_failed'))
+                    # A status_message flashes past while the browser has
+                    # already been answered with 200 "ok": the click looked
+                    # accepted and the samples were not on disk. Name the file
+                    # and the OS reason - it runs on the main thread (_handle_on_main).
+                    if not notify_io_error(file_name):
+                        sublime.status_message(t('import_save_failed'))
                     return
                 remember_limits(file_name, time_limit_ms, memory_limit_mb)
                 print('[Algorithm Competition Assistant] %s' % t('new_test_file_path', path=file_name))

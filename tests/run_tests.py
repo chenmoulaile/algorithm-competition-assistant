@@ -3408,13 +3408,84 @@ def main():
 
     # memorize_tests() runs after every run and used to drop save_tests()'s
     # return value: a read-only folder or file lost every test point without
-    # a word. Every other save path (companion, extras, import, stress)
-    # already reports the failure.
+    # a word, because the only trace was a console line nobody opens.
     _tm_src = open(os.path.join(ROOT, 'test_manager.py'), encoding='utf-8').read()
     check('memorize_tests reports a failed save',
           'if not save_tests(self.dbg_file, tests_data):' in _tm_src
-          and "t('tests_save_failed'" in _tm_src,
+          and 'notify_io_error(self.dbg_file)' in _tm_src,
           'the return value must not be discarded again')
+    check('a tests file that cannot be read is reported when the panel loads it',
+          "notify_io_error(run_file, kind='read')" in _tm_src,
+          'an empty panel must not be the only symptom of a broken file')
+
+    # The helper itself: the path and the OS reason both have to reach the
+    # screen, one distinct failure is announced once (a read-only folder fails
+    # on EVERY run and a dialog on every run is a disabled plugin), and a load
+    # site must not take the blame for an older write failure in the same slot.
+    shown = []
+    saved_em = fake_sublime.error_message
+    old_lang = i18n.get_lang()
+    fake_sublime.error_message = lambda text=None, *a, **k: shown.append(text)
+    # Assert against one known language: the suite runs in whatever the last
+    # block left behind, and an English substring in a Chinese sentence is a
+    # failing test, not a broken message.
+    i18n.set_lang('en')
+    try:
+        settings._io_notified.clear()
+        settings._last_io_error.clear()
+        check('an empty failure slot reports nothing',
+              settings.notify_io_error('x.cpp') == '' and not shown, repr(shown))
+
+        settings._note_io_error('write', os.path.join('tmp', 'a__tests'),
+                                'read-only', what='tests')
+        msg = settings.notify_io_error('fallback.cpp')
+        check('the save failure names the file and the reason',
+              bool(msg) and 'a__tests' in msg and 'read-only' in msg, repr(msg))
+        check('the failure reaches the screen, not only the console',
+              len(shown) == 1 and 'a__tests' in shown[0], repr(shown))
+
+        settings._note_io_error('write', os.path.join('tmp', 'a__tests'),
+                                'read-only', what='tests')
+        msg2 = settings.notify_io_error('fallback.cpp')
+        check('the same failure is not dialogged a second time',
+              len(shown) == 1 and bool(msg2), repr(shown))
+
+        settings._note_io_error('write', os.path.join('tmp', 'b__tests'),
+                                'disk full', what='tests')
+        settings.notify_io_error('fallback.cpp')
+        check('another file or another reason is another failure',
+              len(shown) == 2, repr(shown))
+
+        del shown[:]
+        settings._note_io_error('write', os.path.join('tmp', 'c__tests'),
+                                'x', what='tests')
+        check('a load site does not claim a write failure',
+              settings.notify_io_error('y.cpp', kind='read') == '' and not shown,
+              repr(shown))
+        check('and the write failure is still there for the site that caused it',
+              (settings.last_io_error() or {}).get('kind') == 'write',
+              repr(settings.last_io_error()))
+        settings.notify_io_error('y.cpp', kind='write')
+        check('which is the one that gets reported', len(shown) == 1, repr(shown))
+
+        settings._note_io_error('read', os.path.join('tmp', 'd__tests'),
+                                'Expecting "," delimiter', what='tests')
+        msg = settings.notify_io_error('y.cpp', kind='read')
+        check('a read failure says the panel may be missing samples',
+              'could not be read' in msg and 'd__tests' in msg, repr(msg))
+
+        i18n.set_lang('zh')
+        settings._io_notified.clear()
+        settings._note_io_error('read', os.path.join('tmp', 'e__tests'),
+                                'boom', what='tests')
+        msg = settings.notify_io_error('y.cpp', kind='read')
+        check('the read failure is localised, not an English fallback',
+              '读不出来' in msg and '样例' in msg, repr(msg))
+    finally:
+        fake_sublime.error_message = saved_em
+        i18n.set_lang(old_lang)
+        settings._io_notified.clear()
+        settings._last_io_error.clear()
     check('the failed-save message exists in both languages',
           i18n.STRINGS.get('tests_save_failed', {}).get('zh')
           and i18n.STRINGS.get('tests_save_failed', {}).get('en'))

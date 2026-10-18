@@ -17,7 +17,7 @@ import os
 import re
 import glob
 
-from .core.cph_settings import save_tests, load_all_tests
+from .core.cph_settings import save_tests, load_all_tests, notify_io_error
 from .core.cph_tests_merge import merge_tests, merge_into_file
 from .core.cph_i18n import t
 
@@ -407,7 +407,7 @@ class CphImportTestsCommand(sublime_plugin.TextCommand):
             # 正常 Run 流程: 复用/创建 -run 视图并从磁盘重新加载样例
             self.view.run_command('cph_view_tester', {'action': 'make_opd'})
         else:
-            sublime.error_message(t('import_save_failed'))
+            notify_io_error(src_file)
 
 
 class CphImportTestsHereCommand(CphImportTestsCommand):
@@ -530,6 +530,6 @@ class CphImportTestsFileCommand(sublime_plugin.TextCommand):
                     sublime.status_message(t('answer_conflict_kept'))
                 self.view.run_command('cph_view_tester', {'action': 'make_opd'})
             else:
-                sublime.error_message(t('import_save_failed'))
+                notify_io_error(src_file)
         except Exception as e:
             sublime.error_message(t('import_failed', error=str(e)))

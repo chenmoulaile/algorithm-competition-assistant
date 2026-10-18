@@ -11,7 +11,7 @@ from time import time, sleep
 import threading
 
 from .Modules.ProcessManager import ProcessManager
-from .core.cph_settings import package_name, get_settings, get_tests_paths, load_all_tests, save_tests, is_run_supported_ext, get_problem_limits
+from .core.cph_settings import package_name, get_settings, get_tests_paths, load_all_tests, save_tests, is_run_supported_ext, get_problem_limits, notify_io_error
 from .core.cph_target import visible as context_menu_visible
 from .core.cph_jump import (diagnostics as parse_diagnostics,
 							links_html, one_link, set_targets, handle_event as handle_jump_event)
@@ -2511,11 +2511,12 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		if not save_tests(self.dbg_file, tests_data):
 			# Every other save path reports this (cph_companion,
 			# cph_extras, cph_import, cph_stress). Silently dropping it
-			# here meant "my test points are gone" with no explanation.
-			# Not a status_message: a read-only folder fails on every
-			# single run, and the tests are already shown in the view.
-			print('[Algorithm Competition Assistant] %s'
-				% t('tests_save_failed', path=self.dbg_file))
+			# here meant "my test points are gone" with no explanation -
+			# and this is the path that stores the answers marked by hand.
+			# notify_io_error names the file and the OS reason, and repeats
+			# itself only to the console: a read-only folder fails on every
+			# single run, and a dialog on every run is a disabled plugin.
+			notify_io_error(self.dbg_file)
 
 	def on_insert(self, s):
 		self.view.run_command('cph_test_manager', {'action': 'insert_opd_input', 'text': s})
@@ -3132,6 +3133,10 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		if not clr_tests:
 			# Try to load tests from all possible locations (traditional + cph-ng style folder)
 			loaded_data = load_all_tests(run_file)
+			# A tests file that cannot be parsed yields []: the panel then shows
+			# an empty problem, and the only symptom is "my samples disappeared"
+			# - which reads exactly like the plugin forgetting to load them.
+			notify_io_error(run_file, kind='read')
 			if loaded_data:
 				# Keep tests whose input is empty too: a legitimate test can
 				# read nothing, and a stress-test counterexample with empty

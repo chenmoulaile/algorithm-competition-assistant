@@ -14,7 +14,7 @@ import sublime
 import sublime_plugin
 
 from .core.cph_i18n import t
-from .core.cph_settings import load_all_tests
+from .core.cph_settings import load_all_tests, notify_io_error
 from .core.cph_tests_merge import merge_into_file
 
 
@@ -96,7 +96,10 @@ class CphAddTestFromClipboardCommand(sublime_plugin.TextCommand):
 		}
 		ok, total = _merge_into_tests(file_name, [new_test])
 		if not ok:
-			sublime.status_message(t('import_save_failed'))
+			# The clipboard content is already gone from the panel's point of
+			# view; a flashing status_message was the only trace of a test
+			# point that never reached the disk.
+			notify_io_error(file_name)
 			return
 		sublime.status_message(t('clipboard_test_added', total=total))
 		_refresh_panel(view)
