@@ -3917,6 +3917,100 @@ def main():
           'href="jump:0"' in html1
           and targets1 == [[os.path.normpath(
               os.path.join('some', 'dir', 'main.cpp')), 12]], str(targets1))
+
+    # A target is addressable from the end as well, so the palette can offer
+    # "the last diagnostic" without knowing how many there were.
+    _sub = sys.modules['sublime']
+    if not hasattr(_sub, 'ENCODED_POSITION'):
+        _sub.ENCODED_POSITION = 1
+
+    class _JumpWindow(object):
+        def __init__(self, views):
+            self._views = views
+            self.opened = []
+            self.focused = []
+
+        def views(self):
+            return self._views
+
+        def open_file(self, to_open, flags=0):
+            self.opened.append((to_open, flags))
+
+        def focus_view(self, view):
+            self.focused.append(view)
+
+    _tgt = [[os.path.join('tmp', 'main.cpp'), 10],
+            [os.path.join('tmp', 'main.cpp'), 20]]
+    panel = fake_sublime.View(settings={'cph_jump_targets': _tgt})
+    panel.name = lambda: 'main.cpp -run'
+    src = fake_sublime.View(file_name=os.path.join('tmp', 'main.cpp'))
+    open_win = _JumpWindow([panel, src])
+    panel.window = lambda: open_win
+    src.window = lambda: open_win
+
+    check('the last target is reachable by counting from the end',
+          jump.jump_to(panel, -1) and open_win.focused == [src],
+          repr(open_win.focused))
+    # An already-open tab is moved inside, not re-opened: a second tab would
+    # lose the user's unsaved edits and their cursor.
+    check('jumping reuses the tab that is already open',
+          open_win.opened == [], repr(open_win.opened))
+
+    nowhere = _JumpWindow([])
+    panel.window = lambda: nowhere
+    check('the first target by index, opened when it is not already a tab',
+          jump.jump_to(panel, 0) and nowhere.opened[-1][0].endswith(':10'),
+          repr(nowhere.opened))
+    check('and the last one counts from the end',
+          jump.jump_to(panel, -1) and nowhere.opened[-1][0].endswith(':20'),
+          repr(nowhere.opened))
+    check('a target outside the list in either direction is refused',
+          not jump.jump_to(panel, -3) and not jump.jump_to(panel, 2))
+
+    root_jump = importlib.import_module(pkg + '.cph_jump')
+    _cmd = root_jump.CphJumpToLocationCommand.__new__(
+        root_jump.CphJumpToLocationCommand)
+    _cmd.view = src
+    check('the jump command works from the source view it is asked for in',
+          _cmd.is_enabled(),
+          'is_enabled() only read the current view, so it was always greyed '
+          'out while standing in main.cpp')
+    check('and it uses the run panel of that very file',
+          _cmd._target_view() is panel)
+    lonely = fake_sublime.View(file_name=os.path.join('tmp', 'other.cpp'))
+    lonely_win = _JumpWindow([lonely])
+    lonely.window = lambda: lonely_win
+    _cmd.view = lonely
+    check('with no panel anywhere it says so instead of doing nothing',
+          not _cmd.is_enabled())
+
+    _palette = json.load(io.open(os.path.join(ROOT, 'Default.sublime-commands'),
+                                 encoding='utf-8'))
+    _jump_entries = [e for e in _palette
+                     if e.get('command') == 'cph_jump_to_location']
+    check('the palette offers a first and a last, named the way they behave',
+          sorted((e.get('args') or {}).get('target') for e in _jump_entries) == ['-1', '0']
+          and any('first error' in (e.get('caption') or '') for e in _jump_entries)
+          and any('last error' in (e.get('caption') or '') for e in _jump_entries),
+          repr(_jump_entries))
+    for _plat in ('Windows', 'OSX', 'Linux'):
+        _kb = json.load(io.open(os.path.join(
+            ROOT, 'Default (%s).sublime-keymap' % _plat), encoding='utf-8'))
+        check('Ctrl+Alt+J is bound on %s as the README says' % _plat,
+              any(e.get('command') == 'cph_jump_to_location'
+                  and (e.get('keys') or [None])[0] == 'ctrl+alt+j'
+                  and (e.get('args') or {}).get('target') == '0'
+                  for e in _kb))
+    check('the jump entry point is translated, not a hardcoded English string',
+          "t('jump_no_target')" in open(os.path.join(ROOT, 'cph_jump.py'),
+                                        encoding='utf-8').read()
+          and i18n.STRINGS.get('jump_no_target', {}).get('zh')
+          and i18n.STRINGS.get('jump_no_target', {}).get('en'))
+    _tm2 = open(os.path.join(ROOT, 'test_manager.py'), encoding='utf-8').read()
+    check('the summary line links the first failing test to its detail tab',
+          'href="summary-detail"' in _tm2 and 'on_summary' in _tm2
+          and "cb(i, 'test-detail')" in _tm2,
+          'a Phantom without an on_navigate callback receives no clicks at all')
     check('html is escaped for minihtml',
           '&lt;' in jump.esc('<x>') and jump.esc('a & b') == 'a &amp; b')
 

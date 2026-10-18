@@ -920,6 +920,13 @@ STRINGS = {
         'zh': '文件只读或目录权限不足',
         'en': 'read-only file or no permission',
     },
+    'jump_no_target': {
+        'zh': '现在没有可跳转的错误位置：先跑一次（Ctrl+Alt+B），编译失败或 RE '
+              '会把位置显示在运行面板上，再按 Ctrl+Alt+J 跳过去',
+        'en': 'there is nothing to jump to yet: run the file first (Ctrl+Alt+B) - '
+              'a compile error or RE puts the location on the run panel, and '
+              'Ctrl+Alt+J takes you there',
+    },
     'stats_save_failed': {
         'zh': '练习统计没能保存: {error}（本次运行不计入统计）',
         'en': 'practice statistics could not be saved: {error} '

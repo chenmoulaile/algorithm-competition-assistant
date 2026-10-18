@@ -214,6 +214,11 @@ opens the package keymap beside your own override, so you can copy the entry and
   `<bits/stdc++.h>` 缺失会单独说明。探测在报告已显示之后于后台线程进行，命令本身秒开，
   并给出一段可粘贴到 issue 的 Markdown 报告（含插件版本号与实际安装目录名）
 - **纯键盘流**：`Ctrl+Alt+M` 选测试点 → 运行 / 详情 / 编辑 / 接受 / 拒绝 / 删除
+- **跑完直接去错误现场**：底部汇总行的 `首个失败 test 3` 现在能点，点一下打开那个测试点的
+  详情页；`Ctrl+Alt+J` 从源码文件跳到本次运行的第一个编译诊断 / RE 行号（跳转目标存在运行面板上，
+  以前"站在 main.cpp 里按这条命令"会因为只检查当前视图而永远是灰的）。命令面板给两个：
+  `Jump to the first error location`（g++ 的第一条才是根因，后面几百条是连锁反应）和
+  `Jump to the last error location`
 - **对拍反例入库**：对拍发现反例自动保存为正式测试点（可用 `stress_save_counterexample` 关闭）
 - **对拍收尾统计**：结束时报 `本轮统计: 共 N 轮, 实际比较 M 轮, 生成器超时 K 次`——`Passed: N rounds` 只说明跑了多少轮，不说明有多少轮真的比出结果
 - **统一合并策略**：导入文件 / 剪贴板 / 浏览器 / 对拍反例四条路径共用「按输入去重、答案只补不覆盖」，重发样例不会顶掉你手动标记的答案
@@ -357,6 +362,7 @@ opens the package keymap beside your own override, so you can copy the entry and
 | `Ctrl+Alt+G` | 切换 Debug / Release 编译模式（状态栏显示当前模式） |
 | `Ctrl+Alt+D` | 环境自检（编译器 / 端口 / 路径 / 资源） |
 | `Ctrl+Alt+M` | 键盘选择测试点并运行 / 详情 / 编辑（不用鼠标） |
+| `Ctrl+Alt+J` | 跳到第一个错误位置（编译诊断 / RE 的行号；命令面板里也有"跳到最后一个"） |
 | `Enter` (在 TestSyntax 中) | 插入行 |
 | `Ctrl+Enter` (在 TestSyntax 中) | 新建测试 |
 | `Ctrl+V` / `Cmd+V` (在 TestSyntax 中) | 粘贴 |

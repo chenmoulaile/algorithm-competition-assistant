@@ -118,12 +118,18 @@ def one_link(path, line, label=None):
 
 
 def jump_to(view, target):
-    """Handle a `jump:N` event for this view. Returns True when it jumped."""
+    """Handle a `jump:N` event for this view. Returns True when it jumped.
+
+    A negative target counts from the end, so "the last diagnostic" is
+    addressable without the caller knowing how many there were.
+    """
     targets = view.settings().get(TARGETS_KEY) or []
     try:
         index = int(target)
     except (TypeError, ValueError):
         return False
+    if index < 0:
+        index += len(targets)
     if not (0 <= index < len(targets)) or not targets[index]:
         return False
     path = targets[index][0]

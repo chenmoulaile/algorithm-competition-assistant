@@ -160,10 +160,17 @@
 		"command": "cph_run_parallel"
 	},
 	{
-		"caption": "Algorithm Competition Assistant: Jump to the last error location",
+		"caption": "Algorithm Competition Assistant: Jump to the first error location",
 		"command": "cph_jump_to_location",
 		"args": {
 			"target": "0"
+		}
+	},
+	{
+		"caption": "Algorithm Competition Assistant: Jump to the last error location",
+		"command": "cph_jump_to_location",
+		"args": {
+			"target": "-1"
 		}
 	},
 	{

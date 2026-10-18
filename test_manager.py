@@ -1484,7 +1484,12 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 			parts = [t('summary_passed', passed=passed, total=judged)]
 			if first_fail is not None:
-				parts.append(t('summary_first_fail', id=first_fail))
+				# The summary line is what a contestant reads mid-run, and the
+				# failing test it names was plain text: the number you would
+				# instinctively click did nothing, so the one piece of actionable
+				# information on the panel had to be acted on by hand.
+				parts.append('<a href="summary-detail">%s</a>'
+							 % t('summary_first_fail', id=first_fail))
 			parts.append(t('summary_total_time', time='%.2f' % (total_ms / 1000.0)))
 
 			ok = passed == judged
@@ -1508,8 +1513,18 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				'%s'
 				'</div>'
 			) % (color, parts[0], ' &nbsp;·&nbsp; '.join(parts[1:]), extra)
+			# The phantom set had no navigation callback at all, which is why
+			# the link above used to be decoration: a Phantom only receives
+			# hrefs when one is given here.
+			fail_index = (first_fail - 1) if first_fail is not None else None
+
+			def on_summary(event, cb=self.on_test_action, i=fail_index):
+				if event == 'summary-detail' and i is not None:
+					cb(i, 'test-detail')
+
 			self.summary_phantom.update([
-				Phantom(Region(v.size(), v.size()), html, sublime.LAYOUT_BLOCK)
+				Phantom(Region(v.size(), v.size()), html, sublime.LAYOUT_BLOCK,
+						on_summary if fail_index is not None else None)
 			])
 		except Exception:
 			pass

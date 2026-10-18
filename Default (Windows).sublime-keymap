@@ -619,5 +619,21 @@
 				"operand": true
 			}
 		]
+	},
+	{
+		"keys": [
+			"ctrl+alt+j"
+		],
+		"command": "cph_jump_to_location",
+		"args": {
+			"target": "0"
+		},
+		"context": [
+			{
+				"key": "cph_keybindings_enabled",
+				"operator": "equal",
+				"operand": true
+			}
+		]
 	}
 ]
