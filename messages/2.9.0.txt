@@ -1,0 +1,101 @@
+Algorithm Competition Assistant 2.9.0
+======================================
+
+The detail tab gets the numbers it already had and threw away, colour that
+touches no bytes, and a set of fixes for things that were quietly measuring the
+wrong thing. The README is now a short English front page with the Chinese
+manual beside it.
+
+* The detail tab answers the questions it used to leave unasked
+
+  It showed a verdict, a time, a memory figure and a diff. It did not say how
+  much of the time limit that run used, whether the program got slower than the
+  run before it, how big the sample is, which subtask the test belongs to, or
+  which channel produced the answer. Every one of those was already in hand.
+
+  The important one was the comparison with the previous run. Test.memorize()
+  overwrote a single runtime slot, so one run after an edit there was nothing
+  left to compare against - "did my optimisation help" had no answer at all.
+  Runtimes are now kept per test point in <name>__tests.hist next to the test
+  data (20 per test, capped, written by the serial path, the parallel runner and
+  the benchmark), and the detail reads:
+
+    vs last 300ms -> 1200ms (4.00x)
+    time used 1200ms/2000ms = 60%
+    history best/avg/worst 280ms / 640ms / 1200ms (n=6)
+
+  Also new: the share of the memory limit, the line and byte count of the sample
+  and of the answer, the subtask group and its score, and the evaluation channel
+  for file-IO problems (the usual reason a detail is empty is a freopen name
+  that disagrees with the statement, and that now says itself).
+
+* Colour came back without breaking why the detail is a plain tab
+
+  The custom syntax was removed here once, on purpose, so this does not put it
+  back. Diff lines are marked with regions and the header is a phantom bar
+  carrying the badge, the time, the memory, copy expected, copy actual and a
+  close button. The buffer is never modified: select, copy and paste out give
+  exactly what they gave before. `"detail_rich": false` restores the colourless,
+  bar-free view, and `"detail_style": "phantom"` still gives the old inline panel.
+
+* A program that prints without end could still fill the editor
+
+  max_output_bytes was enforced only on the serial output pump. The parallel
+  runner read the pipe directly and the file-IO path read the whole answer file,
+  so one runaway program filled the view, the test store and RAM - the exact
+  failure the setting exists to prevent, and the file-IO half of it was
+  introduced in 2.8.0. The cap now lives in ProcessManager, is handed to every
+  manager the panel builds, and past the limit the pipe is still drained (a
+  program that is never read blocks on a full pipe and gets reported TLE). The
+  truncation is named on the card instead of reading as a wrong answer.
+
+* Benchmark was timing the previous build
+
+  It never compiled. After Ctrl+Alt+G (Debug/Release) or an edit, the numbers
+  belonged to a different version of the code - which is the one question
+  benchmark exists to answer. It now compiles first through the same cache and
+  fingerprint rules as a normal Run, and refuses to report times when the
+  compile fails, because a number measured off a stale artifact is worse than
+  no number.
+
+* Two ways the SPJ could waste your time
+
+  A checker that hung was abandoned without kill or wait: one leaked process per
+  judged test, and a temp directory whose files were still open so cleanup
+  failed silently. A failed temp write raised straight through on_stop, which
+  aborted the verdict for that test with nothing on the card. Both are named
+  now, and the checker's byte budget respects the same cap.
+
+* Smaller things that were wrong in a way you could not see
+
+  The Verdict-rules panel read ignore_stderr with a default of False while the
+  judging code defaults to True, so the panel could display the opposite of what
+  runs do. Panel styles matched the theme setting by exact string equality, so a
+  renamed or forked Spacegray silently lost its variant stylesheet. The suite's
+  own chord check knew only the Chinese separator, so a correctly-bound chord in
+  the English table read as unbound.
+
+* Two audit findings retracted rather than "fixed"
+
+  Subtask scoring does not mis-handle a checker's partially-correct verdict - a
+  group that is not fully correct should not get full marks, and with
+  regard_pe_as_ac on, PE is already folded into accepted at the verdict layer.
+  And the right-click Stop stress test is gated on a running session, so it does
+  not appear when nothing is running. Both were reported as defects; reading the
+  code said otherwise, so nothing shipped for them.
+
+* README split
+
+  GitHub renders README.md, which had become 577 lines: forty lines of English in
+  front of a Chinese manual. The front page is English and 132 lines now, and the
+  full Chinese manual moved to README_CN.md - moved, not rewritten. The in-app
+  menu opens the Chinese manual, with a second entry for the English one.
+
+Regression suite: 850 -> 866 checks. The new detail cases exercise the real
+methods: the history cap, the previous-run comparison built from two recorded
+runs, marks that reference lines which exist in the text they describe, regions
+applied without changing the buffer, and the copy/close handlers. Two harness
+bugs surfaced on the way and are worth recording as a lesson rather than a
+footnote: `tempfile` and `fake_sublime` are rebound as locals inside main(), so
+any earlier use of those names is an UnboundLocalError, and one swallowed
+exception in the new code hid exactly that until the assertion went red.
