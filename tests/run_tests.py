@@ -802,6 +802,7 @@ def main():
     _dc.phantoms = _sb.PhantomSet(_rv, 'cph-detail-jump')
     _dc._copy_payload = ('actual output', 'expected output')
     _dc.set_marks([(1, 'want'), (2, 'got'), (0, 'head')])
+
     check('the diff lines are coloured by region, not by rewriting the buffer',
           _rv.regions.get('cph-detail-want', (0,))[0] == 1
           and _rv.regions.get('cph-detail-got', (0,))[0] == 1
@@ -826,6 +827,83 @@ def main():
           "'detail_rich'" in _detail_src
           and '"detail_rich": true' in open(os.path.join(ROOT, 'Algorithm Competition '
               'Assistant.sublime-settings'), encoding='utf-8').read())
+
+    # The detail command must never read back what it put into a PhantomSet:
+    # Sublime's PhantomSet has no public list of its phantoms, so a
+    # `.phantoms.phantoms` read passes here (the stand-in keeps a list) and
+    # raises AttributeError in the editor the moment the detail tab opens.
+    class _StrictPhantomSet(object):
+        def __init__(self):
+            self.updates = []
+
+        def update(self, phantoms):
+            self.updates.append(list(phantoms))
+
+    class _StrictDetailView(object):
+        def __init__(self):
+            self.text = ''
+            self.phantoms = _StrictPhantomSet()
+
+        def set_scratch(self, _v):
+            pass
+
+        def set_read_only(self, _v):
+            pass
+
+        def replace(self, _edit, _region, text):
+            self.text = text
+
+        def sel(self):
+            return _StrictSelection()
+
+        def add_regions(self, *a, **k):
+            pass
+
+        def erase_regions(self, *a, **k):
+            pass
+
+        def settings(self):
+            return _sb.Settings({})
+
+        def text_point(self, row, col):
+            return row
+
+        def line(self, point):
+            return _sb.Region(point, point + 1)
+
+        def size(self):
+            return len(self.text)
+
+        def window(self):
+            return None
+
+    class _StrictSelection(object):
+        def clear(self):
+            pass
+
+        def add(self, _r):
+            pass
+
+    _sv = _StrictDetailView()
+    _sc = tm.CphTestDetailViewCommand.__new__(tm.CphTestDetailViewCommand)
+    _sc.view = _sv
+    _sc.phantoms = _sv.phantoms
+    _sc._copy_payload = ('a', 'b')
+    try:
+        _sc.run(None, text='body', jump=None, marks=[(0, 'head')],
+                header='<div>x</div>', copy_actual='a', copy_expected='b')
+        strict_ok, strict_detail = True, ''
+    except Exception as _e:
+        strict_ok, strict_detail = False, '%s: %s' % (type(_e).__name__, _e)
+    check('filling the detail tab works against Sublime real PhantomSet surface',
+          strict_ok, strict_detail)
+    check('header and jump chip arrive in one update call',
+          strict_ok and len(_sv.phantoms.updates) == 1
+          and len(_sv.phantoms.updates[0]) == 1,
+          '%d update calls' % len(_sv.phantoms.updates))
+    check('no method reaches into a PhantomSet for its contents',
+          '.phantoms.phantoms' not in _detail_src,
+          'a real PhantomSet exposes no list of what it holds')
 
     # 'Run failed tests' jumps past accepted tests: index 3 with only 2 tests
     tester = make_tester([tm.CphTestManagerCommand.Test('a'),

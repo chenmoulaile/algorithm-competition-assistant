@@ -3987,8 +3987,9 @@ class CphTestDetailViewCommand(sublime_plugin.TextCommand):
 		v.sel().clear()
 		v.sel().add(Region(0))
 		self._copy_payload = (copy_actual or '', copy_expected or '')
-		self.set_jump(jump)
-		self.set_header(header)
+		# one update, in a fixed order: header bar first, jump chip second
+		self.phantoms.update([p for p in (self._header_phantom(header),
+		                                  self._jump_phantom(jump)) if p is not None])
 		self.set_marks(marks)
 
 	_DETAIL_SCOPES = {
@@ -4024,23 +4025,43 @@ class CphTestDetailViewCommand(sublime_plugin.TextCommand):
 			if kind not in bucket:
 				v.erase_regions(key)
 
-	def set_header(self, header):
-		"""The badge bar above the detail text: colour, and two things that
-		used to need selecting by hand - copy the answer, copy the output."""
+	def _jump_phantom(self, jump):
+		"""The clickable 'jump to the source line' chip, or None.
+
+		The detail view is a real (plain text) view, and a plain text view has
+		no links - a phantom is the only way to make the location clickable.
+		`jump` is [path, line, label] or None.
+		"""
 		v = self.view
-		phantoms = list(self.phantoms.phantoms)
+		if not jump or not jump[0]:
+			return None
+		label = jump[2] if len(jump) > 2 else None
+		html, targets = one_link(jump[0], jump[1], label=label)
+		set_targets(v, targets)
+		content = '<style>' + get_test_styles(v) + '</style>' + html
+
+		def onclick(event):
+			handle_jump_event(v, event)
+
+		return Phantom(Region(0), content, sublime.LAYOUT_BLOCK, onclick)
+
+	def _header_phantom(self, header):
+		"""The badge bar above the detail text, or None.
+
+		Header and jump chip are assembled into ONE update() call: Sublime's
+		PhantomSet has no public list of what it currently holds, so a method
+		that read them back to insert one more would work in the unit tests
+		(whose stand-in keeps a list) and raise AttributeError in the editor.
+		"""
+		v = self.view
 		if not header:
-			# rebuilding the whole set: the jump chip is re-added by set_jump,
-			# so keep the order (header first, jump second) deterministic
-			self.phantoms.update(phantoms)
-			return
+			return None
 		content = '<style>' + get_test_styles(v) + '</style>' + header
 
-		def onclick(event, view=v, cmd=self):
+		def onclick(event, cmd=self):
 			cmd.on_header_event(event)
 
-		phantoms.insert(0, Phantom(Region(0), content, sublime.LAYOUT_BLOCK, onclick))
-		self.phantoms.update(phantoms)
+		return Phantom(Region(0), content, sublime.LAYOUT_BLOCK, onclick)
 
 	def on_header_event(self, event):
 		v = self.view
@@ -4058,30 +4079,6 @@ class CphTestDetailViewCommand(sublime_plugin.TextCommand):
 				'detail_copied', n=len(payload or '')))
 			return True
 		return handle_jump_event(v, event)
-
-	def set_jump(self, jump):
-		"""Clickable 'jump to the source line' chip above the detail.
-
-		The detail view is a real (plain text) view, and a plain text view has
-		no links - a phantom is the only way to make the location clickable.
-		`jump` is [path, line, label] or None.
-		"""
-		v = self.view
-		if not jump or not jump[0]:
-			self.phantoms.update([])
-			return
-		label = jump[2] if len(jump) > 2 else None
-		html, targets = one_link(jump[0], jump[1], label=label)
-		set_targets(v, targets)
-		content = '<style>' + get_test_styles(v) + '</style>' + html
-
-		def onclick(event):
-			handle_jump_event(v, event)
-
-		self.phantoms.update([
-			Phantom(Region(0), content, sublime.LAYOUT_BLOCK, onclick)
-		])
-
 
 class ModifiedListener(sublime_plugin.EventListener):
 	def on_selection_modified(self, view):
