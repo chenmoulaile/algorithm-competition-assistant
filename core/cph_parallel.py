@@ -121,6 +121,11 @@ def _run_one(make_manager, input_text, expected, time_limit_ms, memory_limit_mb,
 
         result.update(rtcode=rtcode, stdout=stdout, stderr=stderr,
                       runtime=runtime, memory=memory)
+        # The cap is enforced inside the manager (the panel's clamp is not
+        # reachable from this thread). Say so, because "the answer stopped
+        # half-way" otherwise reads as a wrong answer the program never gave.
+        if getattr(manager, 'output_capped', False):
+            result['capped'] = True
 
         if killed:
             # Same rule as the serial path: a crash signature means the

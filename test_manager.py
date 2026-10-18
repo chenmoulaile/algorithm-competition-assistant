@@ -11,7 +11,7 @@ from time import time, sleep
 import threading
 
 from .Modules.ProcessManager import ProcessManager
-from .core.cph_settings import package_name, get_settings, get_tests_paths, load_all_tests, save_tests, is_run_supported_ext, get_problem_limits, notify_io_error, get_problem_io
+from .core.cph_settings import package_name, get_settings, get_tests_paths, load_all_tests, save_tests, is_run_supported_ext, get_problem_limits, notify_io_error, get_problem_io, record_runtime, last_runtime, runtime_runs
 from .core.cph_target import visible as context_menu_visible
 from .core.cph_jump import (diagnostics as parse_diagnostics,
 							esc, links_html, one_link, set_targets,
@@ -1635,6 +1635,12 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		settings = get_settings()
 		run_settings = settings.get('run_settings')
 		separate_stderr = bool(settings.get('ignore_stderr', True))
+		# The cap has to be handed to the manager itself: the parallel path reads
+		# the pipe in core, which cannot reach the panel's clamp_output().
+		try:
+			output_limit = int(settings.get('max_output_bytes', 0) or 0)
+		except (TypeError, ValueError):
+			output_limit = 0
 		file = self.dbg_file
 		build_sys = getattr(self, 'build_sys', None)
 
@@ -1647,6 +1653,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			manager.set_io_spec(get_problem_io(file))
 			if separate_stderr:
 				manager.set_separate_stderr(True)
+			if output_limit > 0:
+				manager.set_output_limit(output_limit)
 			if time_limit_ms is not None:
 				manager.set_time_limit(time_limit_ms)
 			if memory_limit_mb is not None:
@@ -1719,6 +1727,50 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 		sublime.status_message('[Algorithm Competition Assistant] ' + t('benchmark_running', n=runs))
 		self.set_compile_bar(t('benchmark_running', n=runs))
+
+		# Compile first, or the benchmark times whatever binary happens to be on
+		# disk. This command exists to answer "did my optimisation actually help",
+		# and an un-recompiled artifact answers it with a number that belongs to
+		# the previous version of the code - after Ctrl+Alt+G (Debug/Release) or
+		# Ctrl+Alt+Shift+R that is exactly the case the user is looking at.
+		# Same cache rules and the same fingerprint as a normal Run, on a worker
+		# thread, because a compile can take up to 30 s.
+		def compile_then_run(self=self, manager=tester.process_manager, runs=runs,
+		                     index=index, expected=expected, test=test,
+		                     time_limit_ms=time_limit_ms, memory_limit_mb=memory_limit_mb):
+			cmp_data = None
+			try:
+				fingerprint = None
+				if get_settings().get('compile_cache_enabled', True):
+					try:
+						fingerprint = _source_fingerprint(manager)
+					except Exception:
+						fingerprint = None
+				if should_skip_compile(manager, False, fingerprint):
+					print('[Algorithm Competition Assistant] benchmark: compile skipped (source unchanged)')
+				else:
+					cmp_data = manager.compile()
+					if cmp_data and cmp_data[0] == 0:
+						remember_compile(manager, fingerprint)
+			except Exception as e:
+				cmp_data = (1, '[Algorithm Competition Assistant] compile failed: %s' % e)
+			if cmp_data is not None and cmp_data[0] != 0:
+				# A failed compile means the binary being timed is the previous
+				# build (or nothing). Say so, and do not report times.
+				outcome = (cmp_data[1] or '')[:400]
+				sublime.set_timeout(lambda: self._benchmark_compile_failed(outcome), 0)
+				return
+			sublime.set_timeout(lambda: self._benchmark_batch(runs, index, expected, test,
+			                                                  time_limit_ms, memory_limit_mb), 0)
+
+		sublime.set_timeout_async(compile_then_run, 0)
+
+	def _benchmark_compile_failed(self, outcome):
+		sublime.status_message('[Algorithm Competition Assistant] ' + t('benchmark_ce'))
+		self.set_compile_bar(outcome, type='error', chip_text=t('compilation_error'))
+		print('[Algorithm Competition Assistant] benchmark aborted: compile failed')
+
+	def _benchmark_batch(self, runs, index, expected, test, time_limit_ms, memory_limit_mb):
 		run_parallel_batch(
 			self.manager_factory(time_limit_ms, memory_limit_mb),
 			[(test.test_string, expected)] * runs,
@@ -1854,6 +1906,11 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		test.set_stdout(result.get('stdout') or '')
 		test.set_stderr(result.get('stderr') or '')
 		test.set_cur_runtime(result.get('runtime') or 0)
+		# Same history the serial path writes, or the parallel runner - which is
+		# how most people run a full set - would leave "did my edit help?"
+		# unanswerable.
+		if (verdict or {}).get('name') != 'SK':
+			record_runtime(self.dbg_file, i + 1, result.get('runtime') or 0)
 		rtcode = result.get('rtcode')
 		test.set_cur_rtcode(rtcode if rtcode is not None else 0)
 		test.rtcode = str(rtcode if rtcode is not None else 0)
@@ -1871,6 +1928,11 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		elif result.get('message'):
 			# e.g. the checker's verdict message
 			test.message = result['message']
+		if result.get('capped'):
+			# The manager's own byte cap cut this answer short. Without a word
+			# about it, a truncated answer reads exactly like a wrong one.
+			notice = t('output_truncated_warn')
+			test.message = (test.message + '\n' + notice) if test.message else notice
 		while len(tester.prog_out) <= i:
 			tester.prog_out.append('')
 		tester.prog_out[i] = result.get('stdout') or ''
@@ -2046,7 +2108,15 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			return ''
 		return s.replace('\r\n', '\n').replace('\r', '')
 
-	def build_detail_content(self, i, test):
+	def build_detail_content(self, i, test, marks=None):
+		"""The detail text for one test.
+
+		`marks`, when given, is filled with (line_index, kind) pairs so the view
+		can colour the diff lines with regions: the buffer itself stays plain
+		text, so the detail remains selectable and copyable and a paste out of it
+		is exactly what is shown. kind is 'want' (the expected line), 'got' (the
+		program's line) or 'head' (a section title).
+		"""
 		verdict_short = test.verdict['name'] if test.verdict else 'UKE'
 		runtime_str = test.get_nice_runtime().replace('&nbsp;', ' ').strip()
 		header = '%s %d  |  %s  |  %s: %s' % (t('test_label').capitalize(), i + 1,
@@ -2056,9 +2126,72 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				test.get_nice_memory().replace('&nbsp;', ' '))
 		lines = [header, '=' * max(len(header), 40), '']
 
-		# sample input
+		# How much of the limit this run used, and what changed since the last
+		# run of the same test point. Both numbers already existed and were
+		# thrown away: the panel had the limit it judged against, and the
+		# history file had the previous runtime. "AC 但用了 96%" and "比上次慢
+		# 3 倍" are the two things that decide what to do next.
+		facts = []
+		tester = getattr(self, 'tester', None)
+		pm = getattr(tester, 'process_manager', None) if tester else None
+		time_limit_ms = None
+		memory_limit_mb = None
+		if pm is not None:
+			try:
+				time_limit_ms = pm.get_time_limit_ms()
+			except Exception:
+				time_limit_ms = None
+			try:
+				memory_limit_mb = pm.get_memory_limit_mb()
+			except Exception:
+				memory_limit_mb = None
+		# not every object that reaches this method is a real Test (the suite's
+		# duck-typed detail object has no runtime at all), so read it softly
+		_runtime = getattr(test, 'runtime', None)
+		runtime_ms = _runtime if isinstance(_runtime, (int, float)) else None
+		if time_limit_ms and runtime_ms:
+			pct = int(round(100.0 * float(runtime_ms) / float(time_limit_ms)))
+			facts.append('%s %dms/%dms = %d%%' % (t('detail_used_limit'),
+				int(runtime_ms), int(time_limit_ms), pct))
+		mb = getattr(test, 'memory_mb', None)
+		if memory_limit_mb and mb:
+			try:
+				pct = int(round(100.0 * float(mb) / float(memory_limit_mb)))
+				facts.append('%s %.0fMB/%dMB = %d%%' % (t('detail_used_memory'),
+					float(mb), int(memory_limit_mb), pct))
+			except (TypeError, ValueError):
+				pass
+		previous = last_runtime(getattr(self, 'dbg_file', None), i + 1)
+		if previous and runtime_ms:
+			try:
+				ratio = float(runtime_ms) / float(previous) if previous else 0.0
+				facts.append('%s %dms -> %dms (%.2fx)' % (t('detail_vs_last'),
+					int(previous), int(runtime_ms), ratio))
+			except (TypeError, ValueError, ZeroDivisionError):
+				pass
+		history = runtime_runs(getattr(self, 'dbg_file', None), i + 1)
+		if len(history) >= 3:
+			facts.append('%s %dms / %dms / %dms (n=%d)' % (
+				t('detail_best_avg_worst'), min(history),
+				int(sum(history) / len(history)), max(history), len(history)))
+		if facts:
+			for fact in facts:
+				lines.append(fact)
+				if marks is not None:
+					marks.append((len(lines) - 1, 'head'))
+			lines.append('')
+
+		# sample input, with its size: a pasted 20000-line sample and a two-
+		# number sample are different problems to read, and the panel used to
+		# show both as an unlabeled block.
 		test_input = self._clean_output(test.test_string).rstrip('\n')
-		lines.append('[%s]' % t('input'))
+		in_bytes = len((test.test_string or '').encode('utf-8'))
+		dbg_file = getattr(self, 'dbg_file', None)
+		lines.append('[%s] (%d %s / %d %s)' % (t('input'),
+			len(test_input.split('\n')) if test_input else 0, t('detail_lines'),
+			in_bytes, t('detail_bytes')))
+		if marks is not None:
+			marks.append((len(lines) - 1, 'head'))
 		lines.append(test_input if test_input.strip() else t('detail_empty'))
 		lines.append('')
 
@@ -2068,16 +2201,47 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		elif test.expected_output:
 			expected = test.expected_output
 		expected = self._clean_output(expected)
-		stdout = self._clean_output(test.stdout)
+		stdout = self._clean_output(getattr(test, 'stdout', '') or '')
 
 		lines.append('[%s]' % t('expected_output'))
+		if marks is not None:
+			marks.append((len(lines) - 1, 'head'))
 		lines.append(expected.rstrip('\n') if expected.strip() else t('detail_empty'))
 		lines.append('')
-		lines.append('[%s]' % t('actual_output'))
+		lines.append('[%s] (%d %s / %d %s)' % (t('actual_output'),
+			len(stdout.split('\n')) if stdout else 0, t('detail_lines'),
+			len((test.stdout or '').encode('utf-8')), t('detail_bytes')))
+		if marks is not None:
+			marks.append((len(lines) - 1, 'head'))
 		lines.append(stdout.rstrip('\n') if stdout.strip() else t('detail_empty'))
 		lines.append('')
 
+		# Which subtask group this test point belongs to and what that group
+		# scored: with groups configured, a single WA is only half the story.
+		groups = subtask_parse(get_settings().get('subtasks'))
+		if groups:
+			verdicts = []
+			for one in (tester.tests if tester else []):
+				vd = getattr(one, 'verdict', None)
+				verdicts.append(vd.get('name') if isinstance(vd, dict) else None)
+			scored = subtask_evaluate(verdicts, groups)
+			n = i + 1
+			for group in (scored or {}).get('groups') or []:
+				if group['from'] <= n <= group['to']:
+					lines.append('%s %s: %d/%d (%s %d%%)' % (
+						t('detail_subtask'), group['name'], group['score'],
+						group['max'], t('detail_group_passed') if group['passed']
+						else t('detail_group_failed'),
+						int(round(100.0 * group['score'] / group['max']))
+						if group['max'] else 0))
+					if marks is not None:
+						marks.append((len(lines) - 1, 'head'))
+					lines.append('')
+					break
+
 		lines.append('[%s] (%s)' % (t('diff'), t('diff_ignore_trailing')))
+		if marks is not None:
+			marks.append((len(lines) - 1, 'head'))
 		if not expected.strip():
 			lines.append(t('diff_no_expected'))
 		else:
@@ -2090,10 +2254,16 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				shown = ops[:_DETAIL_DIFF_LIMIT]
 				for kind, line_no, e, a in shown:
 					lines.append('  Line %d:' % line_no)
+					if marks is not None:
+						marks.append((len(lines) - 1, 'head'))
 					if kind != '+':
 						lines.append('- %s: %s' % (t('expected_short'), e if e else t('detail_empty')))
+						if marks is not None:
+							marks.append((len(lines) - 1, 'want'))
 					if kind != '-':
 						lines.append('+ %s: %s' % (t('actual_short'), a if a else t('detail_empty')))
+						if marks is not None:
+							marks.append((len(lines) - 1, 'got'))
 				if len(ops) > len(shown):
 					lines.append('')
 					lines.append(t('diff_shown_truncated', shown=len(shown),
@@ -2102,13 +2272,27 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 		if test.stderr and test.stderr.strip():
 			lines.append('[%s]' % t('error_output'))
+			if marks is not None:
+				marks.append((len(lines) - 1, 'head'))
 			lines.append(self._clean_output(test.stderr).rstrip('\n'))
 			lines.append('')
 
 		if test.message:
 			lines.append('[%s]' % t('message'))
+			if marks is not None:
+				marks.append((len(lines) - 1, 'head'))
 			lines.append(test.message)
 			lines.append('')
+
+		# A file-IO problem is judged from a file, and the most common reason a
+		# detail like this one shows nothing is a freopen name that disagrees
+		# with the statement. Name the channel every time.
+		io_spec = get_problem_io(dbg_file)
+		if (io_spec or {}).get('mode') == 'files':
+			lines.append('[%s] %s -> %s' % (t('opt_io_files'),
+				io_spec.get('input'), io_spec.get('output')))
+			if marks is not None:
+				marks.append((len(lines) - 1, 'head'))
 
 		return '\n'.join(lines)
 
@@ -2206,10 +2390,57 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		# Deliberately NO custom syntax here: the detail stays plain text
 		# (default syntax). Per user feedback the syntax-based coloring was
 		# removed; the content format/layout is unchanged.
-		detail_view.run_command('cph_test_detail_view', {
-			'text': self.build_detail_content(i, test),
-			'jump': self.jump_for(test)})
+		#
+		# `detail_rich` (default on) adds decoration that never touches the
+		# buffer - regions for the diff lines and a phantom badge bar with two
+		# copy buttons - so the copy/select behaviour the plain view was chosen
+		# for is exactly preserved, and setting it to false restores today's
+		# view with no colour and no bar.
+		rich = bool(get_settings().get('detail_rich', True))
+		marks = [] if rich else None
+		text = self.build_detail_content(i, test, marks)
+		args = {'text': text, 'jump': self.jump_for(test),
+		        'copy_actual': test.stdout or '',
+		        'copy_expected': self.detail_expected(test)}
+		if rich:
+			args['marks'] = marks
+			args['header'] = self.detail_header_html(i, test)
+		detail_view.run_command('cph_test_detail_view', args)
 		window.focus_view(detail_view)
+
+	def detail_expected(self, test):
+		"""The raw expected answer text, for the detail's copy button."""
+		if test.correct_answers:
+			return next(iter(test.correct_answers))
+		return test.expected_output or ''
+
+	def detail_header_html(self, i, test):
+		"""One bar above the detail text: badge, verdict, time, memory, actions.
+
+		Built from the same classes the cards use, so it follows the panel
+		theme. It is a phantom, not text: selecting or copying the detail still
+		gives exactly the plain body, which is the property this view exists for.
+		"""
+		name = test.verdict['name'] if test.verdict else 'UKE'
+		badge_class = ''
+		if test.verdict:
+			badge_class = {'AC': 'verdict-ac', 'WA': 'verdict-wa',
+			               'TL': 'verdict-tle', 'MLE': 'verdict-mle',
+			               'RE': 'verdict-re', 'PE': 'verdict-pe',
+			               'SK': 'verdict-sk'}.get(name, '')
+		parts = ['<span class="verdict-badge %s">%s</span>' % (badge_class, esc(name)),
+		         '<span style="margin-left: 8px;">%s %d</span>' % (esc(t('test_label')), i + 1),
+		         '<span class="runtime-info" style="margin-left: 8px;">%s: %s</span>'
+		         % (esc(t('time')), esc(test.get_nice_runtime().replace('&nbsp;', ' ').strip()))]
+		if test.memory not in ('-', None):
+			parts.append('<span class="memory-info" style="margin-left: 8px;">%s: %s</span>'
+			             % (esc(t('memory')), esc(test.get_nice_memory().replace('&nbsp;', ' ').strip())))
+		parts.append('<a class="config" href="detail-copy-expected" style="margin-left: 12px;">%s</a>'
+		             % esc(t('detail_copy_expected')))
+		parts.append('<a class="config" href="detail-copy-actual" style="margin-left: 8px;">%s</a>'
+		             % esc(t('detail_copy_actual')))
+		parts.append('<a class="config" href="detail-close" style="margin-left: 12px; color: var(--redish);">&#10005;</a>')
+		return '<div class="panel">' + ' '.join(parts) + '</div>'
 
 	def show_test_detail_phantom(self, i):
 		"""Original inline minihtml detail panel (detail_style = 'phantom')."""
@@ -2721,6 +2952,13 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			self.tester.tests[test_id].set_memory(memory_used_mb)
 		self.tester.tests[test_id].set_verdict(verdict)
 		self.tester.tests[test_id].set_stdout(_outp)
+		# Remember the measurement per test point. set_cur_runtime() overwrites
+		# the single previous number, so "did my optimisation help" was
+		# unanswerable one run after the edit - the detail can only show a
+		# before/after if the before was written down. Manual stops are not
+		# measurements, so a SK is not recorded.
+		if verdict['name'] != 'SK':
+			record_runtime(self.dbg_file, test_id + 1, runtime)
 
 		# An AC that used 95 % of the limit is a trap: on a judge whose machine
 		# is slower the same code is a TLE. Warn in the status bar; the verdict
@@ -3737,8 +3975,10 @@ class CphTestDetailViewCommand(sublime_plugin.TextCommand):
 	def __init__(self, view):
 		self.view = view
 		self.phantoms = PhantomSet(view, 'cph-detail-jump')
+		self._copy_payload = ('', '')
 
-	def run(self, edit, text='', jump=None):
+	def run(self, edit, text='', jump=None, marks=None, header=None,
+	        copy_actual='', copy_expected=''):
 		v = self.view
 		v.set_scratch(True)
 		v.set_read_only(False)
@@ -3746,7 +3986,78 @@ class CphTestDetailViewCommand(sublime_plugin.TextCommand):
 		v.set_read_only(True)
 		v.sel().clear()
 		v.sel().add(Region(0))
+		self._copy_payload = (copy_actual or '', copy_expected or '')
 		self.set_jump(jump)
+		self.set_header(header)
+		self.set_marks(marks)
+
+	_DETAIL_SCOPES = {
+		# Diff colours come from regions, not from a syntax definition: the
+		# buffer stays plain text (selectable, copyable, and what you paste out
+		# is what you saw), which is the reason a custom syntax was removed
+		# here once before. Regions are decoration only and touch no bytes.
+		'want': ('cph-detail-want', 'region.greenish'),
+		'got': ('cph-detail-got', 'region.redish'),
+		'head': ('cph-detail-head', 'region.bluish'),
+	}
+
+	def set_marks(self, marks):
+		v = self.view
+		bucket = {}
+		for line, kind in (marks or []):
+			bucket.setdefault(kind, []).append(line)
+		for kind, (key, scope) in self._DETAIL_SCOPES.items():
+			regions = []
+			for line in bucket.get(kind, []):
+				try:
+					start = v.text_point(max(0, int(line)), 0)
+					end = v.line(start).end()
+					if end > start:
+						regions.append(Region(start, end))
+				except Exception:
+					continue
+			if regions:
+				v.add_regions(key, regions, scope, '', sublime.DRAW_NO_OUTLINE)
+			else:
+				v.erase_regions(key)
+		for kind, (key, _scope) in self._DETAIL_SCOPES.items():
+			if kind not in bucket:
+				v.erase_regions(key)
+
+	def set_header(self, header):
+		"""The badge bar above the detail text: colour, and two things that
+		used to need selecting by hand - copy the answer, copy the output."""
+		v = self.view
+		phantoms = list(self.phantoms.phantoms)
+		if not header:
+			# rebuilding the whole set: the jump chip is re-added by set_jump,
+			# so keep the order (header first, jump second) deterministic
+			self.phantoms.update(phantoms)
+			return
+		content = '<style>' + get_test_styles(v) + '</style>' + header
+
+		def onclick(event, view=v, cmd=self):
+			cmd.on_header_event(event)
+
+		phantoms.insert(0, Phantom(Region(0), content, sublime.LAYOUT_BLOCK, onclick))
+		self.phantoms.update(phantoms)
+
+	def on_header_event(self, event):
+		v = self.view
+		if event == 'detail-close':
+			try:
+				v.close()
+			except Exception:
+				pass
+			return True
+		if event in ('detail-copy-actual', 'detail-copy-expected'):
+			payload = self._copy_payload[0] if event == 'detail-copy-actual' \
+				else self._copy_payload[1]
+			sublime.set_clipboard(payload or '')
+			sublime.status_message('[Algorithm Competition Assistant] ' + t(
+				'detail_copied', n=len(payload or '')))
+			return True
+		return handle_jump_event(v, event)
 
 	def set_jump(self, jump):
 		"""Clickable 'jump to the source line' chip above the detail.

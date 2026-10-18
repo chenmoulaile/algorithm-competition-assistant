@@ -195,6 +195,26 @@ def _write(path, text):
 		f.write((text or '').encode('utf-8', 'replace'))
 
 
+def _reap(proc):
+	"""Kill and collect a child we are abandoning, bounded and never raising.
+
+	A checker that hangs holds its pipes and its temp directory open. Without a
+	kill here, every judged test of a runaway SPJ leaked a process, and the
+	following _cleanup() then failed to remove the files it still had open -
+	quietly, because _cleanup swallows everything.
+	"""
+	if proc is None:
+		return
+	try:
+		proc.kill()
+	except Exception:
+		pass
+	try:
+		proc.wait(timeout=2)
+	except Exception:
+		pass
+
+
 def judge(cfg, exe, input_text, output_text, expected_text):
 	"""Run the checker. Returns a dict:
 
@@ -204,9 +224,17 @@ def judge(cfg, exe, input_text, output_text, expected_text):
 	in_path = os.path.join(workdir, 'input.txt')
 	out_path = os.path.join(workdir, 'output.txt')
 	ans_path = os.path.join(workdir, 'answer.txt')
-	_write(in_path, input_text)
-	_write(out_path, output_text)
-	_write(ans_path, expected_text)
+	try:
+		_write(in_path, input_text)
+		_write(out_path, output_text)
+		_write(ans_path, expected_text)
+	except Exception as e:
+		# A full disk or a locked folder used to raise straight through
+		# apply_checker() into on_stop(), which aborted the verdict for that
+		# test with nothing on the card. Say which stage failed instead.
+		_cleanup(workdir)
+		return {'ok': False, 'verdict': 'unknown_error',
+				'message': t('checker_write_failed', error=str(e)[:200])}
 
 	if isinstance(exe, list):
 		prefix = list(exe)
@@ -220,8 +248,11 @@ def judge(cfg, exe, input_text, output_text, expected_text):
 		argv = prefix + [in_path, out_path, ans_path]
 		payload = None
 
+	limit_s = max(1.0, float(cfg['time_limit_ms']) / 1000.0)
+	proc = None
+	out = b''
+	code = None
 	try:
-		startupinfo = None
 		startupinfo = hidden_startupinfo()
 		proc = subprocess.Popen(
 			argv, shell=False,
@@ -230,9 +261,15 @@ def judge(cfg, exe, input_text, output_text, expected_text):
 			cwd=cfg['dir'], startupinfo=startupinfo)
 		out = proc.communicate(
 			payload.encode('utf-8', 'replace') if payload is not None else None,
-			timeout=max(1.0, float(cfg['time_limit_ms']) / 1000.0))[0]
+			timeout=limit_s)[0]
 		code = proc.returncode
+	except subprocess.TimeoutExpired:
+		_reap(proc)
+		_cleanup(workdir)
+		return {'ok': False, 'verdict': 'unknown_error',
+				'message': t('checker_timeout', limit='%g' % limit_s)}
 	except Exception as e:
+		_reap(proc)
 		_cleanup(workdir)
 		return {'ok': False, 'verdict': 'unknown_error',
 				'message': t('checker_run_failed', error=str(e))}

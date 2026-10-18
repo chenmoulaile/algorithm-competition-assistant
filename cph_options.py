@@ -78,7 +78,9 @@ class CphVerdictModeCommand(sublime_plugin.WindowCommand):
 		tolerance = settings.get('float_tolerance', 0) or 0
 		pe = bool(settings.get('regard_pe_as_ac', False))
 		stop_first = bool(settings.get('stop_on_first_failure', True))
-		stderr = bool(settings.get('ignore_stderr', False))
+		# same default as the judging code (test_manager reads True); the panel
+		# used to read False, so it showed "off" while the runs ignored stderr
+		stderr = bool(settings.get('ignore_stderr', True))
 		# literal keys: the suite checks that every t('key') it can see is
 		# defined and every defined key is reachable, so no 'opt_' + key here
 		items = [

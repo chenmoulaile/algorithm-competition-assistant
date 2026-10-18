@@ -138,6 +138,14 @@ class ProcessManager(object):
 		self.io_spec = {'mode': 'stdin', 'input': '', 'output': ''}
 		self.io_input_text = ''
 		self.io_dir = None
+		# Output size cap (the `max_output_bytes` setting, 0 = unlimited).
+		# Enforced here as well as in the panel because the parallel runner and
+		# the file-IO read bypassed the panel's clamp entirely: one program that
+		# prints without end filled the view, the test store and RAM - precisely
+		# the hang this setting exists to prevent.
+		self.output_limit = 0
+		self.output_taken = 0
+		self.output_capped = False
 		self.test_counter = 0
 		self.write = self.insert
 		self.run = self.run_file
@@ -714,7 +722,19 @@ class ProcessManager(object):
 			if not os.path.exists(target):
 				return ('', False)
 			with open(target, 'rb') as f:
-				data = f.read()
+				if self.output_limit > 0:
+					# Read one byte past the cap: that is how "the program wrote
+					# more than we keep" becomes a fact instead of a guess. A
+					# runaway freopen to a 2 GB add.out would otherwise be read
+					# into memory whole, which is the exact failure the cap
+					# exists to stop.
+					data = f.read(self.output_limit + 1)
+					if len(data) > self.output_limit:
+						self.output_capped = True
+						data = data[:self.output_limit]
+						self.output_taken = self.output_limit
+				else:
+					data = f.read()
 		except Exception as e:
 			print('[Algorithm Competition Assistant] could not read %s: %s' % (target, e))
 			return ('', False)
@@ -975,6 +995,44 @@ class ProcessManager(object):
 			text = text[:-1] + '\n'
 		return text.replace('\r\n', '\n').replace('\r', '\n')
 
+	def set_output_limit(self, limit):
+		"""Cap how much output this run may produce; 0 or a bad value = unlimited."""
+		try:
+			limit = int(limit)
+		except (TypeError, ValueError):
+			limit = 0
+		self.output_limit = limit if limit > 0 else 0
+		self.output_taken = 0
+		self.output_capped = False
+
+	def _cap(self, text):
+		"""Trim `text` to what is left of the output budget, flagging a cut.
+
+		Counted in characters, the same unit the panel's own clamp uses, so the
+		two enforcement points cannot disagree about where the limit ended.
+
+		The over-budget part is still *consumed* (the budget moves even when the
+		text is dropped): stopping mid-pipe would block the program on a full
+		pipe buffer and get a merely talkative run reported as TLE. Same rule the
+		panel's pump already follows when it hits the cap.
+		"""
+		if not text:
+			return text
+		if self.output_limit <= 0:
+			self.output_taken += len(text)
+			return text
+		room = self.output_limit - self.output_taken
+		if room <= 0:
+			# Past the cap: consume, return nothing.
+			self.output_capped = True
+			return ''
+		if len(text) > room:
+			self.output_capped = True
+			self.output_taken = self.output_limit
+			return text[:room]
+		self.output_taken += len(text)
+		return text
+
 	def read(self, bfsize=None):
 		"""Read raw bytes, decode incrementally and normalize newlines.
 
@@ -1028,15 +1086,15 @@ class ProcessManager(object):
 				tail = self._out_decoder.decode(b'', final=True)
 			except Exception:
 				tail = ''
-			return self._normalize_newlines(tail, final=True)
+			return self._cap(self._normalize_newlines(tail, final=True))
 		decoded = self._out_decoder.decode(data)
 		# _normalize_newlines() only ever changes text around '\r'; with
 		# none pending and none in the chunk it is the identity, so skip
 		# its two str.replace() scans - the per-byte path in the sync
 		# listener / interactor calls this once per byte.
 		if self._pending_cr or '\r' in decoded:
-			return self._normalize_newlines(decoded)
-		return decoded
+			return self._cap(self._normalize_newlines(decoded))
+		return self._cap(decoded)
 
 	def terminate_async(self):
 		"""Ask for a stop without blocking the caller.

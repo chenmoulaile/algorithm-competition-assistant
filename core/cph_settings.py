@@ -289,6 +289,104 @@ def get_remembered_std(file):
 _problem_io = {}
 
 
+# --------------------------------------------------------------------------
+# 每个测试点的耗时历史
+#
+# "我这次优化到底起作用没有"是训练里最常问的问题，而插件以前只有一个格子：
+# Test.memorize() 每次运行都覆盖上一次的 runtime，所以第二次跑完之后，第一次的
+# 数字已经不存在了。历史单独存 <名>__tests.hist，不进 __tests —— 那个文件已经
+# 把 stdout/stderr 正文存进去了，再塞历史会让每次加载都变慢。
+# --------------------------------------------------------------------------
+_runtime_hist = {}
+_RUNTIME_KEEP = 20
+
+
+def get_hist_file_path(file_name, create=False):
+	path = primary_tests_path(file_name, create=create)
+	return (path + '.hist') if path else None
+
+
+def _read_hist_file(file_name):
+	path = get_hist_file_path(file_name)
+	if not path:
+		return {}
+	try:
+		if not os.path.exists(path):
+			return {}
+		with open(path, 'r', encoding='utf-8') as f:
+			data = sublime.decode_value(f.read().strip())
+	except Exception:
+		return {}
+	return data if isinstance(data, dict) else {}
+
+
+def record_runtime(file_name, index, runtime_ms):
+	"""Append one measured runtime for test `index` (1-based). Never raises.
+
+	Best effort by contract: a statistics write must be able to take a judged
+	run down with it.
+	"""
+	if not file_name or runtime_ms is None:
+		return
+	try:
+		runtime_ms = int(runtime_ms)
+	except (TypeError, ValueError):
+		return
+	if runtime_ms < 0:
+		return
+	key = str(int(index))
+	history = dict(_runtime_hist.get(file_name) or _read_hist_file(file_name))
+	runs = history.get(key) or []
+	if not isinstance(runs, list):
+		runs = []
+	runs.append(runtime_ms)
+	history[key] = runs[-_RUNTIME_KEEP:]
+	_runtime_hist[file_name] = history
+	path = get_hist_file_path(file_name, create=True)
+	if not path:
+		return
+	try:
+		with open(path, 'w', encoding='utf-8') as f:
+			f.write(sublime.encode_value(history, True))
+	except Exception as e:
+		_note_io_error('write', path, e, what='the runtime history')
+
+
+def last_runtime(file_name, index):
+	"""The previous recorded runtime for this test, or None.
+
+	'previous' means the one before the run that was just recorded, so the
+	detail can say 412ms -> 1.24s rather than comparing a number with itself.
+	"""
+	history = _runtime_hist.get(file_name)
+	if history is None:
+		history = _read_hist_file(file_name)
+		if history:
+			_runtime_hist[file_name] = history
+	runs = (history or {}).get(str(int(index))) or []
+	if not isinstance(runs, list) or len(runs) < 2:
+		return None
+	try:
+		return int(runs[-2])
+	except (TypeError, ValueError):
+		return None
+
+
+def runtime_runs(file_name, index):
+	"""All recorded runtimes for this test, oldest first."""
+	history = _runtime_hist.get(file_name)
+	if history is None:
+		history = _read_hist_file(file_name)
+	runs = (history or {}).get(str(int(index))) or []
+	out = []
+	for value in runs if isinstance(runs, list) else []:
+		try:
+			out.append(int(value))
+		except (TypeError, ValueError):
+			continue
+	return out
+
+
 def get_io_file_path(file_name, create=False):
 	"""`<tests file>.io`. `create` only for the writer: a read must not leave an
 	elsewhere-empty `tests/` folder in every directory the user ever runs in."""

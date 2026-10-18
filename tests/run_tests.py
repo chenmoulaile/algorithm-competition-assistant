@@ -692,6 +692,141 @@ def main():
     check('a small diff is not truncated',
           '  Line ' in small_text and _truncated not in small_text)
 
+    # ---- the detail view's visual layer and its new numbers ----
+    # The runtime history: one slot that is overwritten per run used to make
+    # "did my edit help" unanswerable, and it was being thrown away anyway.
+    _hist_settings = importlib.import_module(pkg + '.core.cph_settings')
+    # `tempfile` is rebound as a local variable later inside main(), which makes
+    # the module name unusable here; import it under a private alias instead of
+    # touching whoever shadows it.
+    import tempfile as _tempfile
+    _hist_tmp = _tempfile.mkdtemp(prefix='cph_hist_')
+    try:
+        _hist_file = os.path.join(_hist_tmp, 'p.cpp')
+        io.open(_hist_file, 'w', encoding='utf-8').close()
+        _hist_settings._runtime_hist.clear()
+        check('one run has no previous number to compare with',
+              _hist_settings.last_runtime(_hist_file, 1) is None)
+        _hist_settings.record_runtime(_hist_file, 1, 400)
+        _hist_settings.record_runtime(_hist_file, 1, 1200)
+        check('the previous runtime survives the current one',
+              _hist_settings.last_runtime(_hist_file, 1) == 400,
+              str(_hist_settings.last_runtime(_hist_file, 1)))
+        check('and the whole series is kept in order',
+              _hist_settings.runtime_runs(_hist_file, 1) == [400, 1200],
+              str(_hist_settings.runtime_runs(_hist_file, 1)))
+        for _n in range(40):
+            _hist_settings.record_runtime(_hist_file, 2, _n)
+        check('the history per test is capped, not unbounded',
+              len(_hist_settings.runtime_runs(_hist_file, 2)) == 20,
+              str(len(_hist_settings.runtime_runs(_hist_file, 2))))
+        check('a negative or non-numeric runtime is not recorded',
+              (_hist_settings.record_runtime(_hist_file, 3, -5),
+               _hist_settings.record_runtime(_hist_file, 3, 'x'),
+               _hist_settings.runtime_runs(_hist_file, 3)) [2] == [])
+        _hist_settings._runtime_hist.clear()
+        check('the history really is on disk, not just in memory',
+              os.path.exists(_hist_settings.get_hist_file_path(_hist_file, create=True)))
+
+        # The facts line the detail now shows, built from the recorded numbers.
+        cmd.dbg_file = _hist_file
+        cmd.tester = None
+        fact_test = _DetailTest()
+        fact_test.expected_output = '1\n2\n3'
+        fact_test.stdout = '1\n9\n3'
+        fact_test.runtime = 1200
+        _hist_settings.record_runtime(_hist_file, 1, 300)
+        _hist_settings.record_runtime(_hist_file, 1, 1200)
+        marks = []
+        fact_text = cmd.build_detail_content(0, fact_test, marks)
+        check('the detail compares this run with the previous one',
+              '300ms' in fact_text and '1200ms' in fact_text and '4.00x' in fact_text,
+              [l for l in fact_text.split('\n')[:6]])
+        check('the detail says how much of the input this is (lines and bytes)',
+              '3' in fact_text and 'bytes' in fact_text.lower() or '字节' in fact_text,
+              fact_text.split('\n')[8:10])
+        check('marks name the diff lines by side, not the whole body',
+              sum(1 for _l, k in marks if k == 'want') >= 1
+              and sum(1 for _l, k in marks if k == 'got') >= 1,
+              str(marks[:6]))
+        check('every marked line exists in the text it describes',
+              all(0 <= _l < len(fact_text.split('\n')) for _l, _k in marks),
+              '%d marks vs %d lines' % (len(marks), len(fact_text.split('\n'))))
+        check('asking for no marks still returns the same text',
+              cmd.build_detail_content(0, fact_test) == fact_text)
+        cmd.dbg_file = None
+        cmd.tester = None
+    finally:
+        shutil.rmtree(_hist_tmp, ignore_errors=True)
+        _hist_settings._runtime_hist.clear()
+
+    _sb = sys.modules['sublime']
+
+    class _RegionView(object):
+        def __init__(self):
+            self.text = 'line0\nline1\nline2\nline3\n'
+            self.regions = {}
+            self.clip = []
+            self.closed = False
+
+        def text_point(self, row, col):
+            return sum(len(l) + 1 for l in self.text.split('\n')[:row]) + col
+
+        def line(self, point):
+            lines = self.text.split('\n')
+            offset = 0
+            for one in lines:
+                if point <= offset + len(one):
+                    return _sb.Region(offset, offset + len(one))
+                offset += len(one) + 1
+            return _sb.Region(0, 0)
+
+        def add_regions(self, key, regions, scope='', icon='', flags=0):
+            self.regions[key] = (len(regions), scope)
+
+        def erase_regions(self, key):
+            self.regions.pop(key, None)
+
+        def settings(self):
+            return _sb.Settings({})
+
+        def window(self):
+            return None
+
+        def close(self):
+            self.closed = True
+
+    _rv = _RegionView()
+    _dc = tm.CphTestDetailViewCommand.__new__(tm.CphTestDetailViewCommand)
+    _dc.view = _rv
+    _dc.phantoms = _sb.PhantomSet(_rv, 'cph-detail-jump')
+    _dc._copy_payload = ('actual output', 'expected output')
+    _dc.set_marks([(1, 'want'), (2, 'got'), (0, 'head')])
+    check('the diff lines are coloured by region, not by rewriting the buffer',
+          _rv.regions.get('cph-detail-want', (0,))[0] == 1
+          and _rv.regions.get('cph-detail-got', (0,))[0] == 1
+          and _rv.text == 'line0\nline1\nline2\nline3\n',
+          str(_rv.regions))
+    _dc.set_marks([])
+    check('turning the visual layer off leaves no colour behind',
+          not _rv.regions, str(_rv.regions))
+    _clip = sys.modules['sublime'].set_clipboard
+    _copies = []
+    sys.modules['sublime'].set_clipboard = lambda text: _copies.append(text)
+    try:
+        _dc.on_header_event('detail-copy-actual')
+        _dc.on_header_event('detail-copy-expected')
+        check('the header copies the answer and the output without selecting',
+              _copies == ['actual output', 'expected output'], repr(_copies))
+        _dc.on_header_event('detail-close')
+        check('and its cross closes the detail tab', _rv.closed is True)
+    finally:
+        sys.modules['sublime'].set_clipboard = _clip
+    check('detail_rich can restore the plain view exactly',
+          "'detail_rich'" in _detail_src
+          and '"detail_rich": true' in open(os.path.join(ROOT, 'Algorithm Competition '
+              'Assistant.sublime-settings'), encoding='utf-8').read())
+
     # 'Run failed tests' jumps past accepted tests: index 3 with only 2 tests
     tester = make_tester([tm.CphTestManagerCommand.Test('a'),
                           tm.CphTestManagerCommand.Test('b')])
@@ -2723,7 +2858,11 @@ def main():
         if not line.startswith(u'| `'):
             continue
         cell = re.sub(r'\([^)]*\)', '', line.split('|')[1])
-        for token in re.split(r'\s*/\s*|\s+或\s+', cell):
+        # The separator is language-dependent prose, not a format the reader
+        # cares about: the Chinese manual writes "或", the English one writes
+        # "or", both also use "/". Accept all three, or the English README
+        # fails this check for a reason that has nothing to do with bindings.
+        for token in re.split(r'\s*/\s*|\s+或\s+|\s+\bor\b\s+', cell):
             token = token.strip().strip('`')
             if not re.match(r'(?i)^(ctrl|enter)', token):
                 continue          # Cmd aliases, panel names, prose cells

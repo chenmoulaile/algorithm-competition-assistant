@@ -208,6 +208,13 @@ STRINGS = {
         'zh': 'benchmark（{n} 次）：最快 {best}ms / 平均 {avg}ms / 最慢 {worst}ms',
         'en': 'benchmark ({n} runs): best {best}ms / avg {avg}ms / worst {worst}ms',
     },
+    'benchmark_ce': {
+        'zh': 'benchmark 中止：编译失败。下面计时的产物是**上一次**编译留下来的（或者根本没有），'
+              '所以那些数字不属于你刚改的代码',
+        'en': 'benchmark aborted: the compile failed. Anything timed from here would be the '
+              '**previous** build (or nothing), so the numbers would not describe the code you '
+              'just edited',
+    },
     # ---- 练习统计 ----
     'stats_empty': {
         'zh': '还没有练习记录',
@@ -315,6 +322,16 @@ STRINGS = {
     'checker_run_failed': {
         'zh': 'checker 运行失败：{error}',
         'en': 'checker failed to run: {error}',
+    },
+    'checker_timeout': {
+        'zh': 'checker 超时（{limit}s）：SPJ 自己没跑完，这一题没法判定',
+        'en': 'checker timed out ({limit}s): the SPJ did not finish, so this test '
+              'cannot be judged',
+    },
+    'checker_write_failed': {
+        'zh': 'checker 的临时文件写不进去（{error}），这一题没法判定',
+        'en': 'the temporary files for the checker could not be written '
+              '({error}), so this test cannot be judged',
     },
     'checker_judged': {
         'zh': 'SPJ 判定：{verdict}',
@@ -820,6 +837,54 @@ STRINGS = {
     'detail_no_result': {
         'zh': '请先运行测试再查看详情',
         'en': 'Run the test first to see details',
+    },
+    'detail_used_limit': {
+        'zh': '时限用量',
+        'en': 'time used',
+    },
+    'detail_used_memory': {
+        'zh': '内存用量',
+        'en': 'memory used',
+    },
+    'detail_vs_last': {
+        'zh': '与上次',
+        'en': 'vs last',
+    },
+    'detail_best_avg_worst': {
+        'zh': '历史 最快/平均/最慢',
+        'en': 'history best/avg/worst',
+    },
+    'detail_lines': {
+        'zh': '行',
+        'en': 'lines',
+    },
+    'detail_bytes': {
+        'zh': '字节',
+        'en': 'bytes',
+    },
+    'detail_subtask': {
+        'zh': '子任务',
+        'en': 'subtask',
+    },
+    'detail_group_passed': {
+        'zh': '该组已过',
+        'en': 'group passed',
+    },
+    'detail_group_failed': {
+        'zh': '该组未过',
+        'en': 'group not passed',
+    },
+    'detail_copy_actual': {
+        'zh': '复制实际输出',
+        'en': 'copy actual output',
+    },
+    'detail_copy_expected': {
+        'zh': '复制预期输出',
+        'en': 'copy expected output',
+    },
+    'detail_copied': {
+        'zh': '已复制到剪贴板（{n} 字符）',
+        'en': 'copied to the clipboard ({n} characters)',
     },
     'detail_empty': {
         'zh': '(空)',
