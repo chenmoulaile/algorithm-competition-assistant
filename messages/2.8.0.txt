@@ -1,9 +1,10 @@
-Algorithm Competition Assistant 2.7.0
+Algorithm Competition Assistant 2.8.0
 ======================================
 
 The judge only ever speaks through a pipe. This version teaches it the other
-way a problem can be posed, and then removes three ways the plugin could tell
-you something that was not true.
+way a problem can be posed, removes three ways the plugin could tell you
+something that was not true, and then clears out the things you could not find,
+could not see, or could not tell had failed at all.
 
 * File input/output: NOI / CSP-S problems can be tested without editing them
 
@@ -100,10 +101,58 @@ you something that was not true.
 Seven hardcoded English strings that the language setting never reached are now
 translated, including the one the jump command used to print.
 
-Regression suite: 766 -> 838 checks. The file-IO cases run real processes,
+* The View menu became the map of what the package can do
+
+  Six commands lived only in the command palette (calibrate this machine,
+  practice statistics, stress with options, replay the last counterexample,
+  import the pairs next to this file, pick and import one file) and eight more
+  existed only as a chord nobody can see in a menu. The menu is now grouped by
+  what you are doing - Run, Test data, Stress test, Competitive Companion,
+  Problem, Tools, Settings - and every command reachable from the palette, the
+  keymap or the context menu has an entry. Each caption names its own shortcut,
+  which makes the menu the table of "which keys does this package take". The
+  suite enforces that as a set equation now, so a new command that reaches one
+  surface and not the menu fails the build.
+
+* Swallowed exceptions, ranked by what they cost
+
+  A failed final drain can leave the tail of an answer unread, and a truncated
+  output judged against a complete one is a wrong answer that does not exist: it
+  raises the same "output may be incomplete" flag the byte cap uses. A TLE
+  watchdog whose kill itself failed left the panel waiting forever for a verdict
+  that was never coming, saying nothing. The startup listener for Competitive
+  Companion failed *in silence* - quiet mode meant console-only - so the user
+  believed the browser extension was wired up while every click did nothing.
+  Auto-run on save and auto-format on save were console-only too, and saving is
+  an expectation that something will happen. A failure is not routine output:
+  each of those now names itself on screen, while memory-sampler and summary-bar
+  failures became diagnosable instead of indistinguishable from a normal result.
+
+* Things that were computed and never displayed
+
+  str.format() drops a keyword the template does not mention, so three render
+  paths looked like they showed values that never reached the screen: the card's
+  verdict tick and cross, the accept/decline chip's test number and runtime, and
+  the compile bar's 编译错误 label. The first two were deleted (the badge already
+  carries the verdict as text, which is the part colour-blind users rely on); the
+  label is now rendered, because a failed compile used to be only a red colour
+  plus a wall of paths and line numbers. The compile chip also shared
+  test_phantoms[0] with the first test card - both anchor at Region(0) - so a
+  card refresh could erase a compile failure the user had not seen yet; it has
+  its own slot now.
+
+One correction against my own earlier audit, since it changes what was actually
+fixed: the import path already reported partial imports ("3 of 5 kept"), so the
+only silent listener path was the startup one. Conclusions were re-read from the
+code, not carried over from the report.
+
+Regression suite: 766 -> 850 checks. The file-IO cases run real processes,
 because that feature is about where bytes land on disk and no fake can prove it:
 the answer comes back from the file, nothing is written next to the source, the
 scratch directory is gone after the read, a missing output file is reported as
 itself, and a program printing 3 MB is still judged from its file. The stress
-cases pin all three exit-code branches, and the unload cases kill a real sleeper
-through the same registry the product uses. Full notes: RELEASE_NOTES_CN.md.
+cases pin all three exit-code branches, the unload cases kill a real sleeper
+through the registry the product uses, and the three new *defences* - an English
+literal bypassing t(), a template keyword that never renders, a menu missing a
+reachable command - were each verified by planting a violation, watching it go
+red, and removing it. Full notes: RELEASE_NOTES_CN.md.
