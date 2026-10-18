@@ -7,124 +7,246 @@
 				"children": [
 					{
 						"caption": "Run",
+						"children": [
+							{
+								"caption": "Run (Ctrl+Alt+B)",
+								"command": "cph_view_tester",
+								"args": {
+									"action": "make_opd"
+								}
+							},
+							{
+								"caption": "Run with clean tests",
+								"command": "cph_view_tester",
+								"args": {
+									"action": "make_opd",
+									"clr_tests": true
+								}
+							},
+							{
+								"caption": "Run all tests (keep going after failures) (Ctrl+Alt+Shift+B)",
+								"command": "cph_run_all_tests"
+							},
+							{
+								"caption": "Re-run failed tests only (Ctrl+Alt+R)",
+								"command": "cph_run_failed_tests"
+							},
+							{
+								"caption": "Run all tests in parallel (Ctrl+Alt+Shift+P)",
+								"command": "cph_run_parallel"
+							},
+							{
+								"caption": "Run (force recompile) (Ctrl+Alt+Shift+R)",
+								"command": "cph_run_force_recompile"
+							},
+							{
+								"caption": "Benchmark this test (N runs) (Ctrl+Alt+Shift+K)",
+								"command": "cph_benchmark"
+							},
+							{
+								"caption": "Debug / Release build mode (Ctrl+Alt+G)",
+								"command": "cph_toggle_build_mode"
+							}
+						]
+					},
+					{
+						"caption": "Test data",
+						"children": [
+							{
+								"caption": "Import tests from file... (Ctrl+Alt+I)",
+								"command": "cph_import_tests"
+							},
+							{
+								"caption": "Pick and import test file",
+								"command": "cph_pick_import_file"
+							},
+							{
+								"caption": "Import .in/.out tests next to this file",
+								"command": "cph_import_tests_here"
+							},
+							{
+								"caption": "Add test from clipboard (Ctrl+Alt+V)",
+								"command": "cph_add_test_from_clipboard"
+							},
+							{
+								"caption": "Export tests as .in/.out files (Ctrl+Alt+E)",
+								"command": "cph_export_tests"
+							},
+							{
+								"caption": "-"
+							},
+							{
+								"caption": "Copy test input",
+								"command": "cph_copy_test_input"
+							},
+							{
+								"caption": "Copy expected output (Ctrl+Alt+C)",
+								"command": "cph_copy_test_expected"
+							},
+							{
+								"caption": "Copy actual output (Ctrl+Alt+Shift+C)",
+								"command": "cph_copy_test_actual"
+							},
+							{
+								"caption": "-"
+							},
+							{
+								"caption": "Test actions - run / detail / edit a test (Ctrl+Alt+M)",
+								"command": "cph_test_menu"
+							},
+							{
+								"caption": "Toggle hide phantoms",
+								"command": "cph_test_manager",
+								"args": {
+									"action": "toggle_hide_phantoms"
+								}
+							}
+						]
+					},
+					{
+						"caption": "Stress test",
+						"children": [
+							{
+								"caption": "Start stress test (Ctrl+Alt+S)",
+								"command": "cph_start_stress_test"
+							},
+							{
+								"caption": "Stop stress test (Ctrl+Alt+Shift+S, on the stress page)",
+								"command": "cph_stop_stress_test"
+							},
+							{
+								"caption": "Stress test with options (pick files, rounds)",
+								"command": "cph_stress_with_options"
+							},
+							{
+								"caption": "Stress: replay last counterexample seed",
+								"command": "cph_stress_replay"
+							}
+						]
+					},
+					{
+						"caption": "Competitive Companion",
+						"children": [
+							{
+								"caption": "Listen, one new file per problem (Ctrl+Alt+L)",
+								"command": "cph_companion_listener",
+								"args": {"target": "new_file"}
+							},
+							{
+								"caption": "Listen, fill the current file (Ctrl+Alt+F)",
+								"command": "cph_companion_listener",
+								"args": {"target": "current_file"}
+							},
+							{
+								"caption": "Listen to this file (keep it as the target)",
+								"command": "cph_companion_listener"
+							},
+							{
+								"caption": "Stop listening (Ctrl+Alt+Shift+L)",
+								"command": "cph_companion_stop_listener"
+							}
+						]
+					},
+					{
+						"caption": "Problem",
+						"children": [
+							{
+								"caption": "Fetch problem from URL - samples + statement (Ctrl+Alt+Shift+F)",
+								"command": "cph_fetch_problem"
+							},
+							{
+								"caption": "View problem statement (Markdown) (Ctrl+Alt+Shift+V)",
+								"command": "cph_view_statement"
+							},
+							{
+								"caption": "This problem reads/writes files (NOI / CSP-S IO mode)",
+								"command": "cph_io_mode"
+							},
+							{
+								"caption": "Insert template snippet (Ctrl+Alt+T)",
+								"command": "cph_insert_template"
+							},
+							{
+								"caption": "Contest timer - start / stop (Ctrl+Alt+Shift+T)",
+								"command": "cph_contest_timer"
+							}
+						]
+					},
+					{
+						"caption": "Tools",
+						"children": [
+							{
+								"caption": "Check environment - doctor (Ctrl+Alt+D)",
+								"command": "cph_doctor"
+							},
+							{
+								"caption": "Jump to the first error location (Ctrl+Alt+J)",
+								"command": "cph_jump_to_location",
+								"args": {"target": "0"}
+							},
+							{
+								"caption": "Jump to the last error location",
+								"command": "cph_jump_to_location",
+								"args": {"target": "-1"}
+							},
+							{
+								"caption": "Calibrate this machine's speed",
+								"command": "cph_calibrate_machine"
+							},
+							{
+								"caption": "Show practice statistics",
+								"command": "cph_stats"
+							},
+							{
+								"caption": "Reset practice statistics",
+								"command": "cph_stats",
+								"args": {"reset": true}
+							}
+						]
+					},
+					{
+						"caption": "Settings",
+						"children": [
+							{
+								"caption": "Verdict rules (float tolerance, PE as AC, stop on first failure)...",
+								"command": "cph_verdict_mode"
+							},
+							{
+								"caption": "Stress test options (where std/gen come from, rounds)...",
+								"command": "cph_stress_options"
+							},
+							{
+								"caption": "Competitive Companion options (target mode, click log)...",
+								"command": "cph_companion_options"
+							},
+							{
+								"caption": "-"
+							},
+							{
+								"caption": "Switch language (中/EN)",
+								"command": "cph_language_toggle_language"
+							},
+							{
+								"caption": "Switch to English",
+								"command": "cph_language_set_language",
+								"args": {"language": "en"}
+							},
+							{
+								"caption": "切换为中文",
+								"command": "cph_language_set_language",
+								"args": {"language": "zh"}
+							}
+						]
+					},
+					{
+						"caption": "-"
+					},
+					{
+						"caption": "Collapse / restore the test panel (Ctrl+Alt+P)",
 						"command": "cph_view_tester",
 						"args": {
-							"action": "make_opd"
+							"action": "sync_opdebugs"
 						}
-					},
-					{
-						"caption": "Run with clean tests",
-						"command": "cph_view_tester",
-						"args": {
-							"action": "make_opd",
-							"clr_tests": true
-						}
-					},
-					{
-						"caption": "Toggle hide phantoms",
-						"command": "cph_test_manager",
-						"args": {
-							"action": "toggle_hide_phantoms"
-						}
-					},
-					{
-						"caption": "Listen to Competitive Companion (new file per problem)",
-						"command": "cph_companion_listener",
-						"args": {"target": "new_file"}
-					},
-					{
-						"caption": "Listen to Competitive Companion (fill the current file)",
-						"command": "cph_companion_listener",
-						"args": {"target": "current_file"}
-					},
-					{
-						"caption": "Stop Competitive Companion listener",
-						"command": "cph_companion_stop_listener"
-					},
-					{
-						"caption": "Import tests from file...",
-						"command": "cph_import_tests"
-					},
-					{
-						"caption": "Pick and import test file",
-						"command": "cph_pick_import_file"
-					},
-					{
-						"caption": "Start stress test",
-						"command": "cph_start_stress_test"
-					},
-					{
-						"caption": "Stop stress test",
-						"command": "cph_stop_stress_test"
-					},
-					{
-						"caption": "Switch language",
-						"command": "cph_language_toggle_language"
-					},
-					{
-						"caption": "-"
-					},
-					{
-						"caption": "Run all tests (keep going after failures)",
-						"command": "cph_run_all_tests"
-					},
-					{
-						"caption": "Re-run failed tests only",
-						"command": "cph_run_failed_tests"
-					},
-					{
-						"caption": "Run (force recompile)",
-						"command": "cph_run_force_recompile"
-					},
-					{
-						"caption": "-"
-					},
-					{
-						"caption": "Add test from clipboard",
-						"command": "cph_add_test_from_clipboard"
-					},
-					{
-						"caption": "Copy test input",
-						"command": "cph_copy_test_input"
-					},
-					{
-						"caption": "Copy expected output",
-						"command": "cph_copy_test_expected"
-					},
-					{
-						"caption": "Copy actual output",
-						"command": "cph_copy_test_actual"
-					},
-					{
-						"caption": "Export tests as .in/.out files",
-						"command": "cph_export_tests"
-					},
-					{
-						"caption": "-"
-					},
-					{
-						"caption": "Verdict rules (float tolerance, PE as AC, stop on first failure)...",
-						"command": "cph_verdict_mode"
-					},
-					{
-						"caption": "Stress test options (where std/gen come from, rounds)...",
-						"command": "cph_stress_options"
-					},
-					{
-						"caption": "Competitive Companion options (target mode, click log)...",
-						"command": "cph_companion_options"
-					},
-					{
-						"caption": "This problem reads/writes files (NOI / CSP-S IO mode)...",
-						"command": "cph_io_mode"
-					},
-					{
-						"caption": "Check environment (doctor)",
-						"command": "cph_doctor"
-					},
-					{
-						"caption": "Test actions (run / detail / edit a test)",
-						"command": "cph_test_menu"
 					}
 				]
 			}

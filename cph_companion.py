@@ -674,7 +674,15 @@ def _start_listener(view=None, quiet=False, target=None):
             # reach, and the doctor's probe would then call the port free.
             server = HTTPServer(('127.0.0.1', port), build_handler())
         except Exception as e:
+            # A failure is not routine output. With quiet=True (the startup
+            # auto-listen) this used to go to the console only, so Sublime came
+            # up *not listening* while the user reasonably believed the browser
+            # extension was wired up - every click then did nothing, and the
+            # symptom pointed at the extension.
             report(t('listener_port_error', port=port, error=str(e)))
+            if quiet:
+                sublime.status_message('[Algorithm Competition Assistant] ' + t(
+                    'listener_start_failed_startup', port=port, error=str(e)[:120]))
             return
         _listener['server'] = server
         _listener['port'] = port

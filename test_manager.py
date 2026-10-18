@@ -1004,8 +1004,19 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 							break
 						if not files_io:
 							self.__on_out(s, gen)
-				except Exception:
-					pass
+				except Exception as e:
+					# A failed final drain can leave the tail of the answer
+					# unread, and a truncated output judged against a complete
+					# one is a WA that does not exist. The truncation flag is the
+					# honest thing to raise here - it already says "what you see
+					# may not be all the program printed".
+					print('[Algorithm Competition Assistant] final output drain '
+					      'failed: %s' % e)
+					if not self.output_truncated:
+						self.output_truncated = True
+						n = self.running_test
+						self.tests[n].message = t('output_truncated_warn')
+						self.post_out('\n' + t('output_truncated_warn') + '\n')
 			except Exception as e:
 				# Draining the output must never skip the memory-sampler stop
 				# and on_stop below: an exception here used to leak a thread
@@ -1044,8 +1055,12 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			try:
 				if type(proc) == ProcessManager:
 					proc.finish_memory_sampling()
-			except Exception:
-				pass
+			except Exception as e:
+				# The card then shows "-" for memory, which the user reads as
+				# "this platform cannot measure it" rather than "the sampler
+				# failed this run". Name it in the console at least: an MLE that
+				# was never measured must not look like a pass.
+				print('[Algorithm Competition Assistant] memory sampling failed: %s' % e)
 			self.__on_stop(proc.is_stopped(), runtime, gen=gen)
 
 		def __tle_watchdog(self, gen, limit_ms):
@@ -1062,8 +1077,15 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					self.tle_killed = True
 					try:
 						proc.terminate()
-					except Exception:
-						pass
+					except Exception as e:
+						# The watchdog is the only thing standing between a dead
+						# loop and a panel that hangs forever. If the kill itself
+						# failed, the user must see that the program is still
+						# running rather than waiting on a verdict that will
+						# never arrive.
+						print('[Algorithm Competition Assistant] TLE kill failed: %s' % e)
+						sublime.status_message('[Algorithm Competition Assistant] '
+											   + t('process_kill_failed'))
 					return
 				sleep(0.05)
 
@@ -1572,8 +1594,10 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				Phantom(Region(v.size(), v.size()), html, sublime.LAYOUT_BLOCK,
 						on_summary if fail_index is not None else None)
 			])
-		except Exception:
-			pass
+		except Exception as e:
+			# The summary line going missing used to be silent, and it is the
+			# one place that says "4/5 passed, first failure is test 3".
+			print('[Algorithm Competition Assistant] summary bar failed: %s' % e)
 
 	def record_stats(self):
 		"""Append this run's verdicts to the local practice statistics.

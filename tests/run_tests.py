@@ -6435,6 +6435,115 @@ def main():
           and 'self.test_phantoms[0].update' not in _tm_compile_src,
           'it must not share slot 0 with test 1')
 
+    # Discoverability, checked as a set equation instead of remembered.
+    # Six commands used to exist only in the command palette - calibrate,
+    # practice statistics, stress options, stress replay, import-here, pick-and-
+    # import - and eight more were bound to keys nobody can see. A feature you
+    # cannot find is a feature that was not built, and the only defence against
+    # that is a check that fails when a new command reaches one surface but not
+    # the menu.
+    MENU_EXEMPT = frozenset()
+
+    def _hb_menu_cmds(node, acc):
+        if isinstance(node, dict):
+            if node.get('command'):
+                acc.add(node['command'])
+            for _v in node.values():
+                _hb_menu_cmds(_v, acc)
+        elif isinstance(node, list):
+            for _v in node:
+                _hb_menu_cmds(_v, acc)
+        return acc
+
+    _hb_all_menu = _hb_menu_cmds(
+        json.load(io.open(os.path.join(ROOT, 'Main.sublime-menu'), encoding='utf-8')), set())
+    _hb_ctx_menu = _hb_menu_cmds(
+        json.load(io.open(os.path.join(ROOT, 'Context.sublime-menu'), encoding='utf-8')), set())
+    _hb_palette = set(e['command'] for e in
+                      json.load(io.open(os.path.join(ROOT, 'Default.sublime-commands'),
+                                        encoding='utf-8')) if e.get('command'))
+    _hb_keys = set()
+    for _hb_plat in ('Windows', 'OSX', 'Linux'):
+        _hb_kb = json.load(io.open(os.path.join(
+            ROOT, 'Default (%s).sublime-keymap' % _hb_plat), encoding='utf-8'))
+        _hb_keys |= set(e['command'] for e in _hb_kb if e.get('command'))
+    _hb_hidden = sorted((_hb_palette | _hb_keys | _hb_ctx_menu) - _hb_all_menu - MENU_EXEMPT)
+    check('every reachable command is also in the View menu',
+          not _hb_hidden, 'not in any menu: %s' % ', '.join(_hb_hidden))
+    check('the View menu is complete on every platform keymap',
+          sorted(_hb_keys) == sorted(set(
+              e['command'] for e in json.load(io.open(
+                  os.path.join(ROOT, 'Default (Windows).sublime-keymap'), encoding='utf-8'))
+              if e.get('command'))))
+
+    # A menu entry pointing at a command that does not exist is silently
+    # inert - Sublime shows it, clicking does nothing.
+    _hb_classes = set()
+    for _hb_dirpath, _hb_dirnames, _hb_filenames in os.walk(ROOT):
+        _hb_dirnames[:] = [d for d in _hb_dirnames
+                           if d not in ('.git', '__pycache__', '.workbuddy', 'tests')]
+        for _hb_file in _hb_filenames:
+            if not _hb_file.endswith('.py'):
+                continue
+            _hb_src = io.open(os.path.join(_hb_dirpath, _hb_file), encoding='utf-8').read()
+            for _hb_m in re.finditer(r'^class\s+(Cph\w+?)Command\b', _hb_src, re.M):
+                _hb_classes.add(re.sub(r'(?<!^)(?=[A-Z])', '_',
+                                       _hb_m.group(1)).lower())
+    _hb_dead = sorted((_hb_all_menu | _hb_ctx_menu) - _hb_classes)
+    check('every menu entry names a command that exists',
+          not _hb_dead, ', '.join(_hb_dead))
+    check('the menu knows the command classes it lists',
+          len(_hb_classes) >= 40, '%d command classes' % len(_hb_classes))
+
+    # Swallowed exceptions, sorted by what they cost the user.
+    # A failed final drain can leave the tail of an answer unread: judged
+    # against a complete expected output that is a WA that does not exist, so
+    # it now raises the same "output may be incomplete" flag the byte cap uses.
+    class _DrainFailProcess(FakeProcess):
+        def __init__(self):
+            self.file = os.path.join('tmp', 'drain.cpp')
+            self.reads = 0
+            self.messages = []
+
+        def read(self, bfsize=None):
+            self.reads += 1
+            if self.reads == 1:
+                return 'first chunk\n'
+            raise RuntimeError('pipe vanished')
+
+    _drain_proc = _DrainFailProcess()
+    _drain_test = _Test('1 2\n')
+    _drain_tester = _Tester(_drain_proc, _noop,
+                            lambda *a, **k: None, _noop, _noop,
+                            sync_out=False, tests=[_drain_test], epoch=81)
+    _drain_tester.tests[0] = _drain_test
+    _drain_tester.running_test = 0
+    _drain_tester.prog_out = ['']
+    getattr(_drain_tester, '_Tester__process_listener')()
+    check('a failed final drain is reported as possibly-incomplete output',
+          _drain_tester.output_truncated is True
+          and _drain_test.message,
+          'truncated=%s message=%r' % (_drain_tester.output_truncated,
+                                       getattr(_drain_test, 'message', None)))
+    check('the memory-sampler and summary failures are no longer silent',
+          'memory sampling failed' in _tm2 and 'summary bar failed' in _tm2,
+          'a swallowed exception must at least be diagnosable')
+    check('a TLE kill that fails tells you the program is still running',
+          "t('process_kill_failed')" in _tm2
+          and i18n.STRINGS.get('process_kill_failed', {}).get('zh')
+          and i18n.STRINGS['process_kill_failed']['en'])
+    _auto_src = open(os.path.join(ROOT, 'cph_auto.py'), encoding='utf-8').read()
+    check('auto-run and auto-format failures reach the status bar',
+          "'auto_run_failed'" in _auto_src and "'format_failed'" in _auto_src
+          and 'sublime.status_message' in _auto_src,
+          'the user saved expecting something to happen')
+    _comp_src = open(os.path.join(ROOT, 'cph_companion.py'), encoding='utf-8').read()
+    check('a failed startup listener says nothing is listening',
+          'listener_start_failed_startup' in _comp_src
+          and 'if quiet:' in _comp_src,
+          'quiet mode used to swallow the only clue the extension had about why '
+          'clicks did nothing')
+
     # The calibration and verdict lines, executed rather than grepped.
     _keep_get_settings = tm.get_settings
     cal = importlib.import_module(pkg + '.core.cph_calibrate')

@@ -21,6 +21,7 @@ import sublime
 import sublime_plugin
 
 from .core.cph_settings import get_settings, is_run_supported_ext
+from .core.cph_i18n import t
 
 
 def _hidden_startupinfo():
@@ -102,7 +103,11 @@ def _start_run(view, settings, file_name):
 			else:
 				view.run_command('cph_view_tester', {'action': 'make_opd'})
 		except Exception as e:
+			# The user saved expecting a run because auto_run_on_save is on.
+			# A console line is not an answer to "why did nothing happen".
 			print('[Algorithm Competition Assistant] auto run failed: %s' % e)
+			sublime.status_message('[Algorithm Competition Assistant] ' + t(
+				'auto_run_failed', reason=str(e)[:160]))
 
 	sublime.set_timeout(fire, int(_debounce_seconds(settings) * 1000))
 
@@ -130,6 +135,11 @@ def _format_file(view, entry, file_name):
 							 startupinfo=_hidden_startupinfo()).wait()
 		except Exception as e:
 			print('[Algorithm Competition Assistant] format failed: %s' % e)
+			# auto_format_on_save is opt-in, so an empty format_cmd or a
+			# clang-format missing from PATH otherwise looks like the plugin
+			# quietly deciding not to format.
+			sublime.status_message('[Algorithm Competition Assistant] ' + t(
+				'format_failed', reason=str(e)[:160]))
 			return
 		after = ''
 		try:

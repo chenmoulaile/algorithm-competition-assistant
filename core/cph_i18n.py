@@ -540,6 +540,32 @@ STRINGS = {
         'zh': '设置已加载',
         'en': 'settings loaded',
     },
+    'auto_run_failed': {
+        'zh': '保存后自动运行失败：{reason}',
+        'en': 'auto-run on save failed: {reason}',
+    },
+    'process_kill_failed': {
+        'zh': '超时后没能杀掉这个进程，它还在跑：面板会一直等下去，'
+              '可以按 Ctrl+Alt+X（或在测试编辑视图里）手动终止',
+        'en': 'the timeout kill failed, so the program is still running: the '
+              'panel will keep waiting; stop it by hand with Ctrl+Alt+X (in the '
+              'test edit view)',
+    },
+    'format_failed': {
+        'zh': '保存后自动格式化失败：{reason}；clang-format 不在 PATH 的话，'
+              '把该语言的 format_cmd 留空就不会再报',
+        'en': 'auto-format on save failed: {reason}; if clang-format is not on '
+              'PATH, leave that language\'s format_cmd empty to stop this',
+    },
+    'listener_start_failed_startup': {
+        'zh': '启动时自动监听 Competitive Companion 失败（端口 {port}：{error}），'
+              '所以现在**没在监听**；点浏览器扩展不会有任何反应。'
+              '改 companion_port 或释放端口后再重启',
+        'en': 'the startup listener for Competitive Companion failed (port '
+              '{port}: {error}), so **nothing is listening now** and clicking '
+              'the extension will do nothing; change companion_port or free the '
+              'port and restart',
+    },
     'compile_reentry_warn': {
         'zh': '正在编译，请等它结束；若确实卡住了，30 秒后可以再按一次',
         'en': 'a compile is in progress, wait for it; if it really hung you can '
