@@ -23,6 +23,7 @@ import locale
 import os
 import re
 import shutil
+import string
 import sys
 import subprocess
 import tempfile
@@ -6371,6 +6372,68 @@ def main():
                         _hb_call.lineno))
     check('no user-facing message bypasses the translation table',
           not _hb_literal_ui, '; '.join(_hb_literal_ui[:12]))
+
+    # str.format() silently ignores a keyword the template does not mention.
+    # Three render paths were passing values that never reached the screen:
+    # the card's verdict tick/cross, the accept/decline chips' test number and
+    # runtime, and the compile bar's "编译错误" label - so the code looked
+    # like it displayed them and nobody could tell from the panel. Pair each
+    # read_resource('Highlight/x.html') with the .format() that follows it in
+    # the same function and require every keyword to exist in the template.
+    _fmt_orphans = []
+    _tmpl_dir = os.path.join(ROOT, 'Highlight')
+    _templates = {}
+    for _tfile in os.listdir(_tmpl_dir):
+        if _tfile.endswith('.html'):
+            _templates[_tfile] = set(
+                f for _, f, _, _ in string.Formatter().parse(
+                    io.open(os.path.join(_tmpl_dir, _tfile),
+                            encoding='utf-8').read())
+                if f)
+    for _mname in ('test_manager.py', 'test_edit.py', 'cph_html.py',
+                   'Highlight/test_interface.py'):
+        _mpath = os.path.join(ROOT, _mname)
+        if not os.path.exists(_mpath):
+            continue
+        try:
+            _mtree = ast.parse(io.open(_mpath, encoding='utf-8').read())
+        except SyntaxError:
+            continue
+        for _mfunc in [n for n in ast.walk(_mtree)
+                       if isinstance(n, (ast.FunctionDef, ast.Module))]:
+            _calls = []
+            for _c in ast.walk(_mfunc):
+                if not isinstance(_c, ast.Call):
+                    continue
+                _f_name = getattr(_c.func, 'id', None) or getattr(_c.func, 'attr', None)
+                if _f_name == 'read_resource' and _c.args and \
+                        isinstance(getattr(_c.args[0], 'value', None), str):
+                    _calls.append(('res', _c.lineno,
+                                   os.path.basename(_c.args[0].value)))
+                elif _f_name == 'format' and _c.keywords:
+                    _calls.append(('fmt', _c.lineno,
+                                   [k.arg for k in _c.keywords]))
+            _calls.sort(key=lambda x: x[1])
+            _current = None
+            for _kind, _line, _payload in _calls:
+                if _kind == 'res':
+                    _current = _payload
+                elif _current in _templates:
+                    _missing = [k for k in _payload if k not in _templates[_current]]
+                    if _missing:
+                        _fmt_orphans.append('%s:%d %s -> %s' % (
+                            _mname, _line, _current, ','.join(_missing)))
+                    _current = None
+    check('every value a template is handed actually renders',
+          not _fmt_orphans, '; '.join(sorted(set(_fmt_orphans))[:8]))
+
+    # The compile chip and the first test card both anchored at Region(0), and
+    # the card refresh erased a compile failure the user had not seen yet.
+    _tm_compile_src = inspect.getsource(tm.CphTestManagerCommand.set_compile_bar)
+    check('the compile chip has its own phantom slot',
+          'self.compile_phantom.update' in _tm_compile_src
+          and 'self.test_phantoms[0].update' not in _tm_compile_src,
+          'it must not share slot 0 with test 1')
 
     # The calibration and verdict lines, executed rather than grepped.
     _keep_get_settings = tm.get_settings

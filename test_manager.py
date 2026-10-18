@@ -14,7 +14,8 @@ from .Modules.ProcessManager import ProcessManager
 from .core.cph_settings import package_name, get_settings, get_tests_paths, load_all_tests, save_tests, is_run_supported_ext, get_problem_limits, notify_io_error, get_problem_io
 from .core.cph_target import visible as context_menu_visible
 from .core.cph_jump import (diagnostics as parse_diagnostics,
-							links_html, one_link, set_targets, handle_event as handle_jump_event)
+							esc, links_html, one_link, set_targets,
+							handle_event as handle_jump_event)
 from .core.cph_build_mode import label as build_mode_label
 from .core.cph_std_ladder import reset as std_ladder_reset
 from .core.cph_calibrate import label as calibrate_label
@@ -426,6 +427,11 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		self.tester = None
 		self.session = None
 		self.test_phantoms = [PhantomSet(view, 'test-phantoms-' + str(i)) for i in range(10)]
+		# The compile chip used to be written into test_phantoms[0] - the very
+		# slot the first test card occupies, since both anchor at Region(0).
+		# Whichever was drawn last erased the other: "Compiling..." hid card 1,
+		# and the next card refresh hid a compile failure nobody had seen yet.
+		self.compile_phantom = PhantomSet(view, 'cph-compile-phantom')
 		self.summary_phantom = PhantomSet(view, 'cph-summary-phantom')
 		# Panel auto-fit scheduling state (see schedule_auto_fit_panel_width).
 		# The run view can be restored by hot_exit, so read them with getattr
@@ -641,7 +647,6 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 				verdict_class = self.get_verdict_class()
 				verdict_short = self.verdict['name'] if self.verdict else 'UKE'
-				verdict_icon = '✓' if (self.verdict and self.verdict['name'] == 'AC') else '×'
 				test_type = self.get_test_class()
 
 				memory_display = 'none'
@@ -658,7 +663,6 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					runtime=self.get_nice_runtime(),
 					verdict_class=verdict_class,
 					verdict_short=verdict_short,
-					verdict_icon=verdict_icon,
 					test_type=test_type,
 					memory_display=memory_display,
 					memory=memory_str,
@@ -699,10 +703,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			else:
 				type_label = t('decline')
 			content = content.format(
-				test_id=i + 1,
 				type=type,
 				type_label=type_label,
-				runtime='&nbsp;' * (2 - len(str(self.runtime))) + str(self.runtime)
 			)
 			content = '<style>' + styles + '</style>' + content
 
@@ -2905,6 +2907,10 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		v.sel().add(Region(v.size(), v.size()))
 		for phs in self.test_phantoms:
 			phs.update([])
+		# "clear tests" also drops the compile chip: it belongs to the run that
+		# was just erased, and a stale red "编译错误" over an empty panel reads
+		# as if the empty panel itself had failed to compile.
+		self.compile_phantom.update([])
 		if self.tester:
 			v.erase_regions('type')
 			for i in range(-1, self.tester.test_iter + 1):
@@ -2946,7 +2952,12 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		content = read_resource('Highlight/compile.html').format(
 			cmd=cmd_escaped,
 			state=state,
-			compilation_error_label=t('compilation_error'),
+			# A failed compile used to be *colour only* (the chip turns red) and
+			# the raw compiler text, which on a Chinese Windows machine arrives
+			# as a wall of paths and line numbers. Name it.
+			compilation_error_label=(
+				'<span style="color: #d3140d; font-weight: bold;">%s</span> '
+				% esc(t('compilation_error')) if type == 'error' else ''),
 			diagnostics=diag_html,
 		)
 		content = '<style>' + styles + '</style>' + content
@@ -2955,7 +2966,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			handle_jump_event(view, event)
 
 		phantom = Phantom(Region(0), content, sublime.LAYOUT_BLOCK, onclick)
-		self.test_phantoms[0].update([phantom])
+		self.compile_phantom.update([phantom])
 
 	def get_view_by_id(self, id):
 		# The panel view can already be detached from its window while a
