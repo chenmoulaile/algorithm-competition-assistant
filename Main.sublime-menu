@@ -275,7 +275,14 @@
 								}
 							},
 							{
-								"caption": "README / 使用说明",
+								"caption": "使用说明 / Manual (Chinese)",
+								"command": "cph_open_package_file",
+								"args": {
+									"file": "README_CN.md"
+								}
+							},
+							{
+								"caption": "README (English)",
 								"command": "cph_open_package_file",
 								"args": {
 									"file": "README.md"

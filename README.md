@@ -21,7 +21,7 @@ after VSCode's [cph-ng](https://github.com/langningchen/cph-ng), and the Competi
 | **Real memory verdict (MLE)** | ❌ memory was a dead setting | ✅ samples the child process peak memory per platform, over the limit really is MLE |
 | **Hard kill on timeout (TLE)** | ❌ an infinite loop survives | ✅ a watchdog terminates the whole process tree at the limit |
 | **Run-time error location (RE)** | ❌ | ✅ parses `file:line` out of the output (Python traceback / Java stack / sanitizer diagnostics), replays the crash under gdb when it cannot |
-| Detail tab + **line-by-line diff** | ❌ | ✅ a real editor tab, text selectable and copyable |
+| Detail tab + **line-by-line diff** | ❌ | ✅ a real editor tab, selectable and copyable; also shows the share of the time/memory limit used, the run before this one, and the subtask the test belongs to |
 | **Compile cache** | ❌ recompiles every time | ✅ skips compilation when the sources and the command are unchanged |
 | **Automatic C++ standard tier (saves 1.4-2 s per run)** | ❌ compiles whatever you hard-coded | ✅ builds the low tier first, escalates only when the compiler asks, remembers per problem file |
 | Re-run failures only / run everything / force recompile | ❌ | ✅ three commands, three keys |
@@ -91,6 +91,27 @@ when you disable or uninstall it — nothing is written into your personal keyma
 | `Ctrl+Alt+P` or `Ctrl+K, Ctrl+P` | Collapse / restore the run panel |
 
 Inside the plugin's own test editor and detail views (`source.TestSyntax` only): `Enter` insert line, `Ctrl+Enter` new test, `Ctrl+V` paste, `Ctrl+X` kill the process, `Ctrl+D` delete, `Ctrl+Shift+Up/Down` swap tests.
+
+## The detail tab
+
+`详情` / *detail* opens a real editor tab, so everything in it can be selected and
+copied. On top of the line-by-line diff it reports what the run actually cost:
+
+- **share of the limit** - `time used 1200ms/2000ms = 60%`, and the same for memory,
+  because an AC that used 96 % of the limit is a trap on a slower judge;
+- **the run before this one** - `vs last 300ms -> 1200ms (4.00x)`, plus
+  best/avg/worst once there are three or more, so "did my edit help" has an answer.
+  Per-test history lives in `<name>__tests.hist` next to the test data (20 runs kept);
+- **size of the sample and of the answer** in lines and bytes;
+- **which subtask group** the test belongs to and what that group scored;
+- **which channel produced the answer** - a file-IO problem names `add.in -> add.out`,
+  because the usual reason a detail is empty is a `freopen` name that disagrees
+  with the statement.
+
+Colour is applied with **regions and a phantom badge bar, not a syntax definition**: the
+buffer is never modified, so selecting, copying and pasting give exactly what they gave
+without it. The bar carries `copy expected output`, `copy actual output` and a close
+button. Set `"detail_rich": false` for the colourless, bar-free view.
 
 ## File input/output (NOI / CSP-S)
 
