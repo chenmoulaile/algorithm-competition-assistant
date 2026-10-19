@@ -39,7 +39,7 @@ UNSUPPORTED_CALL_KWARGS = {
     'run': {'encoding', 'errors', 'text', 'capture_output'},
 }
 
-SKIP_DIRS = {'.git', '__pycache__', '.workbuddy', 'tests'}
+SKIP_DIRS = {'.git', '__pycache__', '.workbuddy', 'tests', 'promo'}
 
 
 def iter_py_files():

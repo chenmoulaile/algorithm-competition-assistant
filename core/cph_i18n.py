@@ -315,6 +315,26 @@ STRINGS = {
         'zh': 'interactor 编译失败：{cmd}\n{error}',
         'en': 'interactor failed to compile: {cmd}\n{error}',
     },
+    'manual_already_running': {
+        'zh': '交互终端已经在跑这轮了（Ctrl+X 可终止）',
+        'en': 'the interactive terminal is already running this round (Ctrl+X to stop)',
+    },
+    'manual_exit': {
+        'zh': '程序已退出，返回码',
+        'en': 'program exited with code',
+    },
+    'manual_program_ended': {
+        'zh': '程序已结束，Ctrl+Alt+Shift+X 可重启',
+        'en': 'program ended, Ctrl+Alt+Shift+X to restart',
+    },
+    'manual_stopped': {
+        'zh': '已终止程序（Ctrl+Alt+Shift+X 可重启）',
+        'en': 'program stopped (Ctrl+Alt+Shift+X to restart)',
+    },
+    'compile_failed_status': {
+        'zh': '编译失败，详见交互终端输出',
+        'en': 'compile failed, see the interactive terminal output',
+    },
     # Reached through the dynamic key t(label) in test_manager.py
     # (label = 'interactive_running' if interactive else 'parallel_running').
     # NOT dead: the static literal scan cannot see it - keep on the whitelist.

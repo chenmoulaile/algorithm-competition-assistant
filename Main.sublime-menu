@@ -40,6 +40,26 @@
 								"command": "cph_run_force_recompile"
 							},
 							{
+								"caption": "Run in interactive terminal (Ctrl+Alt+Shift+X)",
+								"command": "cph_manual_open"
+							},
+							{
+								"caption": "Interactive terminal: restart (Ctrl+Alt+Shift+X)",
+								"command": "cph_manual_terminal"
+							},
+							{
+								"caption": "Interactive terminal: send input line (Enter)",
+								"command": "cph_manual_send_line"
+							},
+							{
+								"caption": "Interactive terminal: send EOF (Ctrl+D)",
+								"command": "cph_manual_eof"
+							},
+							{
+								"caption": "Interactive terminal: stop program (Ctrl+X)",
+								"command": "cph_manual_stop"
+							},
+							{
 								"caption": "Benchmark this test (N runs) (Ctrl+Alt+Shift+K)",
 								"command": "cph_benchmark"
 							},

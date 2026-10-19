@@ -635,5 +635,76 @@
 				"operand": true
 			}
 		]
+	},
+	{
+		"keys": [
+			"ctrl+alt+shift+x"
+		],
+		"command": "cph_manual_terminal",
+		"context": [
+			{
+				"key": "cph_terminal_view",
+				"operator": "equal",
+				"operand": true
+			}
+		]
+	},
+	{
+		"keys": [
+			"ctrl+alt+shift+x"
+		],
+		"command": "cph_manual_terminal",
+		"context": [
+			{
+				"key": "selector",
+				"operator": "not_equal",
+				"operand": "source.TestSyntax",
+				"match_all": true
+			},
+			{
+				"key": "cph_keybindings_enabled",
+				"operator": "equal",
+				"operand": true
+			}
+		]
+	},
+	{
+		"keys": [
+			"enter"
+		],
+		"command": "cph_manual_send_line",
+		"context": [
+			{
+				"key": "cph_terminal_view",
+				"operator": "equal",
+				"operand": true
+			}
+		]
+	},
+	{
+		"keys": [
+			"ctrl+d"
+		],
+		"command": "cph_manual_eof",
+		"context": [
+			{
+				"key": "cph_terminal_view",
+				"operator": "equal",
+				"operand": true
+			}
+		]
+	},
+	{
+		"keys": [
+			"ctrl+x"
+		],
+		"command": "cph_manual_stop",
+		"context": [
+			{
+				"key": "cph_terminal_view",
+				"operator": "equal",
+				"operand": true
+			}
+		]
 	}
 ]

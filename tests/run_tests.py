@@ -3606,7 +3606,8 @@ def main():
     state_mod = importlib.import_module(pkg + '.core.cph_state')
     gate_settings = importlib.import_module(pkg + '.core.cph_settings')
     listener = ctx_mod.CphContextListener()
-    gate_view = sys.modules['sublime'].View(settings={'cph_run_view': True})
+    gate_view = sys.modules['sublime'].View(settings={'cph_run_view': True,
+                                                      'cph_interactive_terminal': True})
     gate_view._file_name = os.path.join('x', 'a.cpp')
     saved_gate = gate_settings.get_settings()
     saved_listener = state_mod.state.get('listener_running')
@@ -3766,8 +3767,8 @@ def main():
         '__init__.py', 'plugin_init.py', 'test_edit.py', 'test_manager.py',
         'cph_auto.py', 'cph_companion.py', 'cph_context.py', 'cph_doctor.py',
         'cph_extras.py', 'cph_import.py', 'cph_jump.py', 'cph_language.py',
-        'cph_options.py', 'cph_run_modes.py', 'cph_stress.py', 'cph_template.py',
-        'cph_tests_io.py',
+        'cph_manual.py', 'cph_options.py', 'cph_run_modes.py', 'cph_stress.py',
+        'cph_template.py', 'cph_tests_io.py',
     ])
     actual_root_modules = set(
         f for f in os.listdir(ROOT)

@@ -8,6 +8,7 @@ Package Control 审查要求包内快捷键必须带具体 context（不能用"�
   当前视图触发：除输入浮层（快速面板、查找替换等 widget 视图）外全部放行，
   对齐原版"任何视图都生效"的行为
 - ``cph_stress_view``     当前视图是对拍输出页（停止对拍的键只在这里生效）
+- ``cph_terminal_view``   当前视图是交互终端（发送输入/EOF/杀进程的键只在这里生效）
 - ``cph_listener_running`` Competitive Companion 监听器正在运行
 - ``cph_keybindings_enabled``  ``enable_keybindings`` 设置是否为 true
 
@@ -88,6 +89,9 @@ class CphContextListener(sublime_plugin.EventListener):
 			# 当前视图是对拍输出页：停止对拍的快捷键只在这里生效，
 			# 多个文件同时对拍时停的就是眼前这一个。
 			value = is_stress_view(view.id())
+		elif key == 'cph_terminal_view':
+			# 当前视图是手动交互终端：enter/ctrl+d/ctrl+x 只在这里接管。
+			value = bool(view.settings().get('cph_interactive_terminal'))
 		elif key == 'cph_listener_running':
 			value = is_listener_running()
 		else:
