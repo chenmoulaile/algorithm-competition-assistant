@@ -22,4 +22,5 @@ Handy keys (source view):
   Ctrl+Alt+P           collapse/restore the run panel
 
 Settings: Preferences -> Package Settings -> Algorithm Competition Assistant
+          -> Settings (left = defaults, right = Packages/User/...sublime-settings)
 On macOS use Cmd instead of Ctrl.

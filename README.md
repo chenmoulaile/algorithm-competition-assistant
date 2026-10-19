@@ -45,6 +45,11 @@ package really lives in, `.sublime-package` suffix stripped.
 
 **Package Control.** `Ctrl+Shift+P` → `Package Control: Install Package` → search `Algorithm Competition Assistant`; no restart needed, later upgrades use `Package Control: Upgrade Package`.
 
+**Configuring a Package Control install.** Package Control installs a zip, so there is no package folder to browse.
+Use `Preferences → Package Settings → Algorithm Competition Assistant → Settings`: the left pane is the read-only
+defaults and the right pane is your editable `Packages/User/Algorithm Competition Assistant.sublime-settings`; saving
+there survives upgrades. The same submenu opens Key Bindings, TestSyntax settings, and both READMEs.
+
 ⚠️ **Do not use both.** Package Control installs `Installed Packages/…sublime-package` (a zip); if a folder of the same name
 also exists in `Packages/`, installing or upgrading the zip **empties that folder** — silently before v2.5.0, which is why "I
 edited the code, restarted, nothing changed" happened. Startup now prints a notice and the environment check (`Ctrl+Alt+D`)

@@ -2,6 +2,8 @@
 	// ================= Algorithm Competition Assistant 设置（中文注释版） =================
 	// 保存即生效。建议把要改的项复制到 User 设置里覆盖（Preferences ->
 	// Package Settings -> Algorithm Competition Assistant -> Settings），升级插件不会丢配置。
+	// Package Control 装的是 zip，Packages/ 下没有插件文件夹；改设置请直接编辑右侧的
+	// Packages/User/Algorithm Competition Assistant.sublime-settings。
 
 	// 界面语言: "zh" 中文 / "en" 英文（也可用命令面板的 Toggle language 切换）
 	"language": "zh",

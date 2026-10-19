@@ -1,0 +1,22 @@
+Algorithm Competition Assistant 2.9.1
+======================================
+
+Package Control installs this package as a .sublime-package zip, so there is
+no folder under Packages/ to edit. The Preferences menu used to pass an
+absolute path inside that folder to edit_settings, and Settings, Key Bindings,
+TestSyntax Settings and both READMEs answered "The settings file ... could not
+be opened".
+
+They now use the resource form Sublime itself uses:
+
+    ${packages}/<package name>/<file>
+
+* Settings opens the normal split view: read-only defaults on the left, your
+  editable Packages/User/Algorithm Competition Assistant.sublime-settings on
+  the right. Saving there survives upgrades.
+* Key Bindings, TestSyntax Settings and the README entries work as well.
+* READMEs are read with sublime.load_resource() and shown as read-only scratch
+  views, because they have no User copy.
+* Folder installs are unchanged.
+
+No restart is needed after upgrading.

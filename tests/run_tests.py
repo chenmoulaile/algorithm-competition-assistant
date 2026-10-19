@@ -6368,31 +6368,55 @@ def main():
 
     print('== v2.4.9: the code paths a source-grep test could not see ==')
 
-    class _RecWindow(object):
-        def __init__(self):
-            self.calls = []
-
-        def run_command(self, command, args=None):
-            self.calls.append((command, dict(args or {})))
-
     class _RecView(object):
         def __init__(self):
             self.appended = []
+            self.text = ''
+            self.scratch = False
+            self.read_only = False
+            self.name = None
+            self.syntax_file = None
 
         def is_valid(self):
             return True
 
         def run_command(self, command, args=None):
             if command == 'append':
-                self.appended.append((args or {}).get('characters', ''))
+                chunk = (args or {}).get('characters', '')
+                self.appended.append(chunk)
+                self.text += chunk
+
+        def set_scratch(self, value):
+            self.scratch = value
+
+        def set_read_only(self, value):
+            self.read_only = value
+
+        def set_name(self, value):
+            self.name = value
+
+        def set_syntax_file(self, value):
+            self.syntax_file = value
+
+    class _RecWindow(object):
+        def __init__(self):
+            self.calls = []
+            self.view = None
+
+        def run_command(self, command, args=None):
+            self.calls.append((command, dict(args or {})))
+
+        def new_file(self):
+            self.view = _RecView()
+            return self.view
 
     ex = importlib.import_module(pkg + '.cph_extras')
+    _res = importlib.import_module(pkg + '.core.cph_resources')
 
     # Every file the Preferences entries name must exist in the package, and
-    # the command must hand edit_settings / open_file something the OS can
-    # resolve. The v2.4.7 version passed a `Packages/<folder>/<file>` resource
-    # path, which edit_settings rejects with "The settings file ... could not
-    # be opened" - and no test had ever executed the command.
+    # the command must hand edit_settings a path that works for a zip install.
+    # The old code passed an absolute `Packages/<folder>/<file>` path, which
+    # does not exist when Package Control installs a .sublime-package zip.
     refs = []
 
     def _collect_refs(obj):
@@ -6424,53 +6448,83 @@ def main():
     check('no menu entry points at a file that is not in the package',
           not unresolved, repr(unresolved))
 
-    _keep_pp = getattr(_sub, 'packages_path', None)
-    _sub.packages_path = lambda: os.path.dirname(ROOT)
+    # `edit_settings` must never receive an absolute path under Packages/:
+    # Package Control installs a zip, where that path does not exist. The
+    # resource form `${packages}/<name>/<file>` resolves in both a folder and
+    # a zip. A README has no User override, so it is read with
+    # sublime.load_resource() and shown in a read-only scratch view.
+    _keep_base = _res.base_name
+    _keep_platform = getattr(_sub, 'platform', None)
+    _keep_load = _sub.load_resource
+    _sub.platform = lambda: 'linux'
     try:
         opener = ex.CphOpenPackageFileCommand.__new__(ex.CphOpenPackageFileCommand)
 
+        _res.base_name = 'Algorithm Competition Assistant.sublime-package'
+        _res.clear_cache()
         win = _RecWindow()
         opener.window = win
         opener.run(file='Algorithm Competition Assistant.sublime-settings',
                    edit_base=True)
         base = win.calls[-1][1].get('base_file', '')
-        check('edit_settings gets an OS-resolvable path, never Packages/...',
-              win.calls[-1][0] == 'edit_settings'
-              and not base.startswith('Packages/')
-              and os.path.isabs(base) and os.path.exists(base), repr(base))
-
-        win = _RecWindow()
-        opener.window = win
-        opener.run(file='README.md')
-        target = win.calls[-1][1].get('file', '')
-        check('open_file gets a readable path too',
-              win.calls[-1][0] == 'open_file'
-              and os.path.isabs(target) and os.path.exists(target), repr(target))
+        check('a zip install opens Settings through the ${packages} form',
+              len(win.calls) == 1 and win.calls[0][0] == 'edit_settings'
+              and base == ('${packages}/Algorithm Competition Assistant/'
+                           'Algorithm Competition Assistant.sublime-settings')
+              and '.sublime-package' not in base, repr(win.calls))
 
         win = _RecWindow()
         opener.window = win
         opener.run(file='Default ($platform).sublime-keymap', edit_base=True)
         keymap = win.calls[-1][1].get('base_file', '')
-        check('the $platform keymap name expands to a file that exists',
-              '$platform' not in keymap and os.path.exists(keymap), repr(keymap))
+        check('the $platform keymap name expands and keeps the resource form',
+              keymap == ('${packages}/Algorithm Competition Assistant/'
+                         'Default (Linux).sublime-keymap'), repr(keymap))
 
-        # Installed as a .sublime-package the file is not on disk at all, and
-        # Sublime still resolves the absolute path to the zip entry - so the
-        # answer must stay absolute and must never degrade to a resource path
-        # or an unexpanded ${packages} template.
-        _sub.packages_path = lambda: os.path.join(os.path.dirname(ROOT), 'nowhere')
+        _res.base_name = 'cph-by-chenkx'
+        _res.clear_cache()
         win = _RecWindow()
         opener.window = win
-        opener.run(file='README.md')
-        zipped = win.calls[-1][1].get('file', '')
-        check('a zip install still gets an absolute path, not a resource path',
-              os.path.isabs(zipped) and not zipped.startswith('Packages/')
-              and '${' not in zipped, repr(zipped))
+        opener.run(file='Algorithm Competition Assistant.sublime-settings',
+                   edit_base=True)
+        loose = win.calls[-1][1].get('base_file', '')
+        check('a folder install uses its real folder name in the same form',
+              loose == ('${packages}/cph-by-chenkx/'
+                        'Algorithm Competition Assistant.sublime-settings'),
+              repr(loose))
+
+        _res.base_name = 'Algorithm Competition Assistant.sublime-package'
+        _res.clear_cache()
+        seen = []
+
+        def _fake_load(path):
+            seen.append(path)
+            if path.endswith('README_CN.md'):
+                return '# manual\n'
+            return ''
+
+        _sub.load_resource = _fake_load
+        win = _RecWindow()
+        opener.window = win
+        opener.run(file='README_CN.md')
+        check('a zip README opens from load_resource as a scratch view',
+              win.calls == [] and win.view is not None
+              and win.view.text == '# manual\n'
+              and win.view.scratch is True
+              and win.view.read_only is True
+              and win.view.name == 'README_CN.md'
+              and win.view.syntax_file
+              == 'Packages/Markdown/Markdown.sublime-syntax'
+              and seen == ['Packages/Algorithm Competition Assistant/README_CN.md'],
+              repr((win.calls, getattr(win.view, 'text', None), seen)))
     finally:
-        if _keep_pp is None:
-            del _sub.packages_path
+        if _keep_platform is None:
+            del _sub.platform
         else:
-            _sub.packages_path = _keep_pp
+            _sub.platform = _keep_platform
+        _sub.load_resource = _keep_load
+        _res.base_name = _keep_base
+        _res.clear_cache()
 
     # Doctor's probe section: it runs on a worker thread, where a raise would
     # end the section without any visible cause.
@@ -6945,36 +6999,22 @@ def main():
     _keep_base = _res.base_name
     try:
         _res.base_name = 'Algorithm Competition Assistant.sublime-package'
-        _keep_pp = getattr(_sub, 'packages_path', None)
-        # The fake packages root has to be absolute *on the host running this*:
-        # a Windows-shaped root on Linux/macOS is a relative path there, which
-        # made the assertion below a property of the runner instead of the code
-        # and turned the job red while the product was fine.
-        _fake_packages = (r'D:\Sublime Text\Data\Packages' if os.name == 'nt'
-                          else '/tmp/Sublime Text/Data/Packages')
-        _sub.packages_path = lambda: _fake_packages
-        try:
-            res_path = _res.package_resource_path('Highlight/test_config.html')
-            file_path = _res.package_file_path(
-                'Algorithm Competition Assistant.sublime-settings')
-            check('a zip install builds resource paths without the suffix',
-                  '.sublime-package' not in res_path
-                  and res_path.startswith('Packages/Algorithm Competition Assistant/'),
-                  repr(res_path))
-            _want_file = os.path.join(
-                _fake_packages, 'Algorithm Competition Assistant',
-                'Algorithm Competition Assistant.sublime-settings')
-            check('a zip install builds edit_settings paths without the suffix',
-                  '.sublime-package' not in file_path
-                  and os.path.normpath(file_path) == os.path.normpath(_want_file),
-                  repr(file_path))
-        finally:
-            if _keep_pp is None:
-                del _sub.packages_path
-            else:
-                _sub.packages_path = _keep_pp
+        _res.clear_cache()
+        res_path = _res.package_resource_path('Highlight/test_config.html')
+        edit_path = _res.package_variable_path(
+            'Algorithm Competition Assistant.sublime-settings')
+        check('a zip install builds resource paths without the suffix',
+              '.sublime-package' not in res_path
+              and res_path.startswith('Packages/Algorithm Competition Assistant/'),
+              repr(res_path))
+        check('a zip install builds edit_settings paths as a resource form',
+              '.sublime-package' not in edit_path
+              and edit_path == ('${packages}/Algorithm Competition Assistant/'
+                                'Algorithm Competition Assistant.sublime-settings'),
+              repr(edit_path))
     finally:
         _res.base_name = _keep_base
+        _res.clear_cache()
 
     check('the panel resources use the stripped name, not the folder name',
           'package_name' in open(os.path.join(ROOT, 'test_manager.py'),

@@ -268,6 +268,11 @@ files`（或命令面板搜 `file`，也可以按住快捷键以外的入口—�
 
 装完即生效，无需重启，日后升级用 `Package Control: Upgrade Package`。
 
+**配置 Package Control 安装。** Package Control 装的是 zip，`Packages/` 下没有插件文件夹，不用去找目录。
+用 `Preferences → Package Settings → Algorithm Competition Assistant → Settings`：左边是只读默认值，右边是可编辑的
+`Packages/User/Algorithm Competition Assistant.sublime-settings`，保存后升级不丢。同一个子菜单里的 Key Bindings、
+TestSyntax Settings 和两份 README 也能直接打开。
+
 ⚠️ 两种方式**不要同时用**，而且这里有个坑值得单独讲：Package Control 装的是
 `Installed Packages/…sublime-package`（zip）。如果 `Packages/` 下同时有一个同名文件夹，
 安装/升级 zip 版的那一步会把**那个文件夹清空**——v2.5.0 之前这件事发生的时候一点动静都没有，

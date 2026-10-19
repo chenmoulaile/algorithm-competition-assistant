@@ -557,6 +557,11 @@ STRINGS = {
         'zh': '设置已加载',
         'en': 'settings loaded',
     },
+    'package_file_unreadable': {
+        'zh': '无法读取包内文件 {file}（安装包可能不完整，或资源名不对）',
+        'en': 'could not read the package file {file} (damaged package or '
+              'wrong resource name)',
+    },
     'auto_run_failed': {
         'zh': '保存后自动运行失败：{reason}',
         'en': 'auto-run on save failed: {reason}',

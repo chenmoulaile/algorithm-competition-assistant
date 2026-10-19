@@ -17,7 +17,7 @@ from .core.cph_calibrate import (format_report as calibrate_report,
 from .core.cph_fetch import (describe_samples, fetch, looks_like_url, samples,
 							 statement, summarize, title_of)
 from .core.cph_i18n import t
-from .core.cph_resources import package_file_path
+from .core.cph_resources import package_variable_path, read_resource
 from .core.cph_settings import get_settings
 from .core.cph_stats import (record_run, reset as stats_reset,
 							 summary_localized as stats_summary_localized)
@@ -337,14 +337,14 @@ _PLATFORM_FILE = {'windows': 'Windows', 'linux': 'Linux', 'osx': 'OSX'}
 class CphOpenPackageFileCommand(sublime_plugin.WindowCommand):
 	"""Open one of this package's own files (settings, README, keymaps).
 
-	The Preferences entries used to spell their paths as
-	${packages}/Algorithm Competition Assistant/..., which only resolves when
-	the installed folder carries the display name. Package Control renames it
-	on install; a manual install under the repository name opened a file that
-	does not exist. The path is built from the directory the package really
-	lives in instead, through package_file_path - edit_settings rejects a
-	`Packages/...` resource path outright and answers "The settings file ...
-	could not be opened", so it needs an OS-resolvable one.
+	Package Control installs this package as a `.sublime-package` zip under
+	Installed Packages/, so the file has no OS path under Packages/ at all.
+	Settings and keymaps therefore go to `edit_settings` as the resource form
+	`${packages}/<package>/<file>` - the same form Sublime's own packages and
+	Package Control use - which resolves inside the zip too. A README has no
+	User override; it is read with sublime.load_resource() and shown as a
+	read-only scratch view, because open_file cannot reach a file that only
+	exists inside the archive.
 	"""
 
 	def run(self, file, edit_base=False, default=None):
@@ -352,12 +352,30 @@ class CphOpenPackageFileCommand(sublime_plugin.WindowCommand):
 		if '$platform' in name:
 			platform = sublime.platform()
 			name = name.replace('$platform', _PLATFORM_FILE.get(platform, platform))
-		target = package_file_path(name)
 		if edit_base:
 			self.window.run_command('edit_settings', {
-				'base_file': target,
+				'base_file': package_variable_path(name),
 				'default': default or '{\n\t$0\n}\n',
 			})
 		else:
-			self.window.run_command('open_file', {'file': target})
+			self._open_resource(name)
+
+	def _open_resource(self, name):
+		"""A README has no User file to pair with; read it from the package."""
+		text = read_resource(name, use_cache=False)
+		if not text:
+			sublime.status_message(t('package_file_unreadable', file=name))
+			return
+		view = self.window.new_file()
+		if view is None:
+			return
+		view.run_command('append', {'characters': text})
+		view.set_scratch(True)
+		view.set_read_only(True)
+		view.set_name(name)
+		if name.lower().endswith('.md'):
+			try:
+				view.set_syntax_file('Packages/Markdown/Markdown.sublime-syntax')
+			except Exception:
+				pass
 

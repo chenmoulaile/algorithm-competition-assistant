@@ -8,6 +8,9 @@ FileNotFoundError —— 卡片、详情、编译错误面板全部渲染失败�
 sublime.load_resource() 在 zip 内同样可用，所以所有资源读取都走这里，
 并按资源名做进程内缓存（原来每张卡片每次刷新都重新读盘 + 读一次 CSS）。
 缓存由 plugin_init 在插件重载时清空。
+
+`edit_settings` 也一样：它要的是 `${packages}/<包名>/<文件>` 这种资源形式。
+绝对路径只有散装文件夹安装才存在，zip 安装里那个目录根本不存在。
 """
 
 import sublime
@@ -33,20 +36,18 @@ def package_resource_path(rel_path):
 	return 'Packages/%s/%s' % (resource_dir(), rel_path)
 
 
-def package_file_path(rel_path):
-	"""A path `edit_settings` / `open_file` can actually resolve.
+def package_variable_path(rel_path):
+	"""The `base_file` form `edit_settings` resolves in both install shapes.
 
-	`Packages/<pkg>/<file>` is a *resource* path: load_resource accepts it,
-	edit_settings does not - it hands the string to the OS and answers "The
-	settings file ... could not be opened". Sublime's own packages therefore
-	pass an absolute path under the Packages directory, and that form resolves
-	for both layouts, provided the package name carries no .sublime-package
-	suffix (see package_name_for).
+	Package Control installs this package as a `.sublime-package` zip, so the
+	file is not at an OS path under Packages/ at all - `open_file` on such a
+	path answers "The settings file ... could not be opened". Sublime's own
+	packages and Package Control pass `${packages}/<package>/<file>` here; the
+	resource layer resolves that inside the zip as well as in a loose folder.
+	The package component must carry no .sublime-package suffix (see
+	package_name_for).
 	"""
-	try:
-		return path.join(sublime.packages_path(), resource_dir(), rel_path)
-	except Exception:
-		return package_resource_path(rel_path)
+	return '${packages}/%s/%s' % (resource_dir(), rel_path)
 
 
 def read_resource(rel_path, use_cache=True):

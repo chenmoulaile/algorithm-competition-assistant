@@ -5,6 +5,35 @@
 
 ---
 
+# v2.9.1
+
+**修好 Package Control zip 安装下设置、快捷键和 README 打不开的问题：改用 Sublime 自己的 `${packages}` 资源形式，不再拼一个 zip 里根本不存在的绝对路径。**
+
+## 修复
+
+- **安装后 `Preferences -> Package Settings -> Algorithm Competition Assistant -> Settings` 报
+  "The settings file ... could not be opened"。** Package Control 装的是
+  `Installed Packages/Algorithm Competition Assistant.sublime-package`（zip），`Packages/` 下根本没有同名
+  文件夹；旧代码却把 `sublime.packages_path()` 拼出的绝对路径交给 `edit_settings`。v2.4.9-v2.4.11 那轮
+  "改成真实目录"只对文件夹安装成立，zip 安装里那个路径从不存在，所以设置、Key Bindings、TestSyntax
+  Settings 和两份 README 全部打不开。
+- **设置与快捷键改用 `${packages}/<包名>/<文件>`。** 这是 Sublime 自带包和 Package Control 自己菜单在用的
+  资源形式，文件夹安装与 zip 安装都能解析；包名仍由 `package_name_for()` 去掉 `.sublime-package` 后缀。
+  `Settings` 恢复标准分栏：左边只读默认值，右边
+  `Packages/User/Algorithm Competition Assistant.sublime-settings`，保存后升级不丢配置。
+- **README 不再走 `open_file`。** README 只存在于包内，没有对应的 User 文件；现在用
+  `sublime.load_resource()` 读出来，放进只读 scratch 视图，标题保持文件名，Markdown 仍然有语法高亮。
+  读取失败会在状态栏说明，不再弹一个空视图。
+- **Key Bindings、TestSyntax Settings 和两份 README 一起修好**，文件夹安装与 zip 安装行为一致。
+
+## 说明
+
+- 旧测试断言 `base_file` 必须是"绝对路径且文件存在"——那正是 bug 本身：它按源码文件夹跑，从来没模拟过
+  Package Control 的 zip。新测试模拟 zip 安装，断言 `${packages}/<包名>/...`、不含
+  `.sublime-package`，并真的执行 README 命令，用假的 `load_resource` 检查正文、只读、scratch 和标题。
+- 没有加 `.no-sublime-package`：让 Package Control 继续按官方形式装 zip，改用正确的资源路径，而不是逼
+  用户换安装方式。
+
 # v2.9.0
 
 **详情页把你早就有、但被扔掉的那些数字说出来；颜色回来但一个字节都没动缓冲区；顺手修掉两处"一直在量错东西"。**
