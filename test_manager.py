@@ -2656,7 +2656,14 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			window.set_view_index(detail_view, 1, 1)
 			detail_view.set_name(name)
 			detail_view.set_scratch(True)
-			detail_view.run_command('set_setting', {'setting': 'word_wrap', 'value': False})
+			# Wrapping ON, for the card, not for the text: minihtml lays a
+			# block phantom out at the viewport width only while wrapping is
+			# enabled. With it off, every card shrank to the width of its own
+			# chips - a small cluster floating in the middle of the page
+			# instead of the full-width bar the run panel draws, which is the
+			# one thing that made the detail page look unlike the run panel.
+			# Long output lines now wrap; the run panel already does the same.
+			detail_view.run_command('set_setting', {'setting': 'word_wrap', 'value': True})
 			detail_view.run_command('set_setting', {'setting': 'fold_buttons', 'value': False})
 		# Deliberately NO custom syntax here: the detail stays plain text
 		# (default syntax). Per user feedback the syntax-based coloring was
@@ -3135,6 +3142,19 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		if fit_px <= viewport_px <= fit_px + 4 * em:
 			return  # inside the dead band: no change worth a relayout
 		want_px = fit_px if viewport_px < fit_px else fit_px + 2 * em
+
+		# The detail page shares this column. While it is the tab in front,
+		# the column is not narrowed to the run panel's card width: the page
+		# is being read, and a relayout under the reader is worse than a
+		# column that is wider than the cards need. Widening stays allowed.
+		if want_px < viewport_px:
+			try:
+				active = w.active_view()
+				group = w.active_group()
+			except Exception:
+				active, group = None, None
+			if active is not None and active is not v and group == 1:
+				return
 
 		# The window's own width, derived from the panel's current share: the
 		# layout fractions are relative to it, and viewport_extent() only

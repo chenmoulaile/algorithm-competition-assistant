@@ -8027,9 +8027,11 @@ def main():
     # the real auto_fit_panel_width against a fake window that records
     # set_layout, and against a view whose viewport follows the column.
     class _FitWindow(object):
-        def __init__(self, cols):
+        def __init__(self, cols, active=None, group=0):
             self.cols = list(cols)
             self.calls = []
+            self._active = active
+            self._group = group
 
         def get_layout(self):
             return {'cols': list(self.cols), 'rows': [0, 1],
@@ -8038,6 +8040,12 @@ def main():
         def set_layout(self, layout):
             self.calls.append(list(layout['cols']))
             self.cols = list(layout['cols'])
+
+        def active_view(self):
+            return self._active
+
+        def active_group(self):
+            return self._group
 
     class _FitView(_sub_mod.View):
         def __init__(self, window, window_px=1200.0, em=8.0):
@@ -8163,6 +8171,41 @@ def main():
           'wide=%.0f ascii=%.0f'
           % (tm.estimate_panel_width_px(_cjk_view, ((u'\u6d4b\u8bd5',),)),
              tm.estimate_panel_width_px(_cjk_view, (('ab',),))))
+
+    # --- the detail page shares the column, so it is not squeezed ----------
+    # A detail tab sits in the run panel's group. Narrowing the column to the
+    # card width while that tab is in front relayouts the page under the
+    # reader (and minihtml re-wraps every line of it), so the fit leaves it
+    # alone - widening is still allowed, and so is narrowing while the -run
+    # view itself is the tab in front.
+    _detail_ish = _sub_mod.View()
+    win_reading = _FitWindow([0, 0.4, 1], active=_detail_ish, group=1)
+    _fit_manager(win_reading, [_fit_card]).auto_fit_panel_width()
+    check('a column showing a detail page is not narrowed under the reader',
+          win_reading.calls == [], 'calls=%r' % (win_reading.calls,))
+    win_reading_panel = _FitWindow([0, 0.4, 1], group=1)
+    _reading_mgr = _fit_manager(win_reading_panel, [_fit_card])
+    win_reading_panel._active = _reading_mgr.view
+    _reading_mgr.auto_fit_panel_width()
+    check('the same column narrows while the run panel is the tab in front',
+          len(win_reading_panel.calls) == 1,
+          'calls=%r' % (win_reading_panel.calls,))
+    # a too-narrow column still widens even with a detail page in front
+    win_tight = _FitWindow([0, 0.68, 1], active=_detail_ish, group=1)
+    _fit_manager(win_tight, [_fit_card]).auto_fit_panel_width()
+    check('a detail page in front does not stop the column widening',
+          len(win_tight.calls) == 1 and win_tight.calls[0][1] < 0.68,
+          'calls=%r' % (win_tight.calls,))
+
+    # The card bar spans the column only while the view wraps: minihtml lays
+    # a block phantom out at the viewport width when word_wrap is on, and at
+    # the content width when it is off - which shrank every detail card to
+    # the width of its own chips.
+    _tm_src_fit = io.open(os.path.join(ROOT, 'test_manager.py'),
+                          encoding='utf-8').read()
+    check('the detail view wraps so its cards span the column',
+          "'setting': 'word_wrap', 'value': True" in _tm_src_fit
+          and "'setting': 'word_wrap', 'value': False" not in _tm_src_fit)
 
     # The manual described the widen-only behaviour, and a manual that still
     # says "never narrows" after the code learned to narrow is worse than none.

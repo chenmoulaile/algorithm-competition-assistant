@@ -1,0 +1,31 @@
+Algorithm Competition Assistant 3.0.2
+=====================================
+
+One defect, and it was the visible half of 3.0.1's detail cards: the card row
+was drawn as a small cluster of chips in the middle of the page instead of the
+full-width bar the run panel draws.
+
+The detail card now spans the page
+
+* minihtml lays a block phantom out at the VIEWPORT width only while the view
+  wraps. With word_wrap off, every detail card was sized to its own chips -
+  "Input | fold | copy | 2 lines / 340 bytes" stopped after the last chip and
+  the rest of the row was empty page. The detail view is created with wrapping
+  on now, so a card is the same full-width bar as a run panel card, with the
+  chips at its left edge.
+* Long lines in the detail body wrap instead of scrolling sideways. That is
+  the same choice the run panel has always made for the same text, and it is
+  what makes the card span the column in the first place.
+* The fold/copy chips, the no-arrow rule and the "value inside its own chip"
+  shape from 3.0.1 are unchanged; only the width of the bar was wrong.
+
+The column is not narrowed under a reader
+
+* A detail page shares the run panel's column. 3.0.1's new narrowing would
+  relayout that column (and re-wrap every line of the page) while a detail tab
+  was the one in front. The fit now leaves the column alone whenever a view
+  other than the run panel is the tab in front of that group. Widening is
+  still allowed, and narrowing still happens when the run panel is showing.
+
+Regression suite: 980 -> 984 checks (the wrap rule and the three narrowing
+cases around a detail page in front).
