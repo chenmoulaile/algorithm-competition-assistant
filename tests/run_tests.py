@@ -7653,13 +7653,25 @@ def main():
 
     # --- P1-4: looks_like_crash scans a window, signatures still seen ---
     clean = ('x' * 127 + '\n') * 8200          # ~1.04 MB of innocent output
-    t0 = time.time()
     result_clean = verdict_mod.looks_like_crash(clean)
-    scan_ms = (time.time() - t0) * 1000.0
     check('looks_like_crash: 1 MB of clean output is not a crash',
           result_clean is False)
-    check('looks_like_crash: the window keeps the scan fast',
-          scan_ms < 20.0, '%.1f ms' % scan_ms)
+    # The property is "the cost does not grow with the output", not "under
+    # 20 ms": an absolute budget is a property of the runner, and it went red
+    # on the macOS runners twice (57 ms for a scan that takes 5 ms here) with
+    # nothing changed in the scan. Warm up once - the first call pays the
+    # regex setup - then compare 1 MB against 4 MB: a scan that looked at the
+    # whole stream would be four times slower, a windowed one is the same.
+    verdict_mod.looks_like_crash(clean[:20000])
+    _t0 = time.time()
+    verdict_mod.looks_like_crash(clean)
+    _one_mb_ms = (time.time() - _t0) * 1000.0
+    _t0 = time.time()
+    verdict_mod.looks_like_crash(clean * 4)
+    _four_mb_ms = (time.time() - _t0) * 1000.0
+    check('looks_like_crash: the scan stays flat as the output grows',
+          _four_mb_ms < _one_mb_ms * 3.0 + 15.0,
+          '1 MB %.1f ms, 4 MB %.1f ms' % (_one_mb_ms, _four_mb_ms))
     check('looks_like_crash: a traceback at the head is still detected',
           verdict_mod.looks_like_crash(
               'Traceback (most recent call last)' + chr(10) + clean[:70000]))

@@ -19,13 +19,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            # 2026-10-25: GitHub's ubuntu-24.04 runner stopped provisioning
-            # Python 3.8 — the old-interpreter slot died inside setup-python
-            # itself six days after it had run green on the same matrix
-            # (v2.9.1). 3.9 is still provisioned there.
+          # The distro is pinned, not `-latest`: `ubuntu-latest` moved to
+          # Ubuntu 26.04 and setup-python has no 3.9 build for it ("The
+          # version '3.9' with architecture 'x64' was not found for Ubuntu
+          # 26.04"), so the old-interpreter slot died inside setup-python
+          # again - the second time in a week, after 3.8 vanished from 24.04.
+          # A floating image is not a test of this package.
+          - os: ubuntu-24.04
             python-version: '3.9'
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             python-version: '3.12'
           # memprobe / terminate / _needs_shell / taskkill are platform
           # branches, so they need real Windows and macOS runners too.
