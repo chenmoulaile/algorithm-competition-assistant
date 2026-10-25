@@ -35,7 +35,7 @@ after VSCode's [cph-ng](https://github.com/langningchen/cph-ng), and the Competi
 | Chinese / English UI | ❌ | ✅ |
 | Run panel auto-fit width | ❌ | ✅ widens itself when the cards no longer fit |
 
-Engineering: Python 3.3 plugin-host compatibility, four-platform CI (Linux 3.8/3.12 + Windows + macOS), and a regression suite guarding the shipped behaviour.
+Engineering: Python 3.3 plugin-host compatibility, four-platform CI (Linux 3.9/3.12 + Windows + macOS), and a regression suite guarding the shipped behaviour.
 
 ## Install
 

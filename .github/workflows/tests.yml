@@ -20,7 +20,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            python-version: '3.8'
+            # 2026-10-25: GitHub's ubuntu-24.04 runner stopped provisioning
+            # Python 3.8 — the old-interpreter slot died inside setup-python
+            # itself six days after it had run green on the same matrix
+            # (v2.9.1). 3.9 is still provisioned there.
+            python-version: '3.9'
           - os: ubuntu-latest
             python-version: '3.12'
           # memprobe / terminate / _needs_shell / taskkill are platform
