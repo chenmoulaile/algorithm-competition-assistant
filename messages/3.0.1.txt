@@ -1,0 +1,50 @@
+Algorithm Competition Assistant 3.0.1
+=====================================
+
+Two things that looked wrong next to the original plugin: the detail page's
+cards were a shape of their own, and the run panel never gave back the width
+it had taken.
+
+The detail cards are the run panel's cards
+
+* A detail card is now exactly the row the -run panel draws: one .panel line of
+  chips - the section name, fold/unfold, copy, and the "12 lines / 340 bytes"
+  value INSIDE a chip of its own. It used to put the value on the panel as bare
+  text with no background, so the row read as one chip followed by loose words.
+* The arrow is gone. It was the only element the run card never had, it sat in
+  a proportional font where a triangle glyph has nothing to align to, and the
+  fold/unfold chip already spells the state out in words.
+* Nothing else about the view changed: the body is still real text (selectable,
+  copyable, a paste gives exactly what is on screen), folding still erases the
+  block's lines and writes them back, and detail_rich=false still restores the
+  card-free, colour-free page.
+
+The panel is fitted in both directions
+
+* auto_fit_panel_width used to widen only ("never shrink"). A panel that one
+  long compile command or one wide card had pushed open stayed open for the
+  rest of the session, leaving a slab of panel background to the right of every
+  short card row. It now narrows again when the content needs less.
+* What is measured is every chip row that cannot wrap: the compile chip
+  ("compile skipped (cache hit)", "compile error", "compile warning", the
+  benchmark report), each test card, and the "next test" chip. Compiler
+  diagnostics, the summary bar and the test input/output are flowing text -
+  they wrap between words, so counting them would keep the panel as wide as the
+  longest line of a 20 KB sample.
+* A dead band keeps the two directions from fighting: the panel widens when it
+  is narrower than needed + 4 em, narrows when it is wider than needed + 8 em,
+  and does nothing in between. Both targets land inside the band, so one
+  measurement settles and the next one has nothing to do - no relayout loop.
+* The column never exceeds max_panel_width_ratio (default half the window) and
+  never collapses below 8% of it.
+
+Also
+
+* The compile chip's text is remembered for the measurement and cleared when
+  the chip is cleared, so a finished run stops reserving width for a bar that
+  is no longer on screen.
+* A set_layout that raised is no longer remembered as applied - the retry used
+  to be suppressed for the rest of the session.
+
+Regression suite: 956 -> 978 checks (the card shape, the narrowing, the dead
+band, the floor and the ceiling, and the switches that turn it off).

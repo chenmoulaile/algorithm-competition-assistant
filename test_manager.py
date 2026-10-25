@@ -368,6 +368,67 @@ def _label_prefixed(value, key):
 	return t(key) + ':&nbsp;' + value
 
 
+def _row_font_metrics(view):
+	"""(em, full_width_char_px) for the view's phantom font.
+
+	minihtml phantoms inherit the view font, so em_width is the base unit for
+	ASCII. A CJK character is about font_px wide - wider than one em at the
+	default 10 pt - and counting it as such is what stops a Chinese card row
+	from being measured too narrow (which, now that the panel also NARROWS to
+	its measurement, would wrap a chip).
+	"""
+	try:
+		em = view.em_width()
+	except Exception:
+		em = 0
+	if not em or em <= 0:
+		return 0.0, 0.0
+	try:
+		scale = sublime.scale_factor()
+	except Exception:
+		scale = 1.0
+	font_pt = view.settings().get('font_size')
+	if not font_pt:
+		font_pt = sublime.load_settings('Preferences.sublime-settings').get('font_size', 10)
+	font_px = font_pt * 4.0 / 3.0
+	return em, font_px * 1.05 * scale
+
+
+def _widest_row_px(view, rows, badge=False):
+	"""Widest one-line chip row in `rows`, in device px (0 when unmeasurable).
+
+	`rows` holds tuples of segment strings, one tuple per row. `badge` adds
+	the verdict badge the run panel's test cards carry; a row that has none
+	(the compile chip, the 'next test' chip) must not be charged for it.
+	"""
+	em, wide_px = _row_font_metrics(view)
+	if not em:
+		return 0.0
+	try:
+		scale = sublime.scale_factor()
+	except Exception:
+		scale = 1.0
+
+	widest = 0.0
+	for segments in rows:
+		ascii_n = 0
+		wide_n = 0
+		for seg in segments:
+			a, w = _count_text_units(seg)
+			ascii_n += a
+			wide_n += w
+		ascii_n += 6  # single space between the inline <a> buttons
+
+		width = ascii_n * em + wide_n * wide_px
+		if badge:
+			# verdict badge: 10px monospace bold, up to 3 chars + padding + margin
+			width += (3 * 10 * 0.65 + 3 + 2) * scale
+		# 1px padding around each of the ~6 buttons + block spacing (CSS px)
+		width += (6 * 2 + 8) * scale
+		widest = max(widest, width * 1.08)
+	return widest
+
+
 def estimate_card_width_px(view, with_memory=False, rows=None):
 	"""
 	Rough estimate of the rendered width (device px) of the widest row of a
@@ -383,21 +444,6 @@ def estimate_card_width_px(view, with_memory=False, rows=None):
 	panel twice as wide as most problems ever need). Without it the old
 	worst-case row is used, which stays the safe fallback.
 	"""
-	try:
-		em = view.em_width()
-	except Exception:
-		em = 0
-	if not em or em <= 0:
-		return 0
-	try:
-		scale = sublime.scale_factor()
-	except Exception:
-		scale = 1.0
-	font_pt = view.settings().get('font_size')
-	if not font_pt:
-		font_pt = sublime.load_settings('Preferences.sublime-settings').get('font_size', 10)
-	font_px = font_pt * 4.0 / 3.0
-
 	# The value carries its unit (ms / MB), so the card shows no "time:" /
 	# "mem:" label unless the user turned the labels back on.
 	if rows is None:
@@ -410,24 +456,18 @@ def estimate_card_width_px(view, with_memory=False, rows=None):
 			else:
 				row[-1] = ' ' + t('time') + ':&nbsp;9999ms '
 		rows = (tuple(row),)
+	return _widest_row_px(view, rows, badge=True)
 
-	widest = 0.0
-	for segments in rows:
-		ascii_n = 0
-		wide_n = 0
-		for seg in segments:
-			a, w = _count_text_units(seg)
-			ascii_n += a
-			wide_n += w
-		ascii_n += 6  # single space between the inline <a> buttons
 
-		width = ascii_n * em + wide_n * font_px * 1.05 * scale
-		# verdict badge: 10px monospace bold, up to 3 chars + padding + margin
-		width += (3 * 10 * 0.65 + 3 + 2) * scale
-		# 1px padding around each of the ~6 buttons + block spacing (CSS px)
-		width += (6 * 2 + 8) * scale
-		widest = max(widest, width * 1.08)
-	return widest
+def estimate_panel_width_px(view, rows):
+	"""Widest chip row the run panel itself has to lay out on one line.
+
+	Same estimator as the cards, minus the verdict badge: this feeds a width
+	that is applied in BOTH directions, so a row that does not carry a badge
+	must not be charged for one (an inflated measurement would keep the panel
+	from ever narrowing to what it actually shows).
+	"""
+	return _widest_row_px(view, rows, badge=False)
 
 
 #: The run() branches that actually write the panel buffer (directly or via
@@ -2985,13 +3025,68 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				self._fit_dirty = False
 				self.schedule_auto_fit_panel_width()
 
+	#: The narrowest the run panel may be squeezed to, as a fraction of the
+	#: window layout. A panel that fits one short card is still ~20 em wide;
+	#: this only stops a degenerate measurement from collapsing the column.
+	_MIN_PANEL_FRAC = 0.08
+
+	def _panel_chip_rows(self):
+		"""Every chip row the run panel has to lay out on ONE line.
+
+		The compile chip, the test cards and the 'next test' chip cannot wrap
+		without breaking a chip in half, so they decide the panel width. The
+		compiler diagnostics, the summary bar and the test input/output text
+		are flowing text: they wrap between words, so counting them would keep
+		the panel as wide as the longest line of a 20 KB sample - the very
+		empty strip this measurement exists to remove.
+		"""
+		rows = []
+		chip = getattr(self, '_compile_chip_text', '') or ''
+		if chip:
+			rows.append((' ' + chip + ' ',))
+		# The full card row is measured even while a test is running (when the
+		# card is temporarily the much narrower 'test N / stop' row): the
+		# steady state is the one that must fit, or the panel would jump every
+		# time a run starts and ends.
+		tester = getattr(self, 'tester', None)
+		if tester is not None and getattr(tester, 'tests', None):
+			for i, card in enumerate(tester.tests):
+				segs = [' ' + t('test_label') + ' ' + str(i + 1) + ' ',
+						' ' + t('edit') + ' ',
+						' ' + t('run') + ' ',
+						' ' + t('detail') + ' ']
+				runtime = card.get_nice_runtime().replace('&nbsp;', ' ').strip()
+				if runtime == '-':
+					runtime = '0ms'
+				segs.append(' ' + _label_prefixed(runtime, 'time') + ' ')
+				if card.memory not in ('-', None):
+					memory = card.get_nice_memory().replace('&nbsp;', ' ')
+					segs.append(' ' + _label_prefixed(memory, 'memory') + ' ')
+				rows.append(tuple(segs))
+		# Always present when the panel is not mid-run, and the only row an
+		# empty panel has: without it a fresh -run view measured 0 and the
+		# column would be squeezed to the floor.
+		rows.append((' ' + t('next_test') + ' ',))
+		return rows
+
 	def auto_fit_panel_width(self):
 		"""
-		Widen the run panel group until the widest test card fits on a
-		single line (buttons no longer stack / wrap), capped at
-		'max_panel_width_ratio' of the window layout (default: 1/2).
-		Only ever widens the panel, never shrinks it, and only touches the
-		standard two-group layout.
+		Fit the run panel group to the cards it currently shows: widen it when
+		a chip row would wrap, and NARROW it when the panel is wider than the
+		widest row needs.
+
+		It used to widen only ('never shrink'). A panel that one long compile
+		command or one wide card had pushed open therefore stayed open for the
+		rest of the session, leaving a slab of panel background to the right of
+		every short card row - the empty strip in the screenshot that prompted
+		this. The panel is a column of the window layout, so the only way to
+		remove that strip is to give the column back.
+
+		A dead band keeps the two directions from fighting each other: widen
+		when the viewport is narrower than needed + 4 em, narrow when it is
+		wider than needed + 8 em, do nothing in between. Both targets land
+		INSIDE the band (fit, or fit + 2 em), so one measurement settles and the
+		next one has nothing to do - no relayout loop, no visible flicker.
 		"""
 		v = self.view
 		w = v.window()
@@ -3016,8 +3111,6 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		if len(cols) != 3 or not cells:
 			return  # only adjust the standard two-group layout
 		panel_frac = 1.0 - cols[1]
-		if panel_frac >= max_ratio - 1e-4:
-			return  # panel already at the configured maximum
 		try:
 			viewport_px = v.viewport_extent()[0]
 		except Exception:
@@ -3025,53 +3118,38 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		if viewport_px <= 0:
 			return
 
-		with_memory = False
-		rows = None
-		tester = self.tester
-		if tester is not None and getattr(tester, 'tests', None):
-			# Measure the cards that ARE there, not the worst case a card
-			# could ever show: a 6-digit runtime and an 8-char memory chip on
-			# every row made the panel twice as wide as most problems need.
-			# The panel only ever widens, so a longer verdict later re-fits.
-			rows = []
-			for i, card in enumerate(tester.tests):
-				segs = [' ' + t('test_label') + ' ' + str(i + 1) + ' ',
-						' ' + t('edit') + ' ',
-						' ' + t('run') + ' ',
-						' ' + t('detail') + ' ']
-				runtime = card.get_nice_runtime().replace('&nbsp;', ' ').strip()
-				if runtime == '-':
-					runtime = '0ms'
-				segs.append(' ' + _label_prefixed(runtime, 'time') + ' ')
-				if card.memory not in ('-', None):
-					with_memory = True
-					memory = card.get_nice_memory().replace('&nbsp;', ' ')
-					segs.append(' ' + _label_prefixed(memory, 'memory') + ' ')
-				rows.append(tuple(segs))
-
-		needed = estimate_card_width_px(v, with_memory, rows=rows)
+		needed = estimate_panel_width_px(v, self._panel_chip_rows())
 		if needed <= 0:
 			return
 		try:
 			em = v.em_width()
 		except Exception:
 			em = 0
-		# Allowance for gutter + phantom margins so we err on the wide side
-		if viewport_px - 4 * em >= needed:
-			return  # cards already fit on one line
+		if not em or em <= 0:
+			return
 
+		# `needed` is text width only; the gutter and the phantom's own block
+		# margins are not in it, so the width the content actually wants is
+		# needed + 4 em (the same allowance the widen-only version used).
+		fit_px = needed + 4 * em
+		if fit_px <= viewport_px <= fit_px + 4 * em:
+			return  # inside the dead band: no change worth a relayout
+		want_px = fit_px if viewport_px < fit_px else fit_px + 2 * em
+
+		# The window's own width, derived from the panel's current share: the
+		# layout fractions are relative to it, and viewport_extent() only
+		# knows the panel's text area.
 		layout_px = viewport_px / max(panel_frac, 0.05)
-		target_frac = min(max_ratio, needed / layout_px)
+		target_frac = min(max(want_px / layout_px, self._MIN_PANEL_FRAC), max_ratio)
 		target_col1 = 1.0 - target_frac
-		if target_col1 >= cols[1] - 1e-3:
-			return  # change too small or would only narrow - never shrink
+		if abs(target_col1 - cols[1]) < 1e-3:
+			return  # already there, or clamped at max_ratio
 		# Sub-pixel rounding made the target wobble by a fraction of a
 		# percent between refreshes; relayouting the whole window for that
 		# is what produced the visible stutter. Only a real change counts.
 		last = getattr(self, '_fit_last_cols1', None)
 		if last is not None and abs(target_col1 - last) < 0.01:
 			return
-		self._fit_last_cols1 = target_col1
 		try:
 			w.set_layout({
 				'cols': [cols[0], target_col1, cols[2]],
@@ -3079,7 +3157,10 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				'cells': cells,
 			})
 		except Exception:
-			pass
+			# Not applied, so not remembered either: a remembered target that
+			# never reached the layout would suppress every retry.
+			return
+		self._fit_last_cols1 = target_col1
 
 
 	def new_test(self, edit):
@@ -3505,6 +3586,9 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		# was just erased, and a stale red "编译错误" over an empty panel reads
 		# as if the empty panel itself had failed to compile.
 		self.compile_phantom.update([])
+		# ... and its text, or the width measurement keeps reserving room for
+		# a chip nobody can see any more.
+		self._compile_chip_text = ''
 		if self.tester:
 			v.erase_regions('type')
 			for i in range(-1, self.tester.test_iter + 1):
@@ -3520,6 +3604,15 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		# it (and it is copyable there), showing it twice just pushed the
 		# test cards further down.
 		display = cmd if chip_text is None else chip_text
+		# What the chip actually says, kept for the panel width measurement:
+		# the chip is one of the rows that must not wrap, and the content of
+		# the last measurement is the only place that knows its text (a
+		# Phantom's contents cannot be read back). A multi-line note renders
+		# as several lines, so its longest one is what has to fit. An empty
+		# chip clears it, so a finished run stops reserving width for a bar
+		# that is gone.
+		_chip_lines = (display or '').splitlines() or ['']
+		self._compile_chip_text = max(_chip_lines, key=len).strip()
 		cmd_escaped = (display or '').replace('&', '&amp;') \
 			.replace('<', '&lt;').replace('>', '&gt;')
 
@@ -4561,14 +4654,25 @@ class CphTestDetailViewCommand(sublime_plugin.TextCommand):
 		self.set_marks(marks, hidden_lines=hidden)
 
 	def _card_phantom(self, one, style):
-		"""The card head of one block: title, fold toggle, copy action."""
+		"""The card head of one block, in the run panel's card shape.
+
+		The -run panel's card (Highlight/test_config.html) is one .panel row of
+		inline chips: an identity chip (.test), the action chips (.config), then
+		the measured value inside a .config chip. This card is the same row -
+		identity, fold, copy, and the "N lines / M bytes" value in a .config
+		chip - so the two surfaces read as one design. No arrow: the fold state
+		is already spelled out by the fold/unfold chip, and a triangle glyph in
+		a proportional font was the one element the run card never had.
+		"""
 		v = self.view
 		folded = one['id'] in self._folded
 		template = read_resource('Highlight/test_detail_card.html')
+		# The size chip keeps its spaces unbreakable, like the run card's
+		# "4&nbsp;MB": a chip that wraps in half reads as two chips.
+		meta = esc(one['meta'] or '').replace(' ', '&nbsp;')
 		content = template.format(
 			title=esc(one['title'] or one['id']),
-			arrow='&#9656;' if folded else '&#9662;',
-			meta=esc(one['meta'] or ''),
+			meta=meta,
 			meta_display='inline' if one['meta'] else 'none',
 			fold_label=(t('detail_unfold') if folded else t('detail_fold')),
 			fold_href='detail-fold-%s' % one['id'],

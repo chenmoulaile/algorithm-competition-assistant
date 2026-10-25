@@ -33,7 +33,7 @@ after VSCode's [cph-ng](https://github.com/langningchen/cph-ng), and the Competi
 | **File input/output (NOI / CSP-S `freopen` problems)** | ❌ pipes only | ✅ per-problem file names, samples written to a temporary directory, the answer read back from the file your program writes |
 | Persistent Competitive Companion listener | ⚠️ needs the Hook | ✅ listens from startup, creates a file per problem |
 | Chinese / English UI | ❌ | ✅ |
-| Run panel auto-fit width | ❌ | ✅ widens itself when the cards no longer fit |
+| Run panel auto-fit width | ❌ | ✅ follows its cards in both directions - widens when they no longer fit, narrows when they do |
 
 Engineering: Python 3.3 plugin-host compatibility, four-platform CI (Linux 3.9/3.12 + Windows + macOS), and a regression suite guarding the shipped behaviour.
 
@@ -116,7 +116,10 @@ copied. On top of the line-by-line diff it reports what the run actually cost:
 Colour is applied with **regions and a phantom badge bar, not a syntax definition**: the
 buffer is never modified, so selecting, copying and pasting give exactly what they gave
 without it. The bar carries `copy expected output`, `copy actual output` and a close
-button. Set `"detail_rich": false` for the colourless, bar-free view.
+button. Each section also gets a **card head that is the run panel's card row** - section
+name, `fold` / `unfold`, `copy`, and the `12 lines / 340 bytes` value in a chip of its own,
+with no arrow (the fold chip spells the state out). Set `"detail_rich": false` for the
+card-free, colour-free view.
 
 ## File input/output (NOI / CSP-S)
 

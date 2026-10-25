@@ -1153,6 +1153,78 @@ def main():
           '%d update calls, %d phantoms'
           % (len(_cc.phantoms.updates),
              len(_cc.phantoms.updates[0]) if _cc.phantoms.updates else 0))
+
+    # --- the detail card IS the -run card's row, with no arrow (v3.0.1) ----
+    # It used to be a shape of its own: a small triangle glyph glued to the
+    # title, the "N lines / M bytes" value as bare text with no chip. The run
+    # panel's card is one .panel row of chips, so the detail card is that row:
+    # identity chip, action chips, value chip - and nothing the run card does
+    # not have.
+    with open(os.path.join(ROOT, 'Highlight', 'test_detail_card.html'),
+              encoding='utf-8') as f:
+        _dcard_tpl = f.read()
+    with open(os.path.join(ROOT, 'Highlight', 'test_config.html'),
+              encoding='utf-8') as f:
+        _run_card_tpl = f.read()
+    # main() binds `i18n` far below this point, and an assignment anywhere in
+    # the function makes it local everywhere - so ask for the module here.
+    _card_i18n = importlib.import_module(pkg + '.core.cph_i18n')
+
+    def _class_tokens(template):
+        """Every class name a template uses, placeholders excluded."""
+        tokens = set()
+        for attr in re.findall(r'class="([^"]*)"', template):
+            for tok in attr.split():
+                if not tok.startswith('{'):
+                    tokens.add(tok)
+        return tokens
+
+    # The suite's fake sublime.load_resource answers every path with an empty
+    # panel, so a rendered card is only meaningful with the real templates.
+    def _disk_resource(rel):
+        return io.open(os.path.join(ROOT, *rel.split('/')), encoding='utf-8').read()
+
+    def _render_card(block_id):
+        _keep = tm.read_resource
+        tm.read_resource = _disk_resource
+        try:
+            return _cc._card_phantom(
+                [b for b in _cc._blocks if b['id'] == block_id][0],
+                '<style></style>').content
+        finally:
+            tm.read_resource = _keep
+
+    _card_html = _render_card('input')
+    _msg_card = _render_card('message')
+    _diff_card = _render_card('diff')
+
+    check('the detail card template has no arrow placeholder',
+          '{arrow}' not in _dcard_tpl)
+    check('a rendered detail card carries no arrow glyph',
+          not any(glyph in _card_html
+                  for glyph in (u'\u25b8', u'\u25be', '&#9656;', '&#9662;')),
+          _card_html[:120])
+    check('the detail card only uses classes the run card already has',
+          _class_tokens(_dcard_tpl) <= _class_tokens(_run_card_tpl),
+          str(sorted(_class_tokens(_dcard_tpl) - _class_tokens(_run_card_tpl))))
+    check('the detail card is one .panel row of chips',
+          _card_html.count('class="panel"') == 1
+          and _card_html.count('<a class="') == 4,
+          _card_html[:200])
+    check('the detail card wraps its value in a config chip',
+          re.search(r'<a class="config"[^>]*>\s*<i class="runtime-info"',
+                    _card_html) is not None,
+          _card_html[:240])
+    check('the fold chip spells the state out instead of an arrow',
+          _card_i18n.t('detail_fold') in _card_html, _card_html[:200])
+    check('a block without a size hides the value chip',
+          'display: none;' in _msg_card and 'runtime-info' in _msg_card,
+          _msg_card[:240])
+    check('a block with no payload hides the copy chip',
+          _diff_card.count('display: none;') == 2
+          and _msg_card.count('display: none;') == 1,
+          'diff=%d msg=%d' % (_diff_card.count('display: none;'),
+                              _msg_card.count('display: none;')))
     check('the filled buffer is the exact plain text',
           _cv.text == card_text)
     _cc.run(None, action='fold', block='input')
@@ -1160,6 +1232,10 @@ def main():
     check('folding erases exactly the block lines',
           _cv.text == card_text.replace(_bt, '', 1),
           repr(_cv.text[:60]))
+    check('a folded block says unfold, not an arrow',
+          _card_i18n.t('detail_unfold') in _render_card('input')
+          and _card_i18n.t('detail_fold') not in _render_card('input'),
+          _render_card('input')[:200])
     _cc.run(None, action='fold', block='input')
     check('unfolding writes them back byte for byte',
           _cv.text == card_text)
@@ -7943,6 +8019,165 @@ def main():
                 ' time: 42ms ', ' mem: 4 MB '),))
     check('the optional time/mem labels widen the estimate again',
           labeled > narrow, 'labeled=%.0f narrow=%.0f' % (labeled, narrow))
+
+    # --- the run panel is fitted in BOTH directions (v3.0.1) --------------
+    # It used to widen only ("never shrink"): one long compile command or one
+    # wide card left the column open for the rest of the session, with a slab
+    # of .panel background to the right of every short card row. These drive
+    # the real auto_fit_panel_width against a fake window that records
+    # set_layout, and against a view whose viewport follows the column.
+    class _FitWindow(object):
+        def __init__(self, cols):
+            self.cols = list(cols)
+            self.calls = []
+
+        def get_layout(self):
+            return {'cols': list(self.cols), 'rows': [0, 1],
+                    'cells': [[0, 0, 1, 1], [1, 0, 2, 1]]}
+
+        def set_layout(self, layout):
+            self.calls.append(list(layout['cols']))
+            self.cols = list(layout['cols'])
+
+    class _FitView(_sub_mod.View):
+        def __init__(self, window, window_px=1200.0, em=8.0):
+            _sub_mod.View.__init__(self)
+            self._fit_win = window
+            self._window_px = window_px
+            self._em = em
+
+        def window(self):
+            return self._fit_win
+
+        def em_width(self):
+            return self._em
+
+        def viewport_extent(self):
+            return (self._window_px * (1.0 - self._fit_win.cols[1]), 400)
+
+    def _fit_manager(window, tests, chip='', **view_kw):
+        mgr = tm.CphTestManagerCommand.__new__(tm.CphTestManagerCommand)
+        mgr.view = _FitView(window, **view_kw)
+        mgr.tester = make_tester(tests)
+        mgr._compile_chip_text = chip
+        return mgr
+
+    _fit_card = tm.CphTestManagerCommand.Test('1\n')
+    _fit_card.verdict = verdict.get_verdict_by_name('AC')
+    _fit_card.runtime = 46
+    _fit_card.memory = '4'
+
+    # too narrow: the card row would wrap, so the panel must grow
+    win_narrow = _FitWindow([0, 0.68, 1])
+    _fit_manager(win_narrow, [_fit_card]).auto_fit_panel_width()
+    check('a panel too narrow for its cards is widened',
+          len(win_narrow.calls) == 1 and win_narrow.calls[0][1] < 0.68,
+          'calls=%r' % (win_narrow.calls,))
+
+    # too wide: the card row leaves an empty strip, so the panel must give
+    # the width back - this is the screenshot's middle row
+    win_wide = _FitWindow([0, 0.4, 1])
+    mgr_wide = _fit_manager(win_wide, [_fit_card])
+    mgr_wide.auto_fit_panel_width()
+    check('a panel wider than its cards is narrowed again',
+          len(win_wide.calls) == 1 and win_wide.calls[0][1] > 0.4,
+          'calls=%r' % (win_wide.calls,))
+    _first_fit = list(win_wide.calls)
+    mgr_wide.auto_fit_panel_width()
+    check('a second measurement inside the dead band does nothing',
+          win_wide.calls == _first_fit,
+          'calls=%r' % (win_wide.calls,))
+    _shrunk_frac = 1.0 - win_wide.cols[1]
+    check('the narrowed panel still fits the row it was measured on',
+          _shrunk_frac * 1200.0 >= tm.estimate_panel_width_px(
+              mgr_wide.view, mgr_wide._panel_chip_rows()) + 4 * 8.0,
+          'panel=%.1f%%' % (_shrunk_frac * 100))
+
+    # a very long compile chip is content too: it must widen the panel, but
+    # never past max_panel_width_ratio
+    win_long = _FitWindow([0, 0.68, 1])
+    _fit_manager(win_long, [_fit_card], chip='g++ ' + 'x' * 200).auto_fit_panel_width()
+    check('the panel never exceeds max_panel_width_ratio',
+          len(win_long.calls) == 1
+          and abs((1.0 - win_long.calls[0][1]) - 0.5) < 1e-6,
+          'calls=%r' % (win_long.calls,))
+
+    # the compile chip is part of the model (it is a chip row, not prose)
+    mgr_chip = _fit_manager(_FitWindow([0, 0.5, 1]), [],
+                            chip='compile skipped (cache hit)')
+    _rows_with = mgr_chip._panel_chip_rows()
+    mgr_chip._compile_chip_text = ''
+    _rows_without = mgr_chip._panel_chip_rows()
+    check('the compile chip is measured as its own row',
+          len(_rows_with) == len(_rows_without) + 1
+          and any('compile skipped' in seg for row in _rows_with for seg in row),
+          '%r vs %r' % (_rows_with, _rows_without))
+    check('a cleared compile chip stops reserving width',
+          tm.estimate_panel_width_px(mgr_chip.view, _rows_with)
+          > tm.estimate_panel_width_px(mgr_chip.view, _rows_without))
+
+    # an empty panel still has the next-test chip to size itself on
+    mgr_empty = _fit_manager(_FitWindow([0, 0.5, 1]), [])
+    check('an empty panel measures the next-test chip',
+          tm.estimate_panel_width_px(mgr_empty.view,
+                                     mgr_empty._panel_chip_rows()) > 0)
+    # ... and on a very wide window that would round to nothing, the floor
+    # keeps the column usable
+    win_huge = _FitWindow([0, 0.05, 1])
+    _fit_manager(win_huge, [], window_px=20000.0).auto_fit_panel_width()
+    check('the panel never collapses below the floor',
+          len(win_huge.calls) == 1
+          and (1.0 - win_huge.calls[0][1]) >= tm.CphTestManagerCommand._MIN_PANEL_FRAC - 1e-9,
+          'calls=%r' % (win_huge.calls,))
+
+    # the switches still switch it off, and a layout that is not the standard
+    # two-group one is never rewritten
+    _keep_fit_settings = tm.get_settings
+    try:
+        tm.get_settings = lambda: {'auto_fit_panel_width': False}
+        win_off = _FitWindow([0, 0.2, 1])
+        _fit_manager(win_off, [_fit_card]).auto_fit_panel_width()
+        check('auto_fit_panel_width=false sends no relayout',
+              win_off.calls == [], 'calls=%r' % (win_off.calls,))
+    finally:
+        tm.get_settings = _keep_fit_settings
+    win_two = _FitWindow([0, 0.5])
+    _fit_manager(win_two, [_fit_card]).auto_fit_panel_width()
+    check('a layout that is not two columns is left alone',
+          win_two.calls == [], 'calls=%r' % (win_two.calls,))
+    win_hidden = _FitWindow([0, 0.2, 1])
+    _hidden_mgr = _fit_manager(win_hidden, [_fit_card])
+    _hidden_mgr.view.settings().set('hide_phantoms', True)
+    _hidden_mgr.auto_fit_panel_width()
+    check('hide_phantoms sends no relayout',
+          win_hidden.calls == [], 'calls=%r' % (win_hidden.calls,))
+
+    # A full-width character is charged its real glyph width, not one em:
+    # the measurement now feeds a width that is applied in the NARROWING
+    # direction too, so under-measuring a Chinese card row would wrap the very
+    # chip it just sized the panel for.
+    _cjk_view = _FitView(_FitWindow([0, 0.5, 1]))
+    check('a full-width character is measured wider than an ASCII one',
+          tm.estimate_panel_width_px(_cjk_view, ((u'\u6d4b\u8bd5',),))
+          > tm.estimate_panel_width_px(_cjk_view, (('ab',),)),
+          'wide=%.0f ascii=%.0f'
+          % (tm.estimate_panel_width_px(_cjk_view, ((u'\u6d4b\u8bd5',),)),
+             tm.estimate_panel_width_px(_cjk_view, (('ab',),))))
+
+    # The manual described the widen-only behaviour, and a manual that still
+    # says "never narrows" after the code learned to narrow is worse than none.
+    _readme_cn = io.open(os.path.join(ROOT, 'README_CN.md'),
+                         encoding='utf-8').read()
+    check('README_CN no longer claims the panel only widens',
+          u'\u4ece\u4e0d\u81ea\u52a8\u6536\u7a84' not in _readme_cn
+          and u'\u4e5f\u4f1a\u6536\u7a84' in _readme_cn)
+    _settings_txt = io.open(os.path.join(
+        ROOT, 'Algorithm Competition Assistant.sublime-settings'),
+        encoding='utf-8').read()
+    check('the settings comment no longer claims it only widens',
+          u'\u4ece\u4e0d\u81ea\u52a8\u6536\u7a84' not in _settings_txt
+          and u'\u5bbd\u4e86\u6536\u7a84' in _settings_txt)
+
 
     # --- the label setting: i18n entries are back, default stays bare ---
     i18n_mod = importlib.import_module(pkg + '.core.cph_i18n')
