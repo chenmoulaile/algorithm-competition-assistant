@@ -8209,6 +8209,30 @@ def main():
           len(win_tight.calls) == 1 and win_tight.calls[0][1] < 0.68,
           'calls=%r' % (win_tight.calls,))
 
+    # --- opening a detail page widens the column to a readable width ------
+    # The panel column is sized for a row of chips; a page of sample input,
+    # answer and diff is not readable at 40 characters, so the detail open
+    # hands the column the widest share the run panel may take.
+    _detail_mgr = _fit_manager(_FitWindow([0, 0.68, 1]), [_fit_card])
+    win_detail = _FitWindow([0, 0.68, 1])
+    _detail_mgr.widen_column_for_detail(win_detail)
+    check('opening a detail page widens the column to the cap',
+          len(win_detail.calls) == 1
+          and abs((1.0 - win_detail.calls[0][1]) - 0.5) < 1e-6,
+          'calls=%r' % (win_detail.calls,))
+    win_already = _FitWindow([0, 0.5, 1])
+    _detail_mgr.widen_column_for_detail(win_already)
+    check('a column already at the cap is left alone',
+          win_already.calls == [], 'calls=%r' % (win_already.calls,))
+    win_wide_col = _FitWindow([0, 0.3, 1])
+    _detail_mgr.widen_column_for_detail(win_wide_col)
+    check('a column wider than the cap is never narrowed for a detail page',
+          win_wide_col.calls == [], 'calls=%r' % (win_wide_col.calls,))
+    win_single = _FitWindow([0, 1])
+    _detail_mgr.widen_column_for_detail(win_single)
+    check('a single-column layout is never rewritten for a detail page',
+          win_single.calls == [], 'calls=%r' % (win_single.calls,))
+
     # The card bar spans the column only while the view wraps: minihtml lays
     # a block phantom out at the viewport width when word_wrap is on, and at
     # the content width when it is off - which shrank every detail card to

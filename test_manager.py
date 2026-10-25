@@ -2665,6 +2665,14 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			# Long output lines now wrap; the run panel already does the same.
 			detail_view.run_command('set_setting', {'setting': 'word_wrap', 'value': True})
 			detail_view.run_command('set_setting', {'setting': 'fold_buttons', 'value': False})
+		# The run panel is sized for a row of chips; a detail page is not. It
+		# shows the sample, the answer and the diff, and at the panel's card
+		# width (~40 characters) every line of it is a scrollbar. Give the
+		# column the widest share the run panel is ever allowed to take -
+		# max_panel_width_ratio, half the window by default - before showing
+		# the page. The fit narrows it back once the run panel is the tab in
+		# front again, which is the one place a narrow column is right.
+		self.widen_column_for_detail(window)
 		# Deliberately NO custom syntax here: the detail stays plain text
 		# (default syntax). Per user feedback the syntax-based coloring was
 		# removed; the content format/layout is unchanged.
@@ -2679,6 +2687,40 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		detail_view.run_command('cph_test_detail_view',
 		                        self.detail_view_args(i, test))
 		window.focus_view(detail_view)
+
+	def widen_column_for_detail(self, window):
+		"""Give the detail page a readable column before it is shown.
+
+		Only ever widens, and only the standard two-group layout: the run
+		panel's column is sized for one row of chips, which is the wrong
+		width for a page of sample input, answer and diff. The cap is the
+		same `max_panel_width_ratio` the run panel obeys, so the detail page
+		never takes more of the window than the panel is allowed to.
+		"""
+		try:
+			layout = window.get_layout()
+		except Exception:
+			return
+		cols = layout.get('cols') or []
+		cells = layout.get('cells')
+		if len(cols) != 3 or not cells:
+			return
+		panel_frac = 1.0 - cols[1]
+		try:
+			want = float(get_settings().get('max_panel_width_ratio', 0.5))
+		except (TypeError, ValueError):
+			want = 0.5
+		want = min(max(want, 0.2), 0.9)
+		if panel_frac >= want - 1e-3:
+			return
+		try:
+			window.set_layout({
+				'cols': [cols[0], 1.0 - want, cols[2]],
+				'rows': layout.get('rows', [0, 1]),
+				'cells': cells,
+			})
+		except Exception:
+			pass
 
 	def detail_view_args(self, i, test):
 		"""Fill arguments for 'cph_test_detail_view', per detail_rich.

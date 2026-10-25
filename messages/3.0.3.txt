@@ -1,0 +1,21 @@
+Algorithm Competition Assistant 3.0.3
+=====================================
+
+The other half of "the detail card is too narrow": the card now spans the
+column, but the column itself was still the run panel's width - about forty
+characters - which is the wrong width for a page of sample input, answer and
+diff.
+
+Opening a detail page widens the column
+
+* Before the page is shown, the column gets the widest share the run panel is
+  ever allowed to take: max_panel_width_ratio, half the window by default.
+  That is a widening only - a column the user has already made wider is left
+  alone, and a layout that is not the standard two-group one is never
+  rewritten.
+* Switching back to the run panel lets the fit narrow it again, because a
+  narrow column is exactly right for a row of chips. That is also why 3.0.2's
+  fit refuses to narrow while a detail tab is the one in front: it would
+  re-wrap the page under the reader.
+
+Regression suite: 984 -> 988 checks.
