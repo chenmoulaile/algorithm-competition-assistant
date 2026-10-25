@@ -62,6 +62,38 @@ New setting
 * "show_time_mem_labels" (default false): bring back the 2.9.1-style
   "time: 2542ms | mem: 4 MB" prefixes on cards, detail headers and the badge
   bar. Off by default - the bare values are what keep slow cards on one line.
+* "message_language" ("auto" | "zh", default "auto"): with an English
+  interface, keep the plugin's own [Message] notes (where the RE happened,
+  that the output was truncated, why a WA in release mode is suspicious, the
+  benchmark report) in Chinese - those lines carry the diagnosis, and the
+  rest of the UI stays English. Everything a checker/interactor program
+  printed itself is passed through verbatim either way.
+
+The detail view becomes cards
+
+* Every section of the detail view ([Input] / [Expected Output] / [Actual
+  Output] / [Diff] / [Message] / [Error Output] / the "this run" facts) gets
+  a phantom CARD head in the same style as the run panel's test cards: title,
+  fold/unfold and - where the block has content - a copy action. The body
+  below the card stays real text in the view: selectable, copyable, exactly
+  what a paste gives.
+* Folding ERASES the block's lines from the buffer and unfolding writes them
+  back (the run panel's toggle_fold approach) - the buffer is always plain
+  detail text, and detail_rich=false still restores the card-free, colour-free
+  view with one setting. Both detail_style modes work: the view mode gains
+  the cards, the inline phantom panel keeps its layout.
+* A refresh (re-running the test while its detail tab is open) now keeps the
+  full visual layer AND the folds the user made; it used to come back
+  uncoloured.
+
+The diff pair reads as one unit
+
+* The expected line and the actual line are highlighted as a pair: both
+  colours now run from column 0 to the end of the line - trailing spaces
+  included - instead of following the length of the text, and a '-' / '+'
+  difference always shows both sides (the missing side as "(empty)"), so a
+  green line without its red partner can no longer appear. Region-only as
+  before: not one buffer byte changes to fake the width.
 
 Also
 
@@ -72,4 +104,4 @@ Also
   no longer lags by a poll step on 100 ms limits.
 * accept/decline and batch delete rebuild only the cards that changed.
 
-Regression suite: 876 -> 910 checks, including the three verdict bugs above.
+Regression suite: 876 -> 956 checks, including the three verdict bugs above.

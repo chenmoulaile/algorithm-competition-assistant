@@ -36,7 +36,7 @@ from .core.cph_resources import read_resource
 from .Highlight.test_interface import get_test_styles
 from .core.cph_verdict import get_verdict, get_verdict_by_code, get_verdict_by_name, build_line_diff, outputs_equal, find_crash_location, looks_like_crash
 from .core.cph_gdb_trace import names_source as _names_source_impl
-from .core.cph_i18n import t
+from .core.cph_i18n import t, t_message
 
 
 # ------------------------------------------------------ output pump plumbing
@@ -970,6 +970,14 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 						crash_line=crash_line):
 				if type(self.process_manager) == ProcessManager:
 					self.on_status_change('STOPPED')
+				# The verdict redraws the panel from prog_out on the main
+				# thread: anything the pump queued for display but the 16 ms
+				# coalescer had not inserted yet must be on screen and inside
+				# prog_out BEFORE the judgement is drawn above it, or the
+				# late flush inserted it after the rewrite - at whatever
+				# delta_input the chain had moved to - and the text strayed
+				# into the wrong card (or the top of the panel).
+				self.flush_pending_out()
 				self.on_stop(rtcode, runtime, crash_line=crash_line, epoch=self.epoch)
 
 			post_to_ui(deliver)
@@ -1001,11 +1009,15 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				# silently showing a mysterious WA: a marker in the output plus
 				# the detail view's message section.
 				self.output_truncated = True
+				# The marker inside the output stream follows the interface
+				# language; the [Message] copy below follows message_language
+				# (t_message) - they are different surfaces with different
+				# settings.
 				marker = '\n' + t('output_truncated_warn') + '\n'
 				with self._out_lock:
 					self._prog_out_parts[n].append(marker)
 					self._prog_out_total[n] += len(marker)
-				self.tests[n].message = t('output_truncated_warn')
+				self.tests[n].message = t_message('output_truncated_warn')
 				self.post_out(marker)
 				print('[Algorithm Competition Assistant] %s' % t('output_truncated_warn'))
 
@@ -1138,7 +1150,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					if not self.output_truncated:
 						self.output_truncated = True
 						n = self.running_test
-						self.tests[n].message = t('output_truncated_warn')
+						self.tests[n].message = t_message('output_truncated_warn')
 						self.post_out('\n' + t('output_truncated_warn') + '\n')
 			except Exception as e:
 				# Draining the output must never skip the memory-sampler stop
@@ -1173,7 +1185,10 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			elif end_time is not None and end_time >= start_time:
 				runtime = int((end_time - start_time) * 1000)
 			else:
-				runtime = int((time() - start_time) * 1000)
+				# monotonic(): _clock_start is monotonic (note_activity /
+				# _spawn_moment); mixing time() in here handed the fallback
+				# a wall-vs-monotonic difference (~1.8e9 s) as the runtime.
+				runtime = int((monotonic() - start_time) * 1000)
 			# Freeze the peak memory reading before the process disappears
 			try:
 				if type(proc) == ProcessManager:
@@ -1196,7 +1211,11 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				if proc.is_stopped() is not None:
 					return
 				start_time = self._clock_start
-				if start_time is not None and time() - start_time >= limit_s + _TLE_KILL_GRACE_S:
+				# monotonic(): _clock_start is a monotonic stamp (note_activity
+				# / _spawn_moment). Reading it with time() made the watchdog
+				# see a ~1.8e9 s wall-vs-monotonic difference on its very
+				# first pass and kill every program as a TLE.
+				if start_time is not None and monotonic() - start_time >= limit_s + _TLE_KILL_GRACE_S:
 					self.tle_killed = True
 					try:
 						proc.terminate()
@@ -1222,7 +1241,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					# runs and the time limit is enforced.
 					self.note_activity()
 				if call_on_insert:
-					self.on_insert(s)
+					self.on_insert(s, epoch=self.epoch)
 
 		def _spawn_moment(self):
 			"""When the current process came to life, as the manager saw it.
@@ -1293,7 +1312,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				self.process_manager.close_stdin()
 			if self._clock_start is None and input_text and input_text.strip():
 				self._clock_start = self._spawn_moment()
-			post_to_ui(lambda: self.on_insert(input_text))
+			post_to_ui(lambda: self.on_insert(input_text, epoch=self.epoch))
 
 		def next_test(self, tie_pos, cb):
 			n = self.test_iter
@@ -1822,7 +1841,10 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		result = checker_judge(cfg, exe, test.test_string, stdout, expected)
 		message = result.get('message') or ''
 		if message:
-			message = '%s %s' % (t('checker_judged', verdict=result['verdict']), message)
+			# The prefix is ours (and honours message_language); the rest is
+			# whatever the checker itself printed and stays verbatim.
+			message = '%s %s' % (t_message('checker_judged',
+			                               verdict=result['verdict']), message)
 		return get_verdict(result['verdict']), message
 
 	def benchmark(self):
@@ -1930,7 +1952,11 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		self.set_compile_bar(text)
 		sublime.status_message('[Algorithm Competition Assistant] ' + text)
 		try:
-			self.tester.tests[index].message = text
+			# The bar/status line follow the interface language; the copy kept
+			# on the test (shown in the detail's [Message] card) follows
+			# message_language.
+			self.tester.tests[index].message = t_message(
+				'benchmark_done', n=len(times), best=best, avg=average, worst=worst)
 		except Exception:
 			pass
 
@@ -1995,8 +2021,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					result = checker_judge(cfg, exe, input_text, stdout, expected)
 					message = result.get('message') or ''
 					if message:
-						message = '%s %s' % (t('checker_judged',
-											   verdict=result['verdict']), message)
+						message = '%s %s' % (t_message('checker_judged',
+													   verdict=result['verdict']), message)
 					return get_verdict(result['verdict']), message
 
 		case_runner = None
@@ -2057,7 +2083,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			test.crash_line = '%s:%d' % crash
 			test.crash_path = crash[0]
 			test.crash_lineno = crash[1]
-			test.message = t('runtime_error_at', location=test.crash_line)
+			test.message = t_message('runtime_error_at', location=test.crash_line)
 		if result.get('error'):
 			test.message = result['error']
 		elif result.get('message'):
@@ -2066,7 +2092,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		if result.get('capped'):
 			# The manager's own byte cap cut this answer short. Without a word
 			# about it, a truncated answer reads exactly like a wrong one.
-			notice = t('output_truncated_warn')
+			notice = t_message('output_truncated_warn')
 			test.message = (test.message + '\n' + notice) if test.message else notice
 		while len(tester.prog_out) <= i:
 			tester.prog_out.append('')
@@ -2259,6 +2285,22 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		"vs last" fact read as noise, and the two colours that carry meaning
 		here are the green/red diff pair).
 		"""
+		return self.build_detail(i, test, marks)[0]
+
+	def build_detail(self, i, test, marks=None):
+		"""(text, blocks) for the detail of one test.
+
+        `text` and `marks` are exactly what build_detail_content documents
+        (this method IS that builder). `blocks` is the card layout the detail
+        view turns into phantom card heads: one record per foldable section,
+        in document order, naming the lines the block owns in `text` (its
+        bracket title line + body + trailing blank), a short card title, the
+        "N lines / M bytes" meta chip and the raw payload its copy action
+        copies. The facts block owns its fact lines only - it has no bracket
+        title in the buffer, its card carries the title. The subtask line and
+        the file-IO line stay static (always visible, no card): each is one
+        line that never needs hiding.
+		"""
 		verdict_short = test.verdict['name'] if test.verdict else 'UKE'
 		runtime_str = test.get_nice_runtime().replace('&nbsp;', ' ').strip()
 		# Values carry their own unit; the optional "time:" / "mem:" prefix
@@ -2274,6 +2316,16 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				memory_str = t('memory') + ': ' + memory_str
 			header += '  |  %s' % memory_str
 		lines = [header, '=' * max(len(header), 40), '']
+		blocks = []
+
+		def begin_block(bid, title, meta='', copy=None):
+			rec = {'id': bid, 'title': title, 'meta': meta, 'copy': copy,
+			       'start': len(lines), 'count': 0}
+			blocks.append(rec)
+			return rec
+
+		def end_block(rec):
+			rec['count'] = len(lines) - rec['start']
 
 		# How much of the limit this run used, and what changed since the last
 		# run of the same test point. Both numbers already existed and were
@@ -2324,11 +2376,13 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				t('detail_best_avg_worst'), min(history),
 				int(sum(history) / len(history)), max(history), len(history)))
 		if facts:
+			rec = begin_block('facts', t('detail_facts'))
 			for fact in facts:
 				lines.append(fact)
 				if marks is not None:
 					marks.append((len(lines) - 1, 'head'))
 			lines.append('')
+			end_block(rec)
 
 		# sample input, with its size: a pasted 20000-line sample and a two-
 		# number sample are different problems to read, and the panel used to
@@ -2336,13 +2390,16 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		test_input = self._clean_output(test.test_string).rstrip('\n')
 		in_bytes = len((test.test_string or '').encode('utf-8'))
 		dbg_file = getattr(self, 'dbg_file', None)
-		lines.append('[%s] (%d %s / %d %s)' % (t('input'),
+		in_meta = '%d %s / %d %s' % (
 			test_input.count('\n') + 1 if test_input else 0, t('detail_lines'),
-			in_bytes, t('detail_bytes')))
+			in_bytes, t('detail_bytes'))
+		rec = begin_block('input', t('input'), in_meta, test.test_string or '')
+		lines.append('[%s] (%s)' % (t('input'), in_meta))
 		if marks is not None:
 			marks.append((len(lines) - 1, 'head'))
 		lines.append(test_input if test_input.strip() else t('detail_empty'))
 		lines.append('')
+		end_block(rec)
 
 		expected = ''
 		if test.correct_answers:
@@ -2352,18 +2409,29 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		expected = self._clean_output(expected)
 		stdout = self._clean_output(getattr(test, 'stdout', '') or '')
 
+		exp_meta = '%d %s / %d %s' % (
+			expected.count('\n') + 1 if expected else 0, t('detail_lines'),
+			len((expected or '').encode('utf-8')), t('detail_bytes'))
+		rec = begin_block('expected', t('expected_output'), exp_meta,
+			self.detail_expected(test))
 		lines.append('[%s]' % t('expected_output'))
 		if marks is not None:
 			marks.append((len(lines) - 1, 'head'))
 		lines.append(expected.rstrip('\n') if expected.strip() else t('detail_empty'))
 		lines.append('')
-		lines.append('[%s] (%d %s / %d %s)' % (t('actual_output'),
+		end_block(rec)
+
+		out_meta = '%d %s / %d %s' % (
 			stdout.count('\n') + 1 if stdout else 0, t('detail_lines'),
-			len((test.stdout or '').encode('utf-8')), t('detail_bytes')))
+			len((test.stdout or '').encode('utf-8')), t('detail_bytes'))
+		rec = begin_block('actual', t('actual_output'), out_meta,
+			getattr(test, 'stdout', '') or '')
+		lines.append('[%s] (%s)' % (t('actual_output'), out_meta))
 		if marks is not None:
 			marks.append((len(lines) - 1, 'head'))
 		lines.append(stdout.rstrip('\n') if stdout.strip() else t('detail_empty'))
 		lines.append('')
+		end_block(rec)
 
 		# Which subtask group this test point belongs to and what that group
 		# scored: with groups configured, a single WA is only half the story.
@@ -2388,6 +2456,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					lines.append('')
 					break
 
+		rec = begin_block('diff', t('diff'))
 		lines.append('[%s] (%s)' % (t('diff'), t('diff_ignore_trailing')))
 		if marks is not None:
 			marks.append((len(lines) - 1, 'head'))
@@ -2401,37 +2470,50 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				lines.append(t('diff_lines_differ', n=len(ops), total=total))
 				lines.append('')
 				shown = ops[:_DETAIL_DIFF_LIMIT]
-				for kind, line_no, e, a in shown:
+				for _kind, line_no, e, a in shown:
 					lines.append('  Line %d:' % line_no)
 					if marks is not None:
 						marks.append((len(lines) - 1, 'head'))
-					if kind != '+':
-						lines.append('- %s: %s' % (t('expected_short'), e if e else t('detail_empty')))
-						if marks is not None:
-							marks.append((len(lines) - 1, 'want'))
-					if kind != '-':
-						lines.append('+ %s: %s' % (t('actual_short'), a if a else t('detail_empty')))
-						if marks is not None:
-							marks.append((len(lines) - 1, 'got'))
+					# Both sides of the pair are ALWAYS emitted (a '-' op shows
+					# the actual side as (empty), a '+' op the expected side):
+					# want and got therefore always exist, sit on adjacent
+					# lines and are always highlighted as a green/red pair -
+					# a lone green line with nothing red beside it reads as
+					# "the colours are broken", not "this side has no line".
+					lines.append('- %s: %s' % (t('expected_short'),
+						e if e else t('detail_empty')))
+					if marks is not None:
+						marks.append((len(lines) - 1, 'want'))
+					lines.append('+ %s: %s' % (t('actual_short'),
+						a if a else t('detail_empty')))
+					if marks is not None:
+						marks.append((len(lines) - 1, 'got'))
 				if len(ops) > len(shown):
 					lines.append('')
 					lines.append(t('diff_shown_truncated', shown=len(shown),
 						n=len(ops)))
 		lines.append('')
+		end_block(rec)
 
 		if test.stderr and test.stderr.strip():
+			rec = begin_block('stderr', t('error_output'), '',
+				getattr(test, 'stderr', '') or '')
 			lines.append('[%s]' % t('error_output'))
 			if marks is not None:
 				marks.append((len(lines) - 1, 'head'))
 			lines.append(self._clean_output(test.stderr).rstrip('\n'))
 			lines.append('')
+			end_block(rec)
 
 		if test.message:
+			rec = begin_block('message', t('message'), '',
+				getattr(test, 'message', '') or '')
 			lines.append('[%s]' % t('message'))
 			if marks is not None:
 				marks.append((len(lines) - 1, 'head'))
 			lines.append(test.message)
 			lines.append('')
+			end_block(rec)
 
 		# A file-IO problem is judged from a file, and the most common reason a
 		# detail like this one shows nothing is a freopen name that disagrees
@@ -2443,7 +2525,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			if marks is not None:
 				marks.append((len(lines) - 1, 'head'))
 
-		return '\n'.join(lines)
+		return '\n'.join(lines), blocks
 
 	def get_detail_style(self):
 		"""'view' (default): open a real, selectable detail view with
@@ -2541,21 +2623,34 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		# removed; the content format/layout is unchanged.
 		#
 		# `detail_rich` (default on) adds decoration that never touches the
-		# buffer - regions for the diff lines and a phantom badge bar with two
-		# copy buttons - so the copy/select behaviour the plain view was chosen
-		# for is exactly preserved, and setting it to false restores today's
-		# view with no colour and no bar.
+		# buffer - regions for the diff lines, a phantom badge bar with two
+		# copy buttons, and one foldable CARD per section ([Input] /
+		# [Expected Output] / [Actual Output] / [Diff] / [Message] ...) styled
+		# like the run panel's cards - so the copy/select behaviour the plain
+		# view was chosen for is exactly preserved, and setting it to false
+		# restores today's view with no colour, no bar and no cards.
+		detail_view.run_command('cph_test_detail_view',
+		                        self.detail_view_args(i, test))
+		window.focus_view(detail_view)
+
+	def detail_view_args(self, i, test):
+		"""Fill arguments for 'cph_test_detail_view', per detail_rich.
+
+		Shared by the manual open and the after-verdict refresh, so a refresh
+		keeps the full visual layer (it used to drop the marks, so the
+		automatically refreshed detail came back uncoloured).
+		"""
 		rich = bool(get_settings().get('detail_rich', True))
 		marks = [] if rich else None
-		text = self.build_detail_content(i, test, marks)
+		text, blocks = self.build_detail(i, test, marks)
 		args = {'text': text, 'jump': self.jump_for(test),
-		        'copy_actual': test.stdout or '',
+		        'copy_actual': getattr(test, 'stdout', '') or '',
 		        'copy_expected': self.detail_expected(test)}
 		if rich:
 			args['marks'] = marks
 			args['header'] = self.detail_header_html(i, test)
-		detail_view.run_command('cph_test_detail_view', args)
-		window.focus_view(detail_view)
+			args['blocks'] = blocks
+		return args
 
 	def detail_expected(self, test):
 		"""The raw expected answer text, for the detail's copy button."""
@@ -2763,6 +2858,13 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		"""
 		v = self.view
 		tester = self.tester
+		if tester is None:
+			return
+		# Anything the pump queued for display must be on screen and folded
+		# into prog_out before the walk below measures text lengths and pins
+		# phantoms to offsets: a chunk flushed after the rebuild inserted at
+		# the moved delta_input and landed inside the NEXT card's region.
+		tester.flush_pending_out()
 		_float_tolerance = get_settings().get('float_tolerance', 0) or 0
 		configs = []
 		if tester.proc_run:
@@ -3061,7 +3163,13 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			# Data changed while the write was in flight: one more round.
 			self._flush_tests()
 
-	def on_insert(self, s):
+	def on_insert(self, s, epoch=None):
+		# Same stale-listener guard as on_out/on_stop: a killed process can
+		# still be fed its sample while the next run is being set up, and
+		# that text would land at the *new* delta_input, above the first card.
+		if epoch is not None and epoch != getattr(self, 'tester_epoch', None):
+			print('[Algorithm Competition Assistant] dropped stale on_insert from killed process')
+			return
 		self.view.run_command('cph_test_manager', {'action': 'insert_opd_input', 'text': s})
 
 	def on_out(self, s, epoch=None):
@@ -3220,8 +3328,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				# kept apart as well: the detail view turns them into a link
 				self.tester.tests[test_id].crash_path = location[0]
 				self.tester.tests[test_id].crash_lineno = location[1]
-				self.tester.tests[test_id].message = t('runtime_error_at',
-													   location=crash_line)
+				self.tester.tests[test_id].message = t_message('runtime_error_at',
+															   location=crash_line)
 				sublime.status_message('[Algorithm Competition Assistant] '
 									   + t('runtime_error_at', location=crash_line))
 
@@ -3234,7 +3342,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				# to judge by, and with no output there is no crash signature
 				# either - the usual cause is a program still waiting for
 				# input (an incomplete sample) or a silent infinite loop.
-				hints.append(t('tle_no_output'))
+				hints.append(t_message('tle_no_output'))
 			try:
 				compile_cmd = pm.get_compile_cmd() or ''
 			except Exception:
@@ -3245,7 +3353,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				# unbuffered stderr on every call. Inside a loop that is
 				# O(n^2) output, and the program runs orders of magnitude
 				# slower than it would on the judge.
-				hints.append(t('tle_debug_build'))
+				hints.append(t_message('tle_debug_build'))
 			if hints:
 				self.tester.tests[test_id].message = '\n'.join(hints)
 
@@ -3275,7 +3383,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				_WA_RELEASE_HINTED.add(key)
 				existing = self.tester.tests[test_id].message
 				self.tester.tests[test_id].message = \
-					(existing + '\n' if existing else '') + t('wa_release_hint')
+					(existing + '\n' if existing else '') + t_message('wa_release_hint')
 
 		self.tester.tests[test_id].set_stderr(stderr)
 		self.tester.tests[test_id].set_expected_output(expected_output)
@@ -3357,12 +3465,11 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				for wv in window.views():
 					if wv.name() == name:
 						try:
-							content = self.build_detail_content(test_id, tester.tests[test_id])
+							wv.run_command('cph_test_detail_view',
+							               self.detail_view_args(test_id,
+							                                     tester.tests[test_id]))
 						except Exception:
 							break
-						wv.run_command('cph_test_detail_view', {
-							'text': content,
-							'jump': self.jump_for(tester.tests[test_id])})
 						break
 
 	def change_process_status(self, status):
@@ -3700,8 +3807,10 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		# screen, so pressing Run on a big problem froze the editor. The panel
 		# now comes up empty immediately and the load runs on a worker thread;
 		# `start_runner` fires once BOTH the compile and the load have landed,
-		# whichever is later. The holder keeps the callback from reaching a
-		# panel that has since been rebuilt (the epoch check below).
+		# whichever is later. The epoch keeps the in-flight callbacks of a
+		# previous press (a slow sample load, a late compile) from reaching
+		# the panel this press is about to rebuild.
+		self.tester_epoch = getattr(self, 'tester_epoch', 0) + 1
 		loaded_holder = {'tests': None, 'previously_accepted': set()}
 		my_epoch = getattr(self, 'tester_epoch', 0)
 
@@ -3787,17 +3896,29 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			"""Build the Tester and start the first run.
 
 			Called once, after BOTH the compile and the (threaded) sample load
-			have landed - whichever finished later re-arms it, via the
-			'pending' marker. While the load is still in flight the compile
-			bar already shows the outcome; only the cards wait for it.
+			have landed - whichever finishes last re-arms this from its own
+			callback (after_compile / tests_loaded). While one half is still in
+			flight the compile bar already shows the outcome; only the cards
+			wait for both.
 			"""
 			if loaded_holder.get('started') or loaded_holder.get('failed'):
 				return
 			tests = loaded_holder.get('tests')
-			if tests is None:
-				loaded_holder['pending'] = True
+			if tests is None or not loaded_holder.get('compiled'):
 				return
 			loaded_holder['started'] = True
+			# The insertion point for everything this run writes begins at the
+			# top of the (just cleared) panel. This reset used to live in
+			# after_compile, unconditionally - but the load is dispatched
+			# first and a big tests file beats g++, so the first run could
+			# already be under way (new_test had anchored delta_input at the
+			# first card) when after_compile landed and zeroed it: the sample
+			# text and the program output were then inserted ABOVE the first
+			# card, and the verdict rewrite stranded a stray line at the very
+			# top of the panel. Resetting here, in the same callback that
+			# dispatches the first run, keeps the reset and the anchor atomic
+			# again.
+			self.delta_input = 0
 			v.settings().set('edit_mode', False)
 			self.tester_epoch = getattr(self, 'tester_epoch', 0) + 1
 			self.tester = self.Tester(process_manager, \
@@ -3824,10 +3945,15 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 		def after_compile(cmp_data, cached, fingerprint):
 			"""Apply the compile result. Runs on the main thread, on purpose."""
+			if getattr(self, 'tester_epoch', 0) != my_epoch:
+				# A newer Run was pressed while this compile was in flight:
+				# its after_compile would repaint the compile bar of the run
+				# that replaced it (and, before the epoch check existed,
+				# reset delta_input under the new run's feet).
+				return
 			self.compiling_since = None
 			v = self.view
 			self.change_process_status('COMPILED')
-			self.delta_input = 0
 			if cmp_data is None or cmp_data[0] == 0:
 				remember_compile(process_manager, fingerprint)
 				# The success path never touched the compile bar, so the
@@ -3850,9 +3976,16 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 										 chip_text=t('compile_warning'))
 				else:
 					self.set_compile_bar(note)
+				# The compile half of the gate is down: start_runner fires the
+				# first run only now that this AND the sample load are both in.
+				loaded_holder['compiled'] = True
 				start_runner()
 			else:
 				loaded_holder['failed'] = True
+				# The compile error text is the first thing this panel shows:
+				# anchor it at the top (the success path resets delta_input in
+				# start_runner instead - see there for why this moved).
+				self.delta_input = 0
 				v.run_command('cph_test_manager', {'action': 'insert_opd_out', 'text': '\n' + cmp_data[1]})
 				self.set_compile_bar(cmp_data[1], type='error',
 									 chip_text=t('compilation_error'))
@@ -4246,27 +4379,227 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 class CphTestDetailViewCommand(sublime_plugin.TextCommand):
 	"""Fills the detail view with the (static) detail text of a test.
 	A real view is used instead of a phantom so the text is selectable,
-	comparable and copyable."""
+	comparable and copyable.
+
+	Each section ([Input] / [Expected Output] / [Actual Output] / [Diff] /
+	[Message] / [Error Output] / the facts block) also gets a phantom CARD
+	head, built from the same classes and stylesheet as the run panel's test
+	cards: title, fold/unfold and - where the block has content - a copy
+	action. The card is decoration; the body below it stays real text in the
+	view. Folding ERASES the block's lines from the buffer and unfolding
+	writes them back (the run panel's toggle_fold approach), so the buffer
+	is always plain detail text - what selecting/copying gives is what is on
+	screen, and no byte is ever edited to fake a highlight width."""
 
 	def __init__(self, view):
 		self.view = view
 		self.phantoms = PhantomSet(view, 'cph-detail-jump')
 		self._copy_payload = ('', '')
+		# card layout (installed by a fill that carries `blocks`)
+		self._blocks = []      # [{'id','title','meta','copy','text','len','start','count'}]
+		self._order = []       # ('static', char_len) / ('block', index), document order
+		self._marks_full = []  # diff marks in the EXPANDED layout
+		self._folded = set()   # ids currently folded (kept across refreshes)
+		self._header_html = None
+		self._jump_spec = None
 
 	def run(self, edit, text='', jump=None, marks=None, header=None,
-	        copy_actual='', copy_expected=''):
+	        copy_actual='', copy_expected='', blocks=None, action=None,
+	        block=None):
+		if action == 'fold':
+			self._run_fold(edit, block)
+			return
 		v = self.view
 		v.set_scratch(True)
 		v.set_read_only(False)
 		v.replace(edit, Region(0, v.size()), text)
+		self._copy_payload = (copy_actual or '', copy_expected or '')
+		self._header_html = header
+		self._jump_spec = jump
+		self._marks_full = list(marks or [])
+		if blocks:
+			self._install_blocks(text, blocks)
+			# Re-apply the folds the user already made (a refresh after a
+			# re-run must not expand everything under their hands).
+			for one in self._blocks:
+				if one['id'] in self._folded:
+					v.erase(edit, Region(self._block_point(one['idx']),
+					                     self._block_point(one['idx']) + one['len']))
+		else:
+			self._blocks = []
+			self._order = []
+			self._folded = set()
 		v.set_read_only(True)
 		v.sel().clear()
 		v.sel().add(Region(0))
-		self._copy_payload = (copy_actual or '', copy_expected or '')
-		# one update, in a fixed order: header bar first, jump chip second
-		self.phantoms.update([p for p in (self._header_phantom(header),
-		                                  self._jump_phantom(jump)) if p is not None])
-		self.set_marks(marks)
+		self._refresh_decoration()
+
+	def _run_fold(self, edit, block_id):
+		"""Fold/unfold one block: erase its lines / write them back."""
+		one = self._block_by_id(block_id)
+		if one is None:
+			return
+		v = self.view
+		start = self._block_point(one['idx'])
+		v.set_read_only(False)
+		if one['id'] in self._folded:
+			self._folded.discard(one['id'])
+			v.insert(edit, start, one['text'])
+		else:
+			self._folded.add(one['id'])
+			v.erase(edit, Region(start, start + one['len']))
+		v.set_read_only(True)
+		self._refresh_decoration()
+
+	def _install_blocks(self, text, blocks):
+		"""Compute each block's character span in the expanded text.
+
+		Everything fold-related is plain arithmetic on stored lengths, so
+		folding never needs to read the buffer back (a real PhantomSet is not
+		the only Sublime API that exposes less than the tests' stand-ins).
+		"""
+		lines = text.split('\n')
+		offsets = []
+		off = 0
+		for one_line in lines:
+			offsets.append(off)
+			off += len(one_line) + 1
+		offsets.append(off)
+		total = len(text)
+		self._blocks = []
+		self._order = []
+		kept = set()
+		pos_line = 0
+		for idx, rec in enumerate(blocks):
+			start = max(0, int(rec.get('start', 0)))
+			count = max(0, int(rec.get('count', 0)))
+			if start > len(lines):
+				start = len(lines)
+			if start + count > len(lines):
+				count = max(0, len(lines) - start)
+			char_start = min(total, offsets[start])
+			char_end = min(total, offsets[start + count])
+			one = {'id': str(rec.get('id', idx)), 'idx': idx,
+			       'title': rec.get('title', ''), 'meta': rec.get('meta', ''),
+			       'copy': rec.get('copy'), 'text': text[char_start:char_end],
+			       'len': char_end - char_start,
+			       'start': start, 'count': count}
+			if start > pos_line and pos_line < len(offsets):
+				self._order.append(('static', offsets[start] - offsets[pos_line]))
+			self._order.append(('block', idx))
+			self._blocks.append(one)
+			kept.add(one['id'])
+			pos_line = start + count
+		if pos_line < len(lines) and pos_line < len(offsets):
+			self._order.append(('static', total - offsets[pos_line]))
+		# ids that vanished (the re-run lost that section) cannot stay folded
+		self._folded &= kept
+
+	def _block_by_id(self, block_id):
+		for one in self._blocks:
+			if one['id'] == block_id:
+				return one
+		return None
+
+	def _block_point(self, idx):
+		"""Current buffer point where block `idx` starts (0 when folded)."""
+		pos = 0
+		for entry in self._order:
+			if entry[0] == 'static':
+				pos += entry[1]
+			else:
+				other = self._blocks[entry[1]]
+				if entry[1] == idx:
+					return pos
+				if other['id'] not in self._folded:
+					pos += other['len']
+		return pos
+
+	def _visible_marks(self):
+		"""Marks re-expressed for the CURRENT layout.
+
+		A mark inside a folded block is dropped (its text is not on screen);
+		every other mark shifts up by the lines hidden above it.
+		"""
+		if not self._blocks:
+			return list(self._marks_full), None
+		hidden = {}
+		out = []
+		for row, kind in self._marks_full:
+			drop = False
+			above = 0
+			for one in self._blocks:
+				folded = one['id'] in self._folded
+				if one['start'] + one['count'] <= row:
+					if folded:
+						above += one['count']
+				elif one['start'] <= row < one['start'] + one['count'] and folded:
+					drop = True
+			if drop:
+				continue
+			hidden_key = int(row)
+			hidden[hidden_key] = above
+			out.append((row, kind))
+		return out, hidden
+
+	def _refresh_decoration(self):
+		"""Repaint cards, header, jump chip and marks for the current fold
+		state. One PhantomSet update: its contents cannot be read back."""
+		v = self.view
+		style = '<style>' + get_test_styles(v) + '</style>'
+		out = []
+		header = self._header_phantom(self._header_html)
+		if header is not None:
+			out.append(header)
+		jump = self._jump_phantom(self._jump_spec)
+		if jump is not None:
+			out.append(jump)
+		for one in self._blocks:
+			out.append(self._card_phantom(one, style))
+		self.phantoms.update(out)
+		marks, hidden = self._visible_marks()
+		self.set_marks(marks, hidden_lines=hidden)
+
+	def _card_phantom(self, one, style):
+		"""The card head of one block: title, fold toggle, copy action."""
+		v = self.view
+		folded = one['id'] in self._folded
+		template = read_resource('Highlight/test_detail_card.html')
+		content = template.format(
+			title=esc(one['title'] or one['id']),
+			arrow='&#9656;' if folded else '&#9662;',
+			meta=esc(one['meta'] or ''),
+			meta_display='inline' if one['meta'] else 'none',
+			fold_label=(t('detail_unfold') if folded else t('detail_fold')),
+			fold_href='detail-fold-%s' % one['id'],
+			copy_label=t('detail_copy'),
+			copy_display='inline' if one['copy'] is not None else 'none',
+			copy_href='detail-copy-%s' % one['id'],
+		)
+		content = style + content
+
+		def onclick(event, cmd=self):
+			return cmd.on_card_event(event)
+
+		return Phantom(Region(self._block_point(one['idx'])), content,
+		               sublime.LAYOUT_BLOCK, onclick)
+
+	def on_card_event(self, event):
+		"""Card clicks: fold/unfold (a buffer edit, so it re-enters this
+		command through run_command to obtain an edit object) and copy."""
+		v = self.view
+		if event.startswith('detail-fold-'):
+			v.run_command('cph_test_detail_view', {
+				'action': 'fold', 'block': event[len('detail-fold-'):]})
+			return True
+		if event.startswith('detail-copy-'):
+			one = self._block_by_id(event[len('detail-copy-'):])
+			payload = (one['copy'] or '') if one else ''
+			sublime.set_clipboard(payload)
+			sublime.status_message('[Algorithm Competition Assistant] ' + t(
+				'detail_copied', n=len(payload)))
+			return True
+		return False
 
 	_DETAIL_SCOPES = {
 		# Diff colours come from regions, not from a syntax definition: the
@@ -4277,7 +4610,19 @@ class CphTestDetailViewCommand(sublime_plugin.TextCommand):
 		'got': ('cph-detail-got', 'region.redish'),
 	}
 
-	def set_marks(self, marks):
+	def set_marks(self, marks, hidden_lines=None):
+		"""Paint the diff pairs. `marks` are (line_index, kind) in the FULL
+		(expanded) layout; `hidden_lines` is the count of lines currently
+		folded away ABOVE a given mark (see _visible_marks: the detail view's
+		blocks can be folded, and a mark must follow its text).
+
+		Each want/got region spans the WHOLE line - from column 0 to the end
+		of the line, trailing whitespace included. Width is never bought by
+		editing buffer bytes: the pair reads as one green/red unit no matter
+		how short the text on a line is, and an empty side (a '-'/'+' op)
+		still gets its band because the region is kept even when the line is
+		shorter than its partner.
+		"""
 		v = self.view
 		bucket = {}
 		for line, kind in (marks or []):
@@ -4286,9 +4631,14 @@ class CphTestDetailViewCommand(sublime_plugin.TextCommand):
 			regions = []
 			for line in bucket.get(kind, []):
 				try:
-					start = v.text_point(max(0, int(line)), 0)
+					row = max(0, int(line))
+					if hidden_lines:
+						row = max(0, row - int(hidden_lines.get(int(line), 0)))
+					# from the first column of the row to the end of that
+					# line (the newline itself excluded, trailing spaces in)
+					start = v.text_point(row, 0)
 					end = v.line(start).end()
-					if end > start:
+					if end >= start:
 						regions.append(Region(start, end))
 				except Exception:
 					continue

@@ -194,7 +194,13 @@ def print_safe(text):
 
 
 def _announce(actual, wanted):
-    """Say it once per binary: a run happens once per test otherwise."""
+    """Say it once per binary: a run happens once per test otherwise.
+
+    Retired from retarget_path/retarget_command (the only callers): what it
+    announced there was always the codepage twin of the wanted name - a file
+    that runs fine - so the line was noise on every run of a non-ASCII -o
+    name. Kept for print_safe's message format and for reset_announced().
+    """
     key = (actual, wanted)
     if key in _ANNOUNCED:
         return
@@ -221,7 +227,11 @@ def retarget_path(path, src_dir=None):
         return path
     resolved = resolve_artifact(path, src_dir or os.path.dirname(path))
     if resolved and resolved != path:
-        _announce(resolved, path)
+        # No announcement here: resolve_artifact is called without
+        # started_at, so a resolved path that differs from the wanted one is
+        # by construction the codepage twin of the same name (中文.exe written
+        # through GBK) - the run works fine and the console line was pure
+        # noise on every single run of a non-ASCII -o name.
         return resolved
     return path
 
@@ -247,5 +257,6 @@ def retarget_command(cmd, src_dir=None):
     resolved = resolve_artifact(raw, src_dir or os.path.dirname(raw))
     if not resolved or resolved == raw:
         return cmd
-    _announce(resolved, raw)
+    # Same as retarget_path: the resolved binary is the codepage twin of the
+    # name we asked for, the command runs it fine - nothing to announce.
     return '"%s"%s' % (resolved, cmd[match.end():])

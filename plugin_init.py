@@ -67,13 +67,17 @@ def _init():
         pass
 
     try:
-        from .core.cph_i18n import set_lang, LANG_ZH, LANG_EN
+        from .core.cph_i18n import (set_lang, set_message_language, LANG_ZH,
+                                    LANG_EN)
         # Load language from platform settings file
         settings_file = 'Algorithm Competition Assistant.sublime-settings'
         settings = sublime.load_settings(settings_file)
         lang = settings.get('language', 'zh')
         if lang in (LANG_ZH, LANG_EN):
             set_lang(lang)
+        # The [Message] block has its own language preference (message_language
+        # = "zh" keeps the plugin's verdict notes Chinese under an English UI).
+        set_message_language(settings.get('message_language', 'auto'))
 
         # Apply a language change made in the settings file without a restart
         def _on_settings_change():
@@ -81,6 +85,7 @@ def _init():
                 new_lang = settings.get('language', 'zh')
                 if new_lang in (LANG_ZH, LANG_EN):
                     set_lang(new_lang)
+                set_message_language(settings.get('message_language', 'auto'))
             except Exception:
                 pass
 

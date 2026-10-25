@@ -9,6 +9,14 @@ LANG_EN = 'en'
 
 _current_lang = LANG_ZH  # default is Chinese
 
+#: "message_language" setting value: 'auto' (follow the interface language)
+#: or 'zh' (the [Message] block stays Chinese even under an English UI).
+#: Kept here as a plain module global - cph_i18n must stay importable from a
+#: stdlib-only script (see the STATS_I18N_KEYS note in tests/run_tests.py), so
+#: it cannot reach for sublime.load_settings itself; plugin_init pushes the
+#: setting in (and re-pushes it whenever the settings file changes).
+_message_language = 'auto'
+
 STRINGS = {
     'edit': {
         'zh': '编辑',
@@ -841,6 +849,22 @@ STRINGS = {
         'zh': '请先运行测试再查看详情',
         'en': 'Run the test first to see details',
     },
+    'detail_facts': {
+        'zh': '本次运行',
+        'en': 'this run',
+    },
+    'detail_fold': {
+        'zh': '折叠',
+        'en': 'fold',
+    },
+    'detail_unfold': {
+        'zh': '展开',
+        'en': 'unfold',
+    },
+    'detail_copy': {
+        'zh': '复制',
+        'en': 'copy',
+    },
     'detail_used_limit': {
         'zh': '时限用量',
         'en': 'time used',
@@ -1379,3 +1403,45 @@ def t(key, **kwargs):
         except (KeyError, IndexError):
             return s
     return s
+
+
+def set_message_language(pref):
+    """Record the message_language setting ('auto' | 'zh').
+
+    Anything the setting does not define (including a typo) falls back to
+    'auto', which is also the shipped default - a bad value must not change
+    the language of anything.
+    """
+    global _message_language
+    _message_language = LANG_ZH if pref == LANG_ZH else 'auto'
+
+
+def message_language():
+    """The effective message_language preference ('auto' | 'zh')."""
+    return _message_language
+
+
+def t_message(key, **kwargs):
+    """t() for text that lands in a test's [Message] block.
+
+    The plugin's own verdict附言 (where the RE happened, that the output was
+    truncated, why a WA in release mode is suspicious...) is the one part of
+    an English interface a Chinese user still has to *read carefully* - the
+    words carry the diagnosis. With message_language = "zh" those lines come
+    out in Chinese while the rest of the UI stays English; every other value
+    (and every other language combination) behaves exactly like t().
+
+    Used ONLY for plugin-written message text. Whatever a checker/interactor
+    program printed itself is passed through verbatim at the call sites.
+    """
+    if _message_language == LANG_ZH and _current_lang != LANG_ZH:
+        entry = STRINGS.get(key)
+        if isinstance(entry, dict) and LANG_ZH in entry:
+            s = entry[LANG_ZH]
+            if kwargs:
+                try:
+                    return s.format(**kwargs)
+                except (KeyError, IndexError):
+                    return s
+            return s
+    return t(key, **kwargs)

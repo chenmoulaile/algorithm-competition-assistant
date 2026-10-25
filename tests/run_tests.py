@@ -428,13 +428,15 @@ def _i18n_usage():
             mod = ast.parse(open(fpath, encoding='utf-8').read())
         except Exception:
             continue
-        # names the i18n helper t() is imported under ('t', '_i18n_t', ...)
+        # names the i18n helpers are imported under ('t', 't_message',
+        # '_i18n_t', ...). t_message is t() for the [Message] block: it
+        # resolves to the same STRINGS keys, so its call sites count as uses.
         helpers = set()
         for node in ast.walk(mod):
             if (isinstance(node, ast.ImportFrom) and node.module
                     and node.module.endswith('cph_i18n')):
                 for alias in node.names:
-                    if alias.name == 't':
+                    if alias.name in ('t', 't_message'):
                         helpers.add(alias.asname or alias.name)
         for node in ast.walk(mod):
             if not isinstance(node, ast.Call) or not node.args:
@@ -447,8 +449,9 @@ def _i18n_usage():
                 recv = getattr(fn.value, 'id', None)
             else:
                 continue
-            # t('key') / i18n.t('key') / STRINGS.get('key')
-            if not ((recv is None and (name == 't' or name in helpers))
+            # t('key') / t_message('key') / i18n.t('key') / STRINGS.get('key')
+            if not ((recv is None and (name in ('t', 't_message')
+                                       or name in helpers))
                     or (recv == 'STRINGS' and name == 'get')):
                 continue
             a0 = node.args[0]
@@ -904,6 +907,325 @@ def main():
     check('no method reaches into a PhantomSet for its contents',
           '.phantoms.phantoms' not in _detail_src,
           'a real PhantomSet exposes no list of what it holds')
+
+    # ---- message_language: the [Message] block may stay Chinese under an
+    # English interface (v3.0.0) ----
+    _i18n_mod = importlib.import_module(pkg + '.core.cph_i18n')
+    _saved_lang = _i18n_mod.get_lang()
+    _saved_msg_lang = _i18n_mod.message_language()
+    try:
+        _i18n_mod.set_lang(_i18n_mod.LANG_EN)
+        _i18n_mod.set_message_language('zh')
+        check('the message helper picks Chinese under an English UI',
+              _i18n_mod.t_message('runtime_error_at', location='x.cpp:4')
+              == _i18n_mod.STRINGS['runtime_error_at']['zh'].format(
+                  location='x.cpp:4')
+              and _i18n_mod.t('runtime_error_at', location='x.cpp:4')
+              == _i18n_mod.STRINGS['runtime_error_at']['en'].format(
+                  location='x.cpp:4'),
+              'the message follows message_language, the rest follows language')
+        _i18n_mod.set_message_language('auto')
+        check('message_language auto follows the interface language',
+              _i18n_mod.t_message('output_truncated_warn')
+              == _i18n_mod.t('output_truncated_warn'))
+        check('an unknown message_language value falls back to auto',
+              (_i18n_mod.set_message_language('nonsense'),
+               _i18n_mod.t_message('output_truncated_warn')
+               == _i18n_mod.t('output_truncated_warn'))[1])
+        _i18n_mod.set_lang(_i18n_mod.LANG_ZH)
+        _i18n_mod.set_message_language('zh')
+        check('a Chinese interface needs no message override',
+              _i18n_mod.t_message('wa_release_hint')
+              == _i18n_mod.STRINGS['wa_release_hint']['zh'])
+
+        # the real producers: a parallel verdict's notes land in Chinese when
+        # the setting says so; the RE location and the truncation notice are
+        # exactly the two texts a user reads to decide what to do next.
+        _i18n_mod.set_lang(_i18n_mod.LANG_EN)
+        _i18n_mod.set_message_language('zh')
+        _msg_tester = make_tester([tm.CphTestManagerCommand.Test('a')])
+        _msg_cmd = tm.CphTestManagerCommand.__new__(tm.CphTestManagerCommand)
+        _msg_cmd.tester = _msg_tester
+        _msg_cmd.dbg_file = None
+        _msg_cmd.store_parallel_result(0, {
+            'verdict': verdict.get_verdict('runtime_error'),
+            'stdout': '', 'stderr': '', 'runtime': 5, 'rtcode': 139,
+            'crash': ('x.cpp', 4), 'capped': True})
+        _msg_txt = _msg_tester.tests[0].message
+        check('parallel verdict notes land in Chinese',
+              _i18n_mod.STRINGS['runtime_error_at']['zh'].split()[0] in _msg_txt
+              and _i18n_mod.STRINGS['output_truncated_warn']['zh'][:4] in _msg_txt,
+              repr(_msg_txt))
+        check('no message text is produced through plain t()',
+              '.message = t(' not in _detail_src
+              and 'hints.append(t(' not in _detail_src
+              and "message = '%s %s' % (t(" not in _detail_src,
+              'every [Message] producer must go through t_message')
+        check('the default settings ship message_language',
+              '"message_language": "auto"' in open(os.path.join(
+                  ROOT, 'Algorithm Competition Assistant.sublime-settings'),
+                  encoding='utf-8').read())
+        check('README_CN documents message_language',
+              'message_language' in open(os.path.join(ROOT, 'README_CN.md'),
+                                         encoding='utf-8').read())
+    finally:
+        _i18n_mod.set_lang(_saved_lang)
+        _i18n_mod.set_message_language(_saved_msg_lang)
+
+    # ---- the diff pair is always complete and always whole-line (v3.0.0) ----
+    # A '-' op (a line only in the expected output) used to print the green
+    # line alone; both sides must always exist - the empty side as (empty) -
+    # so want/got are always coloured as a green/red pair.
+    cmd.tester = None
+    cmd.dbg_file = None
+    pair_test = _DetailTest()
+    pair_test.test_string = '1'
+    pair_test.expected_output = 'a\nb'
+    pair_test.stdout = 'a'
+    pair_marks = []
+    pair_text = cmd.build_detail_content(0, pair_test, pair_marks)
+    pair_lines = pair_text.split('\n')
+    want_rows = sorted(r for r, k in pair_marks if k == 'want')
+    got_rows = sorted(r for r, k in pair_marks if k == 'got')
+    check("a '-' op still emits both sides of the pair",
+          len(want_rows) == len(got_rows) >= 1
+          and all(0 <= r < len(pair_lines) for r in want_rows + got_rows),
+          'want rows %s vs got rows %s' % (want_rows, got_rows))
+    check('want and got sit on adjacent lines as one pair',
+          all(g - w == 1 for w, g in zip(want_rows, got_rows)),
+          'want %s got %s' % (want_rows, got_rows))
+    plus_test = _DetailTest()
+    plus_test.test_string = '1'
+    plus_test.expected_output = 'a'
+    plus_test.stdout = 'a\nb'
+    plus_marks = []
+    cmd.build_detail_content(0, plus_test, plus_marks)
+    check("a '+' op emits both sides too",
+          sum(1 for _r, k in plus_marks if k == 'want')
+          == sum(1 for _r, k in plus_marks if k == 'got') >= 1,
+          str(plus_marks))
+
+    # the pair colour must span the WHOLE line - column 0 to end of line,
+    # trailing whitespace included - never just the length of the text.
+    class _LineRegionView(object):
+        """Records the exact Regions added, so a check can insist the diff
+        colour covers the full line width without editing buffer bytes."""
+
+        def __init__(self, text):
+            self.text = text
+            self.regions = {}
+
+        def text_point(self, row, col):
+            return sum(len(one) + 1
+                       for one in self.text.split('\n')[:row]) + col
+
+        def line(self, point):
+            offset = 0
+            for one in self.text.split('\n'):
+                if point <= offset + len(one):
+                    return _sb.Region(offset, offset + len(one))
+                offset += len(one) + 1
+            return _sb.Region(0, 0)
+
+        def add_regions(self, key, regions, scope='', icon='', flags=0):
+            self.regions[key] = list(regions)
+
+        def erase_regions(self, key):
+            self.regions.pop(key, None)
+
+    _lrv = _LineRegionView(
+        'head\n- expected line with trailing   \n+ actual\n')
+    _ldc2 = tm.CphTestDetailViewCommand.__new__(tm.CphTestDetailViewCommand)
+    _ldc2.view = _lrv
+    _ldc2.set_marks([(1, 'want'), (2, 'got')])
+    _want_regs = _lrv.regions.get('cph-detail-want', [])
+    _got_regs = _lrv.regions.get('cph-detail-got', [])
+    _want_line = _lrv.line(_lrv.text_point(1, 0))
+    check('the diff colour spans the whole line, trailing spaces included',
+          len(_want_regs) == 1
+          and _want_regs[0].a == _want_line.a and _want_regs[0].b == _want_line.b
+          and _want_line.b - _want_line.a == len('- expected line with trailing   ')
+          and len(_got_regs) == 1,
+          'want %r line %r' % (_want_regs, _want_line))
+    check('the whole-line colour touches no buffer byte',
+          _lrv.text == 'head\n- expected line with trailing   \n+ actual\n')
+
+    # ---- the detail view's collapsible cards (v3.0.0) ----
+    card_test = _DetailTest()
+    card_test.test_string = '1 2'
+    card_test.expected_output = '3'
+    card_test.stdout = '4'
+    card_test.stderr = 'boom'
+    card_test.message = 'note'
+    card_marks = []
+    card_text, card_blocks = cmd.build_detail(0, card_test, card_marks)
+    check('build_detail_content and build_detail agree on the text',
+          cmd.build_detail_content(0, card_test) == card_text)
+    check('every section becomes a card',
+          [b['id'] for b in card_blocks]
+          == ['input', 'expected', 'actual', 'diff', 'stderr', 'message'],
+          str([b['id'] for b in card_blocks]))
+    check('blocks tile the document without gaps or overlaps',
+          all(b2['start'] >= b1['start'] + b1['count']
+              for b1, b2 in zip(card_blocks, card_blocks[1:]))
+          and sum(b['count'] for b in card_blocks)
+          <= len(card_text.split('\n')),
+          str([(b['id'], b['start'], b['count']) for b in card_blocks]))
+    check('cards carry the raw payload for their copy action',
+          dict((b['id'], b['copy']) for b in card_blocks)['actual'] == '4'
+          and dict((b['id'], b['copy']) for b in card_blocks)['input'] == '1 2',
+          str([(b['id'], b['copy']) for b in card_blocks]))
+    check('the card template exists and is formattable',
+          '{fold_href}' in open(os.path.join(
+              ROOT, 'Highlight', 'test_detail_card.html'),
+              encoding='utf-8').read())
+
+    class _CardView(object):
+        """A detail-view stand-in that tracks buffer edits the way a real
+        view does, so folding is exercised as the erase/insert it is."""
+
+        def __init__(self):
+            self.text = ''
+            self.ro = True
+            self.regions = {}
+
+        def set_scratch(self, _v):
+            pass
+
+        def set_read_only(self, ro):
+            self.ro = ro
+
+        def replace(self, _edit, region, text):
+            self.text = self.text[:region.a] + text + self.text[region.b:]
+
+        def insert(self, _edit, pt, text):
+            self.text = self.text[:pt] + text + self.text[pt:]
+
+        def erase(self, _edit, region):
+            self.text = self.text[:region.a] + self.text[region.b:]
+
+        def size(self):
+            return len(self.text)
+
+        def sel(self):
+            return _StrictSelection()
+
+        def text_point(self, row, col):
+            return sum(len(one) + 1
+                       for one in self.text.split('\n')[:row]) + col
+
+        def line(self, point):
+            offset = 0
+            for one in self.text.split('\n'):
+                if point <= offset + len(one):
+                    return _sb.Region(offset, offset + len(one))
+                offset += len(one) + 1
+            return _sb.Region(0, 0)
+
+        def add_regions(self, key, regions, scope='', icon='', flags=0):
+            self.regions[key] = list(regions)
+
+        def erase_regions(self, key):
+            self.regions.pop(key, None)
+
+        def settings(self):
+            return _sb.Settings({})
+
+        def window(self):
+            return None
+
+    _cv = _CardView()
+    _cc = tm.CphTestDetailViewCommand.__new__(tm.CphTestDetailViewCommand)
+    _cc.view = _cv
+    _cc.phantoms = _StrictPhantomSet()
+    _cc._copy_payload = ('', '')
+    _cc._blocks = []
+    _cc._order = []
+    _cc._marks_full = []
+    _cc._folded = set()
+    _cc._header_html = None
+    _cc._jump_spec = None
+    _cc.run(None, text=card_text, marks=card_marks, blocks=card_blocks,
+            header='<div class="panel">h</div>')
+    check('filling with cards renders the header plus one card per section',
+          len(_cc.phantoms.updates) == 1
+          and len(_cc.phantoms.updates[0]) == 1 + len(card_blocks),
+          '%d update calls, %d phantoms'
+          % (len(_cc.phantoms.updates),
+             len(_cc.phantoms.updates[0]) if _cc.phantoms.updates else 0))
+    check('the filled buffer is the exact plain text',
+          _cv.text == card_text)
+    _cc.run(None, action='fold', block='input')
+    _bt = [b for b in _cc._blocks if b['id'] == 'input'][0]['text']
+    check('folding erases exactly the block lines',
+          _cv.text == card_text.replace(_bt, '', 1),
+          repr(_cv.text[:60]))
+    _cc.run(None, action='fold', block='input')
+    check('unfolding writes them back byte for byte',
+          _cv.text == card_text)
+    _cc.run(None, action='fold', block='diff')
+    check('folding the diff drops its colour',
+          'cph-detail-want' not in _cv.regions
+          and 'cph-detail-got' not in _cv.regions,
+          str(sorted(_cv.regions)))
+    _cc.run(None, action='fold', block='diff')
+    check('unfolding brings the diff colour back',
+          _cv.regions.get('cph-detail-want') and _cv.regions.get('cph-detail-got')
+          and _cv.text == card_text)
+    _cc.run(None, action='fold', block='expected')
+    _folded_lines = _cv.text.split('\n')
+    _want_row = [i for i, one in enumerate(_folded_lines)
+                 if one.startswith('- ')][0]
+    _w_reg = (_cv.regions.get('cph-detail-want') or [None])[0]
+    check('the diff colour follows its text past a fold above it',
+          _w_reg is not None and _w_reg.a == _cv.text_point(_want_row, 0),
+          'region %r vs row %d' % (_w_reg, _want_row))
+    _cc.run(None, action='fold', block='input')
+    _anchors = [p.region.a for p in _cc.phantoms.updates[-1][1:]]
+    check('cards re-anchor after folds shift the text',
+          _anchors == [_cc._block_point(b['idx']) for b in _cc._blocks],
+          'anchors %r' % _anchors)
+    # unfold 'expected' so the refresh check below has exactly two folds left
+    _cc.run(None, action='fold', block='expected')
+    _cc.run(None, action='fold', block='stderr')
+    _cc.run(None, text=card_text, marks=card_marks, blocks=card_blocks,
+            header='<div class="panel">h</div>')
+    _st = [b for b in _cc._blocks if b['id'] == 'stderr'][0]['text']
+    check('a refresh keeps the folds the user made',
+          _cv.text == card_text.replace(_bt, '', 1).replace(_st, '', 1),
+          repr(_cv.text[:60]))
+    _clip2 = sys.modules['sublime'].set_clipboard
+    _copies2 = []
+    sys.modules['sublime'].set_clipboard = lambda text: _copies2.append(text)
+    try:
+        _cc.on_card_event('detail-copy-actual')
+        _cc.on_card_event('detail-copy-message')
+    finally:
+        sys.modules['sublime'].set_clipboard = _clip2
+    check('a card copies its own block payload',
+          _copies2 == ['4', 'note'], repr(_copies2))
+    check('unknown card events are not swallowed',
+          _cc.on_card_event('somebody-else') is False)
+
+    # detail_rich false must still restore the plain fill exactly
+    _settings_mod2 = importlib.import_module(pkg + '.core.cph_settings')
+    _saved_settings2 = _settings_mod2.settings
+    _settings_mod2.init_settings({'detail_rich': False})
+    try:
+        _args_plain = cmd.detail_view_args(0, card_test)
+        check('detail_rich false restores the plain fill exactly',
+              'blocks' not in _args_plain and 'marks' not in _args_plain
+              and 'header' not in _args_plain
+              and _args_plain['text'] == card_text)
+    finally:
+        _settings_mod2.init_settings(_saved_settings2)
+    _settings_mod2.init_settings({'detail_rich': True})
+    _args_rich = cmd.detail_view_args(0, card_test)
+    _settings_mod2.init_settings(_saved_settings2)
+    check('the rich fill carries cards, marks and header',
+          _args_rich.get('blocks') and _args_rich.get('marks') is not None
+          and _args_rich.get('header'),
+          str(sorted(_args_rich)))
 
     # 'Run failed tests' jumps past accepted tests: index 3 with only 2 tests
     tester = make_tester([tm.CphTestManagerCommand.Test('a'),
@@ -3317,6 +3639,18 @@ def main():
               artifacts.retarget_path(os.path.join(tmp, 'nope.py'), tmp)
               == os.path.join(tmp, 'nope.py'))
 
+        # Resolving the twin must be SILENT: what _announce used to print
+        # here was the codepage twin of the very name the -o asked for - a
+        # binary that runs fine - so every run of a non-ASCII -o name
+        # printed a scary console line (v3.0.1).
+        artifacts.reset_announced()
+        twin_console = io.StringIO()
+        with contextlib.redirect_stdout(twin_console):
+            artifacts.retarget_command('"%s" -x' % wanted, tmp)
+            artifacts.retarget_path(wanted, tmp)
+        check('resolving the codepage twin prints nothing',
+              twin_console.getvalue() == '', repr(twin_console.getvalue()[:80]))
+
         os.remove(real)
         check('nothing is invented when the binary is really gone',
               artifacts.resolve_artifact(wanted, tmp) is None)
@@ -3374,6 +3708,21 @@ def main():
         cmd = manager.get_run_cmd('')
         check('get_run_cmd keeps the command when the binary is there',
               '中文.exe' in cmd and mangled not in cmd, cmd)
+
+        # The compile note follows the same rule as the retarget (v3.0.1):
+        # a codepage twin IS the binary we asked for, and re-reporting it on
+        # every compile of a non-ASCII -o name was noise; a binary that is
+        # really absent must still speak up.
+        os.remove(exe_wanted)          # the -o name itself is missing...
+        open(exe_real, 'w').close()    # ...but its GBK twin is on disk
+        note_twin = manager._artifact_note(None)
+        check('a codepage-twin binary compiles without a panel note',
+              note_twin == '', repr(note_twin))
+        os.remove(exe_real)
+        note_gone = manager._artifact_note(None)
+        check('a really missing binary still gets its panel note',
+              '中文.exe' in note_gone and 'was produced' in note_gone,
+              repr(note_gone))
     finally:
         shutil.rmtree(tmp2, ignore_errors=True)
 
@@ -4021,11 +4370,44 @@ def main():
     tester = make_tester([tm.CphTestManagerCommand.Test('a')])
     tester.process_manager.is_stopped = lambda: None       # pretend running
     tester._active_gen = 2
-    tester._clock_start = time.time() - 10                 # limit long passed
+    # _clock_start is a monotonic stamp (note_activity / _spawn_moment):
+    # forging it with time.time() bypassed the real assignment path and hid
+    # the v3.0.0 clock mixup, where the watchdog read the monotonic start
+    # with time() and saw a ~1.8e9 s difference.
+    tester._clock_start = time.monotonic() - 10            # limit long passed
     tester._Tester__tle_watchdog(1, 1)                     # thread of run #1
     check('a stale watchdog cannot kill the next run', tester.tle_killed is False)
     tester._Tester__tle_watchdog(2, 1)
     check('the current watchdog still enforces the limit', tester.tle_killed is True)
+
+    # The check above passes with a mixed clock too (time.time() minus a
+    # monotonic stamp is always 'over'). The direction the mixup actually
+    # broke is the healthy one: a run that just started must survive the
+    # watchdog - the process exits on its own a probe or two later.
+    class _SoonDone(object):
+        def __init__(self):
+            self.probes = 0
+
+        def is_stopped(self):
+            self.probes += 1
+            return None if self.probes < 2 else 0
+
+    healthy = make_tester([tm.CphTestManagerCommand.Test('a')])
+    soon = _SoonDone()
+    healthy.process_manager.is_stopped = soon.is_stopped
+    healthy._active_gen = 4
+    healthy._clock_start = time.monotonic() - 0.02         # well under the limit
+    healthy._Tester__tle_watchdog(4, 100)
+    check('a fresh run survives the watchdog (one clock, monotonic)',
+          healthy.tle_killed is False and soon.probes >= 2,
+          'tle_killed=%r probes=%d' % (healthy.tle_killed, soon.probes))
+
+    _clock_src = open(os.path.join(ROOT, 'test_manager.py'),
+                      encoding='utf-8').read()
+    check('the run clock is never read with the wall clock',
+          'time() - start_time' not in _clock_src
+          and 'time() - self._clock_start' not in _clock_src,
+          'watchdog/runtime must subtract monotonic stamps with monotonic()')
 
     # Deleting must also cover tests that were never run (they have a card).
     tm_src = open(os.path.join(ROOT, 'test_manager.py'), encoding='utf-8').read()
@@ -4145,6 +4527,72 @@ def main():
     check('make_opd does not shadow the i18n helper t()',
           't' not in tm.CphTestManagerCommand.make_opd.__code__.co_varnames,
           str(tm.CphTestManagerCommand.make_opd.__code__.co_varnames[:8]))
+
+    # The load is dispatched before the compile and a big tests file beats
+    # g++, so tests_loaded / after_compile can land in either order. Two
+    # invariants keep the first card where it belongs (v3.0.1 regressions:
+    # a stray answer line above card 1, and stray text at the panel top):
+    #   1. start_runner fires only once BOTH halves are in (a one-sided
+    #      'tests are loaded' check let the run start while the compile was
+    #      still going, and the late after_compile then zeroed delta_input
+    #      under the running panel);
+    #   2. delta_input is reset in start_runner itself - in the same
+    #      callback that dispatches new_test - never in a late after_compile.
+    _mo_src = tm_src[tm_src.index('def make_opd'):]
+    _runner_src = _mo_src[_mo_src.index('def start_runner():'):]
+    _runner_src = _runner_src[:_runner_src.index('def after_compile(')]
+    _after_src = _mo_src[_mo_src.index('def after_compile('):]
+    _after_src = _after_src[:_after_src.index('def compile():')]
+    check('start_runner waits for the compile AND the sample load',
+          "loaded_holder.get('compiled')" in _runner_src
+          and "loaded_holder.get('tests')" in _runner_src,
+          'the first run must be gated on both halves')
+    check('the insertion point is reset where the first run is dispatched',
+          _runner_src.find('self.delta_input = 0')
+          > _runner_src.find("loaded_holder['started'] = True") >= 0,
+          'delta_input = 0 belongs after started, inside start_runner')
+    _after_halves = _after_src.split("loaded_holder['failed'] = True")
+    check('a late after_compile cannot zero the insertion point of a started run',
+          len(_after_halves) == 2
+          and 'self.delta_input = 0' not in _after_halves[0]
+          and 'self.delta_input = 0' in _after_halves[1],
+          'after_compile may reset delta_input only in its failure branch')
+    check('a compile that lands after a newer Run is dropped',
+          'tester_epoch' in _after_src.split('self.compiling_since = None')[0],
+          'after_compile must check the epoch before touching the panel')
+    # Two bumps must precede the dispatch: one in the rerun branch, one in
+    # the straight path (before loaded_holder is even built) - counting them
+    # stops the rerun branch's bump from masquerading as the gate.
+    _pre_gate = _mo_src[:_mo_src.index("loaded_holder = {")]
+    check('make_opd invalidates the previous press before dispatching anything',
+          _pre_gate.count("self.tester_epoch = getattr(self, 'tester_epoch', 0) + 1") >= 2,
+          'the straight path needs its own epoch bump before load/compile go out')
+    check("the retired 'pending' marker is gone",
+          "loaded_holder['pending']" not in tm_src)
+
+    # on_insert must carry the same stale-callback guard as on_out/on_stop:
+    # a killed process can still be fed its sample while the next run is
+    # being set up, and that text would land at the new delta_input.
+    # TypeError counts as a failure: the guard (and its epoch parameter)
+    # would be missing entirely.
+    mgr_ins = tm.CphTestManagerCommand.__new__(tm.CphTestManagerCommand)
+    mgr_ins.view = sys.modules['sublime'].View()
+    inserted = []
+    mgr_ins.view.run_command = lambda cmd, args=None: inserted.append(args)
+    mgr_ins.tester_epoch = 5
+    try:
+        mgr_ins.on_insert('stale', epoch=4)
+        stale_ok = inserted == []
+    except TypeError:
+        stale_ok = False
+    check('a stale on_insert is dropped', stale_ok)
+    try:
+        mgr_ins.on_insert('live', epoch=5)
+        live_ok = len(inserted) == 1 and inserted[0].get('text') == 'live'
+    except TypeError:
+        live_ok = False
+    check('the current on_insert still reaches the panel', live_ok,
+          repr(inserted))
 
     # Closing xxx.cpp must close 'xxx.cpp -run' (and the paired edit tabs):
     # otherwise the user closes the panel by hand every single time.
@@ -7433,6 +7881,51 @@ def main():
           len(tester_flush._prog_out_parts[0]) == 50
           and tester_flush.output_at(0) == ('chunk' + chr(10)) * 50,
           'parts=%d' % len(tester_flush._prog_out_parts[0]))
+
+    # --- the verdict delivery and the card rebuild flush first (v3.0.1) ---
+    # The 16 ms coalescer can still hold a display chunk when the process
+    # exits. Delivering the verdict (or rebuilding the cards) before that
+    # chunk was inserted put it into the panel AFTER the rewrite, at the
+    # moved delta_input - stray text in the next card or above card 1.
+    _sub_mod = sys.modules['sublime']
+    _keep_set_timeout = _sub_mod.set_timeout
+    try:
+        _ui_queue = []
+        _sub_mod.set_timeout = lambda fn, delay=0: _ui_queue.append(fn)
+        verdict_tester = make_tester([tm.CphTestManagerCommand.Test('1\n')])
+        verdict_tester.running_test = 0
+        shown = []
+        stops = []
+        verdict_tester.on_out = lambda s, epoch=None: shown.append(s)
+        verdict_tester.on_stop = lambda rt, run, **k: stops.append((rt, run))
+        verdict_tester._Tester__on_out('answer\n')   # display-queued
+        verdict_tester._Tester__on_stop(0, 5)        # posts deliver
+        _ui_queue[-1]()                              # the main thread runs it
+        check('the verdict delivery flushes pending display output first',
+              shown == ['answer\n'] and verdict_tester._out_pending == []
+              and stops == [(0, 5)],
+              'shown=%r pending=%r stops=%r'
+              % (shown, verdict_tester._out_pending, stops))
+    finally:
+        _sub_mod.set_timeout = _keep_set_timeout
+
+    mgr_flush = tm.CphTestManagerCommand.__new__(tm.CphTestManagerCommand)
+    mgr_flush.view = sys.modules['sublime'].View()
+    mgr_flush.on_test_action = lambda *a, **k: None
+    mgr_flush.on_accdec_action = lambda *a, **k: None
+    mgr_flush.schedule_auto_fit_panel_width = lambda *a, **k: None
+    mgr_flush.update_summary_bar = lambda *a, **k: None
+    rebuild_tester = make_tester([tm.CphTestManagerCommand.Test('1\n')])
+    rebuild_tester.running_test = 0
+    shown_rebuild = []
+    rebuild_tester.on_out = lambda s, epoch=None: shown_rebuild.append(s)
+    rebuild_tester.post_out('late chunk')
+    mgr_flush.tester = rebuild_tester
+    mgr_flush.test_phantoms = []
+    mgr_flush.update_configs()
+    check('a card rebuild flushes pending output into the panel first',
+          shown_rebuild == ['late chunk'] and rebuild_tester._out_pending == [],
+          'shown=%r pending=%r' % (shown_rebuild, rebuild_tester._out_pending))
 
     # --- the panel width is fitted to the cards that ARE there ---
     _sub_mod = sys.modules['sublime']

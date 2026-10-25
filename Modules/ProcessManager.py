@@ -15,7 +15,7 @@ import codecs
 import locale
 
 from .memprobe import MemorySampler, bytes_to_mb, sample_memory_bytes
-from .build_artifact import output_path_from_compile_cmd, resolve_artifact, retarget_command
+from .build_artifact import output_path_from_compile_cmd, resolve_artifact, retarget_command, names_match
 from ..core.cph_i18n import t
 from ..core import cph_state
 from ..core.cph_build_mode import get_mode as _build_mode, transform as _apply_build_mode
@@ -406,6 +406,13 @@ class ProcessManager(object):
 			return ('[Algorithm Competition Assistant] the compiler exited successfully but no '
 					'%s was produced\n' % path.basename(wanted))
 		if actual != wanted:
+			# A codepage twin (中文.exe written through GBK and read back as
+			# latin-1) is the same binary under a mangled name: the run
+			# command is already retargeted at it and it runs fine. Telling
+			# the user about it on every compile of a non-ASCII -o name was
+			# pure noise - only a genuinely different name is worth a line.
+			if names_match(path.basename(actual), path.basename(wanted)):
+				return ''
 			return ('[Algorithm Competition Assistant] the binary was written as %s (the '
 					'compiler did not use the -o name)\n' % path.basename(actual))
 		return ''
