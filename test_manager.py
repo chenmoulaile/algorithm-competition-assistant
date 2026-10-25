@@ -363,17 +363,19 @@ def estimate_card_width_px(view, with_memory=False):
 	font_px = font_pt * 4.0 / 3.0
 
 	# Visible text of each segment of the widest card row, worst case:
-	# 2-digit test id, 6-digit runtime, optional memory segment. Localized
-	# labels are counted as-is so zh/en both work.
+	# 2-digit test id, 6-digit runtime, optional memory segment. The value
+	# carries its unit (ms / MB), so the card shows no "time:" / "mem:"
+	# label - keeping them made TLE cards wide enough to wrap "4 MB" onto a
+	# second line, where it collided with the row below.
 	segments = (
 		' ' + t('test_label') + ' 88 ',
 		' ' + t('edit') + ' ',
 		' ' + t('run') + ' ',
 		' ' + t('detail') + ' ',
-		' ' + t('time') + ': 9999ms ',
+		' 9999ms ',
 	)
 	if with_memory:
-		segments += (' ' + t('memory') + ': 888.88 MB ',)
+		segments += (' 888.88 MB ',)
 
 	ascii_n = 0
 	wide_n = 0
@@ -669,8 +671,6 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					edit_label=t('edit'),
 					run_label=t('run'),
 					detail_label=t('detail'),
-					time_label=t('time'),
-					memory_label=t('memory'),
 					test_label=t('test_label'),
 				)
 				content = '<style>' + styles + '</style>' + content
@@ -778,8 +778,6 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				actual_output_label=t('actual_output'),
 				error_output_label=t('error_output'),
 				message_label=t('message'),
-				time_label=t('time'),
-				memory_label=t('memory'),
 			)
 			content = '<style>' + styles + '</style>' + content
 
@@ -2115,15 +2113,18 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		can colour the diff lines with regions: the buffer itself stays plain
 		text, so the detail remains selectable and copyable and a paste out of it
 		is exactly what is shown. kind is 'want' (the expected line), 'got' (the
-		program's line) or 'head' (a section title).
+		program's line) or 'head' (a section title; recorded for bookkeeping but
+		deliberately not coloured - a blue slab behind every title and every
+		"vs last" fact read as noise, and the two colours that carry meaning
+		here are the green/red diff pair).
 		"""
 		verdict_short = test.verdict['name'] if test.verdict else 'UKE'
 		runtime_str = test.get_nice_runtime().replace('&nbsp;', ' ').strip()
-		header = '%s %d  |  %s  |  %s: %s' % (t('test_label').capitalize(), i + 1,
-			verdict_short, t('time'), runtime_str)
+		# values carry their own unit, so no "time:" / "mem:" prefix here either
+		header = '%s %d  |  %s  |  %s' % (t('test_label').capitalize(), i + 1,
+			verdict_short, runtime_str)
 		if test.memory not in ('-', None):
-			header += '  |  %s: %s' % (t('memory'),
-				test.get_nice_memory().replace('&nbsp;', ' '))
+			header += '  |  %s' % test.get_nice_memory().replace('&nbsp;', ' ')
 		lines = [header, '=' * max(len(header), 40), '']
 
 		# How much of the limit this run used, and what changed since the last
@@ -2415,26 +2416,29 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		return test.expected_output or ''
 
 	def detail_header_html(self, i, test):
-		"""One bar above the detail text: badge, verdict, time, memory, actions.
+		"""One bar above the detail text: badge, test, runtime, memory, actions.
 
 		Built from the same classes the cards use, so it follows the panel
 		theme. It is a phantom, not text: selecting or copying the detail still
 		gives exactly the plain body, which is the property this view exists for.
+
+		Like the cards, the values carry no "time:" / "mem:" label - a bar with
+		labels ran off the edge of a half-width pane and the copy buttons were
+		clipped away. The badge takes the verdict's own class: per-verdict rules
+		(.verdict-TLE etc.) exist for the full set, while the hand-picked map
+		here did not (it even looked up 'TL' for TLE, so every TLE detail
+		showed a bare, unbackgrounded verdict).
 		"""
 		name = test.verdict['name'] if test.verdict else 'UKE'
-		badge_class = ''
-		if test.verdict:
-			badge_class = {'AC': 'verdict-ac', 'WA': 'verdict-wa',
-			               'TL': 'verdict-tle', 'MLE': 'verdict-mle',
-			               'RE': 'verdict-re', 'PE': 'verdict-pe',
-			               'SK': 'verdict-sk'}.get(name, '')
-		parts = ['<span class="verdict-badge %s">%s</span>' % (badge_class, esc(name)),
-		         '<span style="margin-left: 8px;">%s %d</span>' % (esc(t('test_label')), i + 1),
-		         '<span class="runtime-info" style="margin-left: 8px;">%s: %s</span>'
-		         % (esc(t('time')), esc(test.get_nice_runtime().replace('&nbsp;', ' ').strip()))]
+		# a Unicode NBSP survives esc() and still stops minihtml from wrapping
+		# between the number and its unit (get_nice_memory's own comment)
+		runtime_str = esc(test.get_nice_runtime().replace('&nbsp;', '\u00a0').strip())
+		parts = ['<span class="verdict-badge verdict-%s">%s</span>' % (esc(name), esc(name)),
+		         '<span style="margin-left: 6px;">%s %d</span>' % (esc(t('test_label')), i + 1),
+		         '<span class="runtime-info" style="margin-left: 8px;">%s</span>' % runtime_str]
 		if test.memory not in ('-', None):
-			parts.append('<span class="memory-info" style="margin-left: 8px;">%s: %s</span>'
-			             % (esc(t('memory')), esc(test.get_nice_memory().replace('&nbsp;', ' ').strip())))
+			parts.append('<span class="memory-info" style="margin-left: 8px;">%s</span>'
+			             % esc(test.get_nice_memory().replace('&nbsp;', '\u00a0').strip()))
 		parts.append('<a class="config" href="detail-copy-expected" style="margin-left: 12px;">%s</a>'
 		             % esc(t('detail_copy_expected')))
 		parts.append('<a class="config" href="detail-copy-actual" style="margin-left: 8px;">%s</a>'
@@ -3999,7 +4003,6 @@ class CphTestDetailViewCommand(sublime_plugin.TextCommand):
 		# here once before. Regions are decoration only and touch no bytes.
 		'want': ('cph-detail-want', 'region.greenish'),
 		'got': ('cph-detail-got', 'region.redish'),
-		'head': ('cph-detail-head', 'region.bluish'),
 	}
 
 	def set_marks(self, marks):
@@ -4017,7 +4020,7 @@ class CphTestDetailViewCommand(sublime_plugin.TextCommand):
 						regions.append(Region(start, end))
 				except Exception:
 					continue
-			if regions:
+			if regions and scope:
 				v.add_regions(key, regions, scope, '', sublime.DRAW_NO_OUTLINE)
 			else:
 				v.erase_regions(key)

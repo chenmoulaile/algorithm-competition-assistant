@@ -114,7 +114,8 @@ a {
 }
 
 .memory-info {
-	color: var(--purplish);
+	/* dimmed like secondary text: a pink value on every row read as noise */
+	color: color(var(--foreground) alpha(0.75));
 	font-family: monospace;
 }
 

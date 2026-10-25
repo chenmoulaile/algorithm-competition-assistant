@@ -1120,6 +1120,32 @@ def main():
     check('the detail template still shows stderr',
           '{stderr}' in detail_tpl and '{error_output_label}' in detail_tpl)
 
+    # The card and the detail header show the bare values: "2542ms" and
+    # "4 MB" carry their own units, and the 'time:' / 'mem:' label width is
+    # exactly what made a slow card wrap "4 MB" onto the panel below and what
+    # clipped the copy buttons off the detail bar's right edge. The value
+    # keeps its non-breaking space, which also must survive as a real NBSP
+    # (an html-entity would print as literal text after esc()).
+    check('the card template shows no time/mem label placeholder',
+          '{time_label}' not in card_tpl and '{memory_label}' not in card_tpl)
+    check('the detail template shows no time/mem label placeholder',
+          '{time_label}' not in detail_tpl and '{memory_label}' not in detail_tpl)
+    _i18n = importlib.import_module(pkg + '.core.cph_i18n')
+    check('the time/mem label entries are gone from the translation table',
+          'time' not in _i18n.STRINGS and 'memory' not in _i18n.STRINGS)
+    check('the card width estimator counts the label-free rows',
+          "': 9999ms '" not in _detail_src and "' 9999ms '" in _detail_src)
+    _tle_card = tm.CphTestManagerCommand.Test({'test': '1\n'})
+    _tle_card.verdict = verdict.get_verdict_by_name('TLE')
+    _tle_card.memory = '4'
+    _bar = cmd.detail_header_html(0, _tle_card)
+    check('the detail bar takes the verdict\u0027s own badge class',
+          'verdict-badge verdict-TLE' in _bar and 'TLE' in _bar, _bar[:80])
+    check('the detail bar shows the values, not their labels',
+          'time:' not in _bar and 'mem:' not in _bar, _bar[:80])
+    check('the detail bar keeps the unit on one unbreakable line',
+          '4\xa0MB' in _bar and '4&nbsp;' not in _bar, _bar[:80])
+
     # A leaked MemorySampler used to poll a dead pid for the whole session.
     # Use an impossible pid plus a tiny interval and a hard cap on how long a
     # single sample may take, so the check cannot depend on runner speed (a

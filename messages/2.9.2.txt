@@ -1,0 +1,43 @@
+Algorithm Competition Assistant 2.9.2
+=====================================
+
+The test cards and the detail tab loosen up: shorter rows that no longer wrap,
+and colour that stays only where the diff is.
+
+* The cards drop "time:" and "mem:" - the values say it with their units
+
+  A card read "test 4 | edit | run | detail | time: 2542ms | mem: 4 MB". Two
+  problems came from that: the labels repeated what the ms / MB units already
+  say, and the redundant width was exactly what made a slow card (2542ms in
+  the time chip) spill its "4 MB" onto a second line, where it landed on top
+  of the row below. The chips now read "2542ms" and "4 MB", the card keeps the
+  same information in less than half the label width, and the slow-card row
+  stays on one line. The same two characters go from the detail tab's plain
+  header and its phantom badge bar - which was also why the copy buttons were
+  the first thing clipped off the bar's right edge.
+
+- The memory value stops shouting
+
+  Every card and every detail bar showed the memory figure in pink; on four
+  rows it reads as noise. The value is now dimmed like secondary text, and
+  coloured detail remains only where it carries a verdict (the badge) or marks
+  a difference (the green / red diff pair).
+
+- The detail tab's headers stop wearing a blue slab
+
+  The section titles and the "time used / vs last / history" facts were all
+  filled with a blue background. The bracketed titles already say "header",
+  and the fill fought with the two diff colours the page is actually about.
+  The slab is gone; the diff lines keep theirs.
+
+  The badge in the detail's bar also takes the verdict's own class now - the
+  old hand-picked map looked up 'TL' for TLE (a name that never occurs), so a
+  TLE detail showed a bare unbackgrounded verdict and every verdict outside
+  its six entries fell the same way. All of them had rules in the stylesheet
+  already.
+
+Freeloaded fixes in this release: none. Regression suite: 869 -> 876 checks.
+checks. The new cases pin the label removal in both card templates and in the
+translation table, the badge taking the verdict's own class, the value keeping
+its NBSP as a real character after escaping, and the card-width estimator
+counting the label-free rows.
