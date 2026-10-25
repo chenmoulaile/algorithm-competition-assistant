@@ -13,7 +13,6 @@ import threading
 import time
 import codecs
 import locale
-import shlex
 
 from .memprobe import MemorySampler, bytes_to_mb, sample_memory_bytes
 from .build_artifact import output_path_from_compile_cmd, resolve_artifact, retarget_command
@@ -559,15 +558,24 @@ class ProcessManager(object):
 		startupinfo = None
 		preexec_fn = None
 		if sublime.platform() == 'windows':
-			startupinfo = subprocess.STARTUPINFO()
-			startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+			startupinfo = _hidden_startupinfo()
 		else:
 			# Own session so _kill_tree() can take the shell and the compiler
 			# down together instead of orphaning the compiler.
 			preexec_fn = os.setsid
+		# Same rule the run path applies: a shell only when the command needs
+		# one. Quoted paths (the common compile command) still take the shell;
+		# a bare `g++ -O2 main.cpp` no longer drags one in, which keeps the
+		# compile and the run path from disagreeing about the same command.
+		use_shell = _needs_shell(cmd)
+		if not use_shell:
+			try:
+				cmd = shlex.split(cmd)
+			except Exception:
+				use_shell = True
 		p = subprocess.Popen(
 			cmd,
-			shell=True,
+			shell=use_shell,
 			stdin=None,
 			stdout=PIPE,
 			stderr=subprocess.STDOUT,
@@ -767,7 +775,7 @@ class ProcessManager(object):
 		return ('', t('io_output_missing', name=self.io_spec.get('output') or '?',
 					 input=self.io_spec.get('input') or '?'))
 
-	def run_file(self, args=[]):
+	def run_file(self, args=None):
 		if self.is_run:
 			# Recover from a stale flag instead of crashing: if the old
 			# process already exited (finished, killed or TLE-terminated)
@@ -779,7 +787,7 @@ class ProcessManager(object):
 				self.is_run = False
 			else:
 				raise AssertionError('cant run process because is already running')
-		cmd = self.get_run_cmd(' '.join(args))
+		cmd = self.get_run_cmd(' '.join(args or []))
 		# File-IO problems run inside a scratch directory that holds the sample
 		# under the name the statement gives; stdin problems keep running next
 		# to the source as they always did.
@@ -847,7 +855,10 @@ class ProcessManager(object):
 		# The program exists from this instant: everything before it (our own
 		# command formatting, Popen itself) is plugin overhead and is excluded
 		# from the runtime the verdict is judged on.
-		self.spawn_time = time.time()
+		# monotonic(): the runtime the verdict is made from spans two
+		# timestamps taken seconds apart, and an NTP step between them used to
+		# move the number without the program doing anything.
+		self.spawn_time = time.monotonic()
 		self.exit_time = None
 		self._track_live(self.process, 'run')
 
@@ -907,7 +918,17 @@ class ProcessManager(object):
 		if isinstance(s, str):
 			s = s.encode('utf-8', 'replace')
 		try:
-			proc.stdin.write(s)
+			# bufsize=0 gives a raw pipe: one write() may accept only part of
+			# the data (POSIX raw writes are partial by nature), so everything
+			# past the first ~64 KB used to be dropped silently. Loop until the
+			# buffer is consumed; a 0 return is a defensive stop against a
+			# writer that would otherwise spin forever.
+			data = s
+			while data:
+				n = proc.stdin.write(data)
+				if not n or n < 0:
+					break
+				data = data[n:]
 			proc.stdin.flush()
 		except (OSError, ValueError) as e:
 			# The program exited before reading everything (BrokenPipeError
@@ -956,7 +977,7 @@ class ProcessManager(object):
 		# draining the pipe, reading stderr and stopping the memory sampler
 		# must not land in the runtime the verdict is made from.
 		if rc is not None and self.exit_time is None:
-			self.exit_time = time.time()
+			self.exit_time = time.monotonic()
 			# Nothing is left for an unload to reap; keep the registry small
 			# instead of carrying dead pids until the cap forces a prune.
 			self._untrack_live()
@@ -974,6 +995,22 @@ class ProcessManager(object):
 		if self.spawn_time is None or self.exit_time is None:
 			return None
 		return int((self.exit_time - self.spawn_time) * 1000)
+
+	def wait_for_exit(self, timeout):
+		"""Block until the process exits or `timeout` (seconds) passes.
+
+		Returns the exit code on exit, None on timeout (or whenever the wait
+		cannot be performed - a duck-typed stand-in just keeps polling).
+		Touches no UI, so worker threads may call it: the parallel judge uses
+		it instead of a fixed 10 ms poll, and ``wait()`` returns the instant
+		the child dies, so the exit timestamp no longer lags the real death by
+		up to one poll step - which on a 100 ms limit was enough to flip AC
+		into TLE.
+		"""
+		try:
+			return self.process.wait(timeout)
+		except Exception:
+			return None
 
 	def _normalize_newlines(self, text, final=False):
 		"""Translate CRLF / lone CR into LF, like universal_newlines did.

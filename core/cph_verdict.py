@@ -307,15 +307,25 @@ def get_verdict_by_code(rtcode, runtime, time_limit_ms, memory_limit_mb,
             return ''
         return '\n'.join(line.rstrip() for line in s.rstrip().split('\n'))
 
-    fixed_actual = fix(stdout)
-    fixed_expected = fix(expected_output)
-
-    if ole_size and fixed_actual and fixed_expected and len(fixed_actual) > len(fixed_expected) * ole_size:
-        return get_verdict('output_limit_exceed')
+    # fix() is two full rstrip passes over both outputs; it is only ever read
+    # by the OLE length rule and the PE comparison, so the work is deferred
+    # until one of those is actually reached. Order of the verdict rules stays
+    # exactly as it was: OLE is still decided before the token comparison, so
+    # an oversized output still reports OLE rather than WA.
+    fixed_actual = None
+    fixed_expected = None
+    if ole_size:
+        fixed_actual = fix(stdout)
+        fixed_expected = fix(expected_output)
+        if fixed_actual and fixed_expected and len(fixed_actual) > len(fixed_expected) * ole_size:
+            return get_verdict('output_limit_exceed')
 
     if float_tolerance and float_tolerance > 0:
         if not outputs_equal(stdout, expected_output, float_tolerance):
             return get_verdict('wrong_answer')
+        # The tolerant comparison accepts token equality and stops there; the
+        # PE rule below was never reached on this path before, and the verdict
+        # must not change with the refactor.
         return get_verdict('accepted')
 
     # Compare the token sequence, not a whitespace-stripped blob: joining
@@ -325,6 +335,9 @@ def get_verdict_by_code(rtcode, runtime, time_limit_ms, memory_limit_mb,
     if not outputs_equal(stdout, expected_output, 0):
         return get_verdict('wrong_answer')
 
+    if fixed_actual is None:
+        fixed_actual = fix(stdout)
+        fixed_expected = fix(expected_output)
     if fixed_actual != fixed_expected and not regard_pe_as_ac:
         return get_verdict('presentation_error')
 
@@ -394,15 +407,31 @@ def is_crash_exit_code(rtcode):
     return False
 
 
+#: Head/tail window applied before scanning: crash signatures (a traceback's
+#: first line, a sanitizer summary, segfault text) live at the start or the end
+#: of the stream, and an 8 MB clean output took ~80 ms to scan end to end -
+#: paid on every AC/TLE decision. The window cuts that to ~5 ms.
+_CRASH_SCAN_WINDOW = 65536
+
+
 def looks_like_crash(text):
     """True when an error stream carries a runtime-error signature.
 
     Deliberately narrow: plain `cerr` debug output must never turn a run
     into RE, only text that a crash handler / sanitizer / interpreter
     traceback actually produces.
+
+    Only the first and last _CRASH_SCAN_WINDOW bytes are scanned: every
+    signature here announces the crash (a traceback opens the stream, a
+    sanitizer summary closes it), never the middle. Known consequence, judged
+    acceptable: a user-configured *recovering* ubsan prints "runtime error:"
+    mid-stream and keeps running - a run that prints that, keeps going and
+    still answers correctly now scores AC instead of RE.
     """
     if not text:
         return False
+    if len(text) > _CRASH_SCAN_WINDOW:
+        text = text[:_CRASH_SCAN_WINDOW // 2] + '\n' + text[-_CRASH_SCAN_WINDOW // 2:]
     for pattern in _CRASH_TEXT:
         if pattern.search(text):
             return True

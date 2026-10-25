@@ -1,0 +1,75 @@
+Algorithm Competition Assistant 3.0.0
+=====================================
+
+The judging engine pass: three verdict bugs that could fail a correct program,
+five performance fixes you can feel, and a panel that is only as wide as its
+cards need.
+
+Correct verdicts (the big three)
+
+* Parallel judging no longer kills a chatty program as TLE
+
+  The parallel runner left stdout unread while it polled; past the OS pipe
+  buffer (~64 KB) a correct program blocked in write() until the watchdog
+  killed it - serial AC, parallel TLE. A drain thread now keeps the pipe
+  empty AND accumulates the text (the verdict still compares it), with a
+  final drain after the join to close the race.
+
+* Large inputs are no longer silently truncated
+
+  insert() wrote once on a raw pipe; a POSIX partial write dropped everything
+  past the first ~64 KB of input. It now loops until the buffer is consumed.
+  The parallel feeder moved to its own thread and arms the deadline before
+  feeding, so a program that never reads stdin can no longer park the whole
+  batch in "running".
+
+* Interactive problems report the real verdict and the real time
+
+  EOF now propagates between the solution and the interactor: a normal
+  dialogue ends when it ends instead of burning the full time limit, and the
+  interactor's exit code (AC/WA/PE) is no longer overwritten by a timeout
+  that only happened on our side. The dialogue itself moved from
+  byte-at-a-time to 4 KB chunks.
+
+Performance you can feel
+
+* A 1 MB clean output no longer costs ~80 ms of crash-signature scanning per
+  verdict (head/tail window: ~5 ms).
+* Pressing Run shows the panel immediately; the sample files load on a
+  worker thread and the first run starts once compile AND load are done.
+* The end-of-chain tests write happens on a worker thread (pretty printing
+  only under 256 KB), practice stats keep an in-memory ledger with a 1 s
+  debounced flush, and Competitive Companion clicks merge + save on the HTTP
+  thread - a problem-list page no longer freezes the editor once per problem.
+* Cursor movement in the run panel performs zero view writes (read-only is
+  unlocked only by branches that actually write).
+* Output is pumped in 4 KB chunks into per-test part lists, displayed in
+  coalesced ~16 ms batches: 8 MB of synced output no longer means millions
+  of main-thread dispatches.
+* Stress rounds reap processes the instant they exit (wait(timeout) instead
+  of a fixed poll), and the SPJ checker reuses one scratch directory for the
+  whole session instead of ~3 GB of file churn per 1000 rounds.
+
+The panel width
+
+* auto_fit_panel_width now measures the cards that are actually on the panel
+  (real verdict, real runtime, real memory chip) instead of the worst case a
+  card could ever show - the sidebar widens just enough for every card to sit
+  on one line, and no further. It still only widens.
+
+New setting
+
+* "show_time_mem_labels" (default false): bring back the 2.9.1-style
+  "time: 2542ms | mem: 4 MB" prefixes on cards, detail headers and the badge
+  bar. Off by default - the bare values are what keep slow cards on one line.
+
+Also
+
+* Verdict fix() work is deferred until a rule actually reads it (WA no longer
+  pays two full rstrip passes); OLE keeps its priority over WA.
+* run times use a monotonic clock end to end (an NTP step no longer moves a
+  verdict), and the parallel judge waits with wait() so the exit timestamp
+  no longer lags by a poll step on 100 ms limits.
+* accept/decline and batch delete rebuild only the cards that changed.
+
+Regression suite: 876 -> 910 checks, including the three verdict bugs above.

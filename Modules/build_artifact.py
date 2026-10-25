@@ -162,6 +162,18 @@ def _exists(path, src_dir):
 _ANNOUNCED = set()
 
 
+def reset_announced():
+    """Forget which binary-name mismatches were already reported.
+
+    The set only ever grew, for the whole session: one entry per (actual,
+    wanted) pair is small, but every stale name a retargeted build system
+    ever produced stayed alive until the editor closed. The force-recompile
+    hook clears it alongside the std-ladder reset - a fresh compile is also
+    a fresh chance to hear the mismatch again.
+    """
+    _ANNOUNCED.clear()
+
+
 def print_safe(text):
     """print() that survives a narrow console.
 

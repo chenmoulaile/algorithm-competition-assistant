@@ -718,7 +718,39 @@ def is_meaningful_test(test):
 	return bool((test.get('expected_output') or '').strip())
 
 
-def save_tests(file, tests):
+def save_tests(file, tests, pretty=True):
+	return _save_tests_impl(file, tests, pretty)
+
+
+def save_tests_async(file, tests, pretty=True, on_done=None):
+	"""Serialize + write every tests file on a worker thread.
+
+	The run panel's end-of-chain flush used to do this on the main thread:
+	up to four files, each with the full pretty-printed test data (a
+	multi-megabyte output inflated by pretty printing) - the editor paused
+	for the whole write. The serialization runs on the caller's thread only
+	in `save_tests`; here everything moves to a private thread and
+	`on_done(ok)` is posted back to the main thread (or skipped when None).
+
+	sublime.encode_value / decode_value are pure converters (no view state),
+	so they are safe off the main thread; the data is plain str/list/dict.
+	"""
+	import threading
+
+	def work():
+		ok = _save_tests_impl(file, tests, pretty)
+		if on_done is not None:
+			try:
+				sublime.set_timeout(lambda: on_done(ok), 0)
+			except Exception:
+				pass
+
+	thread = threading.Thread(target=work)
+	thread.daemon = True
+	thread.start()
+
+
+def _save_tests_impl(file, tests, pretty=True):
 	_last_io_error.clear()
 	if not file:
 		return False
@@ -745,11 +777,13 @@ def save_tests(file, tests):
 		if other and other != target_path and os.path.exists(other):
 			targets.append(other)
 
+	payload = sublime.encode_value(tests, pretty)
+
 	ok = False
 	for path_ in targets:
 		try:
 			with open(path_, 'w', encoding='utf-8') as f:
-				f.write(sublime.encode_value(tests, True))
+				f.write(payload)
 			ok = True
 		except Exception as e:
 			_note_io_error('write', path_, e)

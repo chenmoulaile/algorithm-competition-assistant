@@ -26,6 +26,17 @@ STRINGS = {
         'zh': '详情',
         'en': 'detail',
     },
+    # Read only when show_time_mem_labels is on (the optional "time: 2542ms"
+    # card prefix, 2.9.1 style). Off by default: the bare value is what keeps
+    # a slow card on one line.
+    'time': {
+        'zh': '时间',
+        'en': 'time',
+    },
+    'memory': {
+        'zh': '内存',
+        'en': 'mem',
+    },
     'accept': {
         'zh': '接受',
         'en': 'accept',

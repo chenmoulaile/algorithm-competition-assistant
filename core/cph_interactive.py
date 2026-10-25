@@ -190,17 +190,28 @@ def run_case(make_solution, exe, input_text, answer_text, time_limit_ms,
 			stderr=subprocess.PIPE, cwd=cwd,
 			startupinfo=hidden_startupinfo())
 
-		started = time.time()
+		started = time.monotonic()
 		solution.run_file()
 
 		def pump_solution():
-			"""选手 -> interactor（同时留一份给面板显示）。"""
+			"""选手 -> interactor（同时留一份给面板显示）。
+
+			成块搬运（4096）：read(bfsize) 的语义是"有数据即返回"，所以块
+			大小只影响圈数，不影响交互性；逐字节那版每次对话行要跑上千圈。
+			"""
 			while not stop.is_set():
 				try:
-					chunk = solution.read(bfsize=1)
+					chunk = solution.read(bfsize=4096)
 				except Exception:
 					return
 				if not chunk:
+					# The solution said its last word: pass the EOF on to the
+					# interactor, whose readline()/cin loop would otherwise
+					# wait forever and push the whole dialogue to the deadline.
+					try:
+						interactor.stdin.close()
+					except Exception:
+						pass
 					return
 				collected['solution'].append(chunk)
 				try:
@@ -213,14 +224,29 @@ def run_case(make_solution, exe, input_text, answer_text, time_limit_ms,
 			"""interactor -> 选手。"""
 			while not stop.is_set():
 				try:
-					chunk = interactor.stdout.read(1)
+					# read1(): at most one low-level read, so a short prompt
+					# still comes through immediately; plain read(4096) would
+					# block until the full 4096 bytes and deadlock a dialogue
+					# whose prompts are shorter than that.
+					chunk = interactor.stdout.read1(4096)
 				except Exception:
 					return
 				if not chunk:
+					# The interactor judged and left: pass the EOF on to the
+					# solution, whose `while (cin >> x)` would otherwise block
+					# on stdin until the deadline - and the timed-out branch
+					# below then overrode the interactor's exit code, turning
+					# every truly accepted interaction into a TLE.
+					try:
+						solution.close_stdin()
+					except Exception:
+						pass
 					return
-				collected['interactor'].append(decode_output(chunk))
+				# One decode, used for both the transcript and the pipe.
+				decoded = decode_output(chunk)
+				collected['interactor'].append(decoded)
 				try:
-					solution.insert(decode_output(chunk))
+					solution.insert(decoded)
 				except Exception:
 					return
 
@@ -233,7 +259,7 @@ def run_case(make_solution, exe, input_text, answer_text, time_limit_ms,
 			"""
 			while not stop.is_set():
 				try:
-					chunk = interactor.stderr.read(1)
+					chunk = interactor.stderr.read1(4096)
 				except Exception:
 					return
 				if not chunk:
@@ -253,13 +279,13 @@ def run_case(make_solution, exe, input_text, answer_text, time_limit_ms,
 		while True:
 			if interactor.poll() is not None and solution.is_stopped() is not None:
 				break
-			if time.time() > deadline:
+			if time.monotonic() > deadline:
 				timed_out = True
 				break
 			time.sleep(0.01)
 
 		stop.set()
-		runtime = int((time.time() - started) * 1000)
+		runtime = int((time.monotonic() - started) * 1000)
 		solution_output = ''.join(collected['solution'])
 		interactor_output = ''.join(collected['interactor'])
 		interactor_error = ''.join(collected['interactor_err']).strip()

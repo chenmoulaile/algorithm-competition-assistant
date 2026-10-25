@@ -7,11 +7,12 @@ import os
 import re
 from sublime import Region, Phantom, PhantomSet
 from os import path
-from time import time, sleep
+from time import monotonic, sleep, time
 import threading
 
 from .Modules.ProcessManager import ProcessManager
-from .core.cph_settings import package_name, get_settings, get_tests_paths, load_all_tests, save_tests, is_run_supported_ext, get_problem_limits, notify_io_error, get_problem_io, record_runtime, last_runtime, runtime_runs
+from .Modules.build_artifact import reset_announced as reset_build_announcements
+from .core.cph_settings import package_name, get_settings, get_tests_paths, load_all_tests, save_tests, save_tests_async, is_run_supported_ext, get_problem_limits, notify_io_error, get_problem_io, record_runtime, last_runtime, runtime_runs
 from .core.cph_target import visible as context_menu_visible
 from .core.cph_jump import (diagnostics as parse_diagnostics,
 							esc, links_html, one_link, set_targets,
@@ -49,12 +50,14 @@ _OUT_CHUNK = 65536
 def clamp_output(current, chunk, limit):
 	"""Return the part of chunk that still fits, so current stays <= limit.
 
-	limit <= 0 means unlimited. current is the text already collected, so the
-	rule is applied before the append instead of only after it.
+	limit <= 0 means unlimited. current is the text already collected (or its
+	length, when the caller keeps the text as an unbuilt list of parts), so
+	the rule is applied before the append instead of only after it.
 	"""
 	if limit <= 0:
 		return chunk
-	room = limit - len(current)
+	size = current if isinstance(current, int) else len(current)
+	room = limit - size
 	if room <= 0:
 		return ''
 	return chunk[:room]
@@ -339,13 +342,46 @@ def _count_text_units(s):
 	return ascii_n, wide_n
 
 
-def estimate_card_width_px(view, with_memory=False):
+def _card_row_segments(with_memory=False):
+	"""Worst-case card row: 2-digit id, 6-digit runtime, optional memory."""
+	segments = (
+		' ' + t('test_label') + ' 88 ',
+		' ' + t('edit') + ' ',
+		' ' + t('run') + ' ',
+		' ' + t('detail') + ' ',
+		' 9999ms ',
+	)
+	if with_memory:
+		segments += (' 888.88 MB ',)
+	return segments
+
+
+def _label_prefixed(value, key):
+	""""time: 2542ms" when the labels setting is on, the bare value otherwise.
+
+	&nbsp; between the label and the value keeps minihtml from wrapping
+	between them on a narrow panel (the reason the labels went away in the
+	first place - the wrapped value landed on the row below).
+	"""
+	if not get_settings().get('show_time_mem_labels', False):
+		return value
+	return t(key) + ':&nbsp;' + value
+
+
+def estimate_card_width_px(view, with_memory=False, rows=None):
 	"""
 	Rough estimate of the rendered width (device px) of the widest row of a
 	test config card, so the run panel can be widened until cards fit on a
 	single line. minihtml phantoms inherit the view font, so the view's
 	em_width is the base unit; the monospace assumption overestimates a
 	little for proportional fonts, which is the safe direction here.
+
+	`rows` carries the ACTUAL card rows (tuples of segment strings) when the
+	caller has real cards to measure; the panel is then widened just enough
+	for what is on it instead of for the worst case the panel could ever
+	show (a 6-digit runtime and an 8-char memory chip on every card made the
+	panel twice as wide as most problems ever need). Without it the old
+	worst-case row is used, which stays the safe fallback.
 	"""
 	try:
 		em = view.em_width()
@@ -362,36 +398,47 @@ def estimate_card_width_px(view, with_memory=False):
 		font_pt = sublime.load_settings('Preferences.sublime-settings').get('font_size', 10)
 	font_px = font_pt * 4.0 / 3.0
 
-	# Visible text of each segment of the widest card row, worst case:
-	# 2-digit test id, 6-digit runtime, optional memory segment. The value
-	# carries its unit (ms / MB), so the card shows no "time:" / "mem:"
-	# label - keeping them made TLE cards wide enough to wrap "4 MB" onto a
-	# second line, where it collided with the row below.
-	segments = (
-		' ' + t('test_label') + ' 88 ',
-		' ' + t('edit') + ' ',
-		' ' + t('run') + ' ',
-		' ' + t('detail') + ' ',
-		' 9999ms ',
-	)
-	if with_memory:
-		segments += (' 888.88 MB ',)
+	# The value carries its unit (ms / MB), so the card shows no "time:" /
+	# "mem:" label unless the user turned the labels back on.
+	if rows is None:
+		row = list(_card_row_segments(with_memory))
+		if get_settings().get('show_time_mem_labels', False):
+			# segments end with the runtime and, when measured, the memory chip
+			if with_memory:
+				row[-2] = ' ' + t('time') + ':&nbsp;9999ms '
+				row[-1] = ' ' + t('memory') + ':&nbsp;888.88 MB '
+			else:
+				row[-1] = ' ' + t('time') + ':&nbsp;9999ms '
+		rows = (tuple(row),)
 
-	ascii_n = 0
-	wide_n = 0
-	for seg in segments:
-		a, w = _count_text_units(seg)
-		ascii_n += a
-		wide_n += w
-	ascii_n += 6  # single space between the inline <a> buttons
+	widest = 0.0
+	for segments in rows:
+		ascii_n = 0
+		wide_n = 0
+		for seg in segments:
+			a, w = _count_text_units(seg)
+			ascii_n += a
+			wide_n += w
+		ascii_n += 6  # single space between the inline <a> buttons
 
-	width = ascii_n * em + wide_n * font_px * 1.05 * scale
-	# verdict badge: 10px monospace bold, up to 3 chars + padding + margin
-	width += (3 * 10 * 0.65 + 3 + 2) * scale
-	# 1px padding around each of the ~6 buttons + block spacing (CSS px)
-	width += (6 * 2 + 8) * scale
-	return width * 1.08
+		width = ascii_n * em + wide_n * font_px * 1.05 * scale
+		# verdict badge: 10px monospace bold, up to 3 chars + padding + margin
+		width += (3 * 10 * 0.65 + 3 + 2) * scale
+		# 1px padding around each of the ~6 buttons + block spacing (CSS px)
+		width += (6 * 2 + 8) * scale
+		widest = max(widest, width * 1.08)
+	return widest
 
+
+#: The run() branches that actually write the panel buffer (directly or via
+#: a helper they call). Everything else - including the sync_read_only
+#: dispatch every caret move sends - must NOT unlock the view: unlocking on
+#: every dispatch meant two real view writes per cursor movement (the unlock
+#: in run(), and the read-only restore at its end).
+_WRITE_ACTIONS = frozenset((
+	'insert_line', 'insert_cb', 'insert_opd_input', 'insert_opd_out',
+	'replace', 'erase', 'erase_all', 'make_opd', 'new_test',
+))
 
 class CphTestManagerCommand(sublime_plugin.TextCommand):
 	REGION_BEGIN_KEY = 'test_begin_%d'
@@ -655,14 +702,14 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				memory_str = '-'
 				if self.memory != '-' and self.memory is not None:
 					memory_display = 'inline'
-					memory_str = self.get_nice_memory()
+					memory_str = _label_prefixed(self.get_nice_memory(), 'memory')
 
 				# stderr is deliberately NOT shown on the card any more: the
 				# chip made every card with debug output too wide / too tall.
 				# It stays in the detail view ('Error output' section).
 				content = content.format(
 					test_id=i + 1,
-					runtime=self.get_nice_runtime(),
+					runtime=_label_prefixed(self.get_nice_runtime(), 'time'),
 					verdict_class=verdict_class,
 					verdict_short=verdict_short,
 					test_type=test_type,
@@ -833,6 +880,17 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			self.on_stop = on_stop
 			self.proc_run = False
 			self.prog_out = []
+			# Unflushed output chunks per test, parallel to prog_out. The pump
+			# thread appends here; only a fold (the 16 ms display flush, a
+			# verdict delivery, a card rebuild) joins them into the str that
+			# prog_out carries. `prog_out[n] += chunk` per chunk was O(n^2) in
+			# the output size, and the display got one run_command dispatch
+			# per chunk on top of it.
+			self._prog_out_parts = []
+			self._prog_out_total = []
+			self._out_lock = threading.Lock()
+			self._out_pending = []
+			self._out_flush_scheduled = False
 			# Keep prog_out exactly as long as tests. Session-restored tests
 			# have no output yet, and get_tie_pos() / toggle_fold() index it
 			# directly: a short list raised IndexError, which made "delete
@@ -840,6 +898,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			# this session had not run yet - typically an empty sample.
 			while len(self.prog_out) < len(self.tests):
 				self.prog_out.append('')
+				self._prog_out_parts.append([])
+				self._prog_out_total.append(0)
 			self.on_status_change = on_status_change
 			# Epoch of this tester within the owning CphTestManagerCommand.
 			# Stale listener threads of a killed process may still fire
@@ -869,7 +929,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		def note_activity(self):
 			"""Start the program clock: it has input, or produced output."""
 			if self._clock_start is None:
-				self._clock_start = time()
+				self._clock_start = monotonic()
 
 		def run_generation(self):
 			"""The current run generation.
@@ -885,6 +945,9 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				# Thread of an older run (its process was replaced): its
 				# result belongs to a test that no longer exists.
 				return
+			# The verdict is about to be made from prog_out: fold whatever the
+			# pump still held in its parts list in first.
+			self.fold_outputs(self.running_test)
 			self.prog_out[self.running_test] = self.prog_out[self.running_test].rstrip()
 			self.proc_run = False
 
@@ -922,9 +985,15 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				# even if it never reads the input we sent.
 				self.note_activity()
 			limit = get_settings().get('max_output_bytes', 0) or 0
-			kept = clamp_output(self.prog_out[n], s, limit)
+			with self._out_lock:
+				while n >= len(self._prog_out_parts):
+					self._prog_out_parts.append([])
+					self._prog_out_total.append(0)
+				kept = clamp_output(self._prog_out_total[n], s, limit)
+				if kept:
+					self._prog_out_parts[n].append(kept)
+					self._prog_out_total[n] += len(kept)
 			if kept:
-				self.prog_out[n] += kept
 				self.post_out(kept)
 			if len(kept) < len(s) and not self.output_truncated:
 				# The cap is now reached. Keep draining the pipe so the program
@@ -933,14 +1002,66 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				# the detail view's message section.
 				self.output_truncated = True
 				marker = '\n' + t('output_truncated_warn') + '\n'
-				self.prog_out[n] += marker
+				with self._out_lock:
+					self._prog_out_parts[n].append(marker)
+					self._prog_out_total[n] += len(marker)
 				self.tests[n].message = t('output_truncated_warn')
 				self.post_out(marker)
 				print('[Algorithm Competition Assistant] %s' % t('output_truncated_warn'))
 
 		def post_out(self, text):
-			"""Hand one output chunk to the main thread for display."""
-			post_to_ui(lambda: self.on_out(text, epoch=self.epoch))
+			"""Hand output to the main thread for display, coalesced.
+
+			One dispatch per chunk tied the panel redraw count to the
+			program's write() count - 8 MB of sync output meant millions of
+			main-thread hops. Chunks queue here and ONE 16 ms timer folds
+			them into a single dispatch; a burst therefore costs at most
+			~60 redraws a second no matter how fast the program prints.
+			"""
+			self._out_pending.append(text)
+			if not self._out_flush_scheduled:
+				self._out_flush_scheduled = True
+				post_to_ui(self._flush_out)
+
+		def _flush_out(self):
+			"""Main thread: one display insert for everything queued."""
+			self._out_flush_scheduled = False
+			if self._out_pending:
+				batch = ''.join(self._out_pending)
+				del self._out_pending[:]
+				self.on_out(batch, epoch=self.epoch)
+
+		def fold_outputs(self, n=None):
+			"""Join the unflushed pump chunks into prog_out (any thread).
+
+			Threads that own a run (the pump) and the main thread both call
+			this; the lock keeps an append racing a join from corrupting the
+			parts list. Cheap when there is nothing to fold, so callers do
+			not need to check first.
+			"""
+			with self._out_lock:
+				indices = range(len(self._prog_out_parts)) if n is None else (n,)
+				for i in indices:
+					if i >= len(self._prog_out_parts) or i >= len(self.prog_out):
+						continue
+					parts = self._prog_out_parts[i]
+					if not parts:
+						continue
+					joined = self.prog_out[i] + ''.join(parts)
+					del parts[:]
+					self._prog_out_total[i] = len(joined)
+					self.prog_out[i] = joined
+
+		def flush_pending_out(self):
+			"""Main thread: display + fold everything still pending.
+
+			Called before a verdict is delivered and before the cards are
+			rebuilt: the output must be on screen and inside prog_out before
+			the judgement drawn above it is made from it.
+			"""
+			self._out_flush_scheduled = False
+			self._flush_out()
+			self.fold_outputs()
 
 		def _start_pump(self):
 			"""Drain the running program on a private thread.
@@ -982,7 +1103,11 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					if gen != self._active_gen:
 						return
 					if self.sync_out:
-						s = proc.read(bfsize=1)
+						# 1024, not 1: read() returns as soon as ANY byte is
+						# available, so a larger bfsize only cuts the number
+						# of pump loops (per byte it also cost one decode and
+						# one __on_out hop). Interactivity is unchanged.
+						s = proc.read(bfsize=1024)
 					else:
 						s = proc.read(_OUT_CHUNK)
 					# A file-IO run is answered in a file. Its stdout is debug
@@ -1107,7 +1232,10 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			interactive and parallel stand-ins) working unchanged.
 			"""
 			stamp = getattr(self.process_manager, 'spawn_time', None)
-			return stamp if stamp is not None else time()
+			# monotonic(): must share ProcessManager.spawn_time's clock, the
+			# runtime is (exit_time - this) and a mixed pair would wander
+			# with wall-clock steps.
+			return stamp if stamp is not None else monotonic()
 
 		def insert_test(self, id=None):
 			if id is None:
@@ -1199,6 +1327,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				tests.append(CphTestManagerCommand.Test(''))
 			while n >= len(prog_out):
 				prog_out.append('')
+				self._prog_out_parts.append([])
+				self._prog_out_total.append(0)
 			tests[n].set_tie_pos(tie_pos)
 			self.running_test = n
 			self.running_new = True
@@ -1222,6 +1352,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			# COMPILING).
 			while id >= len(self.prog_out):
 				self.prog_out.append('')
+				self._prog_out_parts.append([])
+				self._prog_out_total.append(0)
 			# Compiling inside a phantom click callback froze the whole
 			# editor for up to 30s; do it on the async worker instead and
 			# reuse the compile cache when the sources are unchanged.
@@ -1250,6 +1382,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					# starts with the process, no interactive wait.
 					self.awaiting_input = False
 					self.prog_out[id] = ''
+					self._prog_out_parts[id] = []
+					self._prog_out_total[id] = 0
 					self.insert_test(id)
 					if type(self.process_manager) == ProcessManager:
 						self._start_pump()
@@ -1273,6 +1407,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			# or get_tie_pos()/toggle_fold() raise IndexError.
 			while len(self.prog_out) < len(self.tests):
 				self.prog_out.append('')
+				self._prog_out_parts.append([])
+				self._prog_out_total.append(0)
 
 		def output_at(self, i):
 			"""Output of test i; '' when it was never materialised.
@@ -1281,25 +1417,26 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			ones this session never ran - so indexing prog_out directly used
 			to raise IndexError inside a Sublime callback (silently swallowed).
 			"""
+			self.fold_outputs()
 			if 0 <= i < len(self.prog_out):
 				return self.prog_out[i]
 			return ''
 
 		def accept_out(self, nth):
-			outs = self.prog_out
 			tests = self.tests
-			if nth >= len(outs):
+			if nth >= len(self.prog_out):
 				return None
-			tests[nth].add_correct_answer(outs[nth].rstrip().lstrip())
-			tests[nth].remove_uncorrect_answer(outs[nth].rstrip().lstrip())
+			out = self.output_at(nth).rstrip().lstrip()
+			tests[nth].add_correct_answer(out)
+			tests[nth].remove_uncorrect_answer(out)
 
 		def decline_out(self, nth):
-			outs = self.prog_out
 			tests = self.tests
-			if nth >= len(outs):
+			if nth >= len(self.prog_out):
 				return None
-			tests[nth].remove_correct_answer(outs[nth].rstrip().lstrip())
-			tests[nth].add_uncorrect_answer(outs[nth].rstrip().lstrip())
+			out = self.output_at(nth).rstrip().lstrip()
+			tests[nth].remove_correct_answer(out)
+			tests[nth].add_uncorrect_answer(out)
 
 		def terminate(self):
 			self.process_manager.terminate()
@@ -1503,7 +1640,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			answers = sorted(test.correct_answers)
 			value = answers[0] if answers else (test.expected_output or '')
 		else:
-			value = tester.prog_out[idx] if idx < len(tester.prog_out) else ''
+			value = tester.output_at(idx) if idx < len(tester.prog_out) else ''
 
 		value = (value or '').rstrip('\n')
 		if not value.strip():
@@ -1933,6 +2070,10 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			test.message = (test.message + '\n' + notice) if test.message else notice
 		while len(tester.prog_out) <= i:
 			tester.prog_out.append('')
+			tester._prog_out_parts.append([])
+			tester._prog_out_total.append(0)
+		tester._prog_out_parts[i] = []
+		tester._prog_out_total[i] = len(result.get('stdout') or '')
 		tester.prog_out[i] = result.get('stdout') or ''
 
 	def apply_parallel_results(self, results):
@@ -2120,11 +2261,18 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		"""
 		verdict_short = test.verdict['name'] if test.verdict else 'UKE'
 		runtime_str = test.get_nice_runtime().replace('&nbsp;', ' ').strip()
-		# values carry their own unit, so no "time:" / "mem:" prefix here either
+		# Values carry their own unit; the optional "time:" / "mem:" prefix
+		# follows the show_time_mem_labels setting (plain text here, no NBSP).
+		labels_on = bool(get_settings().get('show_time_mem_labels', False))
+		if labels_on:
+			runtime_str = t('time') + ': ' + runtime_str
 		header = '%s %d  |  %s  |  %s' % (t('test_label').capitalize(), i + 1,
 			verdict_short, runtime_str)
 		if test.memory not in ('-', None):
-			header += '  |  %s' % test.get_nice_memory().replace('&nbsp;', ' ')
+			memory_str = test.get_nice_memory().replace('&nbsp;', ' ')
+			if labels_on:
+				memory_str = t('memory') + ': ' + memory_str
+			header += '  |  %s' % memory_str
 		lines = [header, '=' * max(len(header), 40), '']
 
 		# How much of the limit this run used, and what changed since the last
@@ -2189,7 +2337,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		in_bytes = len((test.test_string or '').encode('utf-8'))
 		dbg_file = getattr(self, 'dbg_file', None)
 		lines.append('[%s] (%d %s / %d %s)' % (t('input'),
-			len(test_input.split('\n')) if test_input else 0, t('detail_lines'),
+			test_input.count('\n') + 1 if test_input else 0, t('detail_lines'),
 			in_bytes, t('detail_bytes')))
 		if marks is not None:
 			marks.append((len(lines) - 1, 'head'))
@@ -2210,7 +2358,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		lines.append(expected.rstrip('\n') if expected.strip() else t('detail_empty'))
 		lines.append('')
 		lines.append('[%s] (%d %s / %d %s)' % (t('actual_output'),
-			len(stdout.split('\n')) if stdout else 0, t('detail_lines'),
+			stdout.count('\n') + 1 if stdout else 0, t('detail_lines'),
 			len((test.stdout or '').encode('utf-8')), t('detail_bytes')))
 		if marks is not None:
 			marks.append((len(lines) - 1, 'head'))
@@ -2432,13 +2580,16 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		name = test.verdict['name'] if test.verdict else 'UKE'
 		# a Unicode NBSP survives esc() and still stops minihtml from wrapping
 		# between the number and its unit (get_nice_memory's own comment)
-		runtime_str = esc(test.get_nice_runtime().replace('&nbsp;', '\u00a0').strip())
+		runtime_str = esc(_label_prefixed(
+			test.get_nice_runtime().replace('&nbsp;', '\u00a0').strip(), 'time'))
 		parts = ['<span class="verdict-badge verdict-%s">%s</span>' % (esc(name), esc(name)),
 		         '<span style="margin-left: 6px;">%s %d</span>' % (esc(t('test_label')), i + 1),
 		         '<span class="runtime-info" style="margin-left: 8px;">%s</span>' % runtime_str]
 		if test.memory not in ('-', None):
 			parts.append('<span class="memory-info" style="margin-left: 8px;">%s</span>'
-			             % esc(test.get_nice_memory().replace('&nbsp;', '\u00a0').strip()))
+			             % esc(_label_prefixed(
+			                 test.get_nice_memory().replace('&nbsp;', '\u00a0').strip(),
+			                 'memory')))
 		parts.append('<a class="config" href="detail-copy-expected" style="margin-left: 12px;">%s</a>'
 		             % esc(t('detail_copy_expected')))
 		parts.append('<a class="config" href="detail-copy-actual" style="margin-left: 8px;">%s</a>'
@@ -2507,7 +2658,10 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			tester.accept_out(i)
 		elif event == 'click-decline':
 			tester.decline_out(i)
-		self.update_configs()
+		# The answer set changed for card i only - rebuild that card, not
+		# every card on the panel (an N-sample run used to redraw N cards
+		# per click at the end of the chain).
+		self.update_configs(only_ids=(i,))
 		self.memorize_tests()
 
 	def set_test_input(self, test=None, id=None):
@@ -2554,7 +2708,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 		# Re-judge with the new answer if this test already has output
 		if id < len(tester.prog_out):
-			out = tester.prog_out[id].rstrip()
+			out = tester.output_at(id).rstrip()
 			if out and str(getattr(test, 'rtcode', '0')) == '0':
 				pm = tester.process_manager
 				float_tolerance = get_settings().get('float_tolerance', 0) or 0
@@ -2599,7 +2753,14 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		phantom = Phantom(Region(self.view.size() - 1), content, sublime.LAYOUT_BLOCK, onclick)
 		return phantom
 
-	def update_configs(self, update_last=None):
+	def update_configs(self, update_last=None, only_ids=None):
+		"""Rebuild the test cards.
+
+		`update_last` keeps its old meaning (rebuild only the newest card of a
+		chain step). `only_ids` widens that to any set of test indices: the
+		walk still visits every card, because their text lengths decide where
+		every later phantom sits, but only the listed cards are redrawn.
+		"""
 		v = self.view
 		tester = self.tester
 		_float_tolerance = get_settings().get('float_tolerance', 0) or 0
@@ -2616,33 +2777,38 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		# what region its phantom covers. What it does not have to do is build
 		# their markup and re-decide accept/decline for every stored output -
 		# that made a run of N samples rebuild all N cards once per sample.
-		only = (k - 1) if update_last else None
+		only = set(only_ids) if only_ids else ((k - 1,) if update_last else None)
+		touched = set()
 		for i in range(k):
-			build = only is None or i == only
+			build = only is None or i in only
 			running = tester.proc_run and i == tester.running_test
 
 			config = tester.tests[i].get_config(
 				i,
 				pt,
 				self.on_test_action,
-				tester.prog_out[i],
+				tester.output_at(i),
 				self.view,
 				running=running
 			) if build else None
 			_last_test_entry = len(configs)
+			if build:
+				touched.add(_last_test_entry)
 			configs.append(config)
 
+			out_len = len(tester.output_at(i))
 			if running:
-				pt += len(tester.tests[i].test_string) + len(tester.prog_out[i]) + 2
+				pt += len(tester.tests[i].test_string) + out_len + 2
 			elif not tester.tests[i].fold:
-				pt += len(tester.tests[i].test_string) + len(tester.prog_out[i]) + 1
+				pt += len(tester.tests[i].test_string) + out_len + 1
 
 			# getattr for safety, matching the other three call sites
+			out_text = tester.output_at(i)
 			if (not running and not tester.tests[i].fold
 					and str(getattr(tester.tests[i], 'rtcode', '0')) == '0'
-					and tester.prog_out[i]):
+					and out_text):
 				if build:
-					if tester.tests[i].is_correct_answer(tester.prog_out[i], _float_tolerance):
+					if tester.tests[i].is_correct_answer(out_text, _float_tolerance):
 						type = 'decline'
 					else:
 						type = 'accept'
@@ -2656,6 +2822,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				else:
 					# None keeps the phantom indices of every later card exact.
 					accdec = None
+				if build and accdec is not None:
+					touched.add(len(configs))
 				configs.append(accdec)
 
 			if not tester.tests[i].fold:
@@ -2668,14 +2836,17 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			self.test_phantoms.append(PhantomSet(v, 'test-phantom-' + str(len(self.test_phantoms))))
 
 		hide_phantoms = v.settings().get('hide_phantoms')
-		if update_last:
-			self.test_phantoms[_last_test_entry].update([configs[_last_test_entry]] if not hide_phantoms else [])
-		else:
+		if only is None:
 			for i in range(len(configs)):
 				self.test_phantoms[i].update([configs[i]] if not hide_phantoms else [])
 
 			for i in range(len(configs), len(self.test_phantoms)):
 				self.test_phantoms[i].update([])
+		else:
+			for i in sorted(touched):
+				if i < len(self.test_phantoms):
+					self.test_phantoms[i].update(
+						[configs[i]] if not hide_phantoms else [])
 
 		if not hide_phantoms:
 			# Delayed so the layout/viewport settles before measuring
@@ -2753,12 +2924,30 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			return
 
 		with_memory = False
+		rows = None
 		tester = self.tester
 		if tester is not None and getattr(tester, 'tests', None):
-			with_memory = any(
-				x.memory != '-' and x.memory is not None for x in tester.tests)
+			# Measure the cards that ARE there, not the worst case a card
+			# could ever show: a 6-digit runtime and an 8-char memory chip on
+			# every row made the panel twice as wide as most problems need.
+			# The panel only ever widens, so a longer verdict later re-fits.
+			rows = []
+			for i, card in enumerate(tester.tests):
+				segs = [' ' + t('test_label') + ' ' + str(i + 1) + ' ',
+						' ' + t('edit') + ' ',
+						' ' + t('run') + ' ',
+						' ' + t('detail') + ' ']
+				runtime = card.get_nice_runtime().replace('&nbsp;', ' ').strip()
+				if runtime == '-':
+					runtime = '0ms'
+				segs.append(' ' + _label_prefixed(runtime, 'time') + ' ')
+				if card.memory not in ('-', None):
+					with_memory = True
+					memory = card.get_nice_memory().replace('&nbsp;', ' ')
+					segs.append(' ' + _label_prefixed(memory, 'memory') + ' ')
+				rows.append(tuple(segs))
 
-		needed = estimate_card_width_px(v, with_memory)
+		needed = estimate_card_width_px(v, with_memory, rows=rows)
 		if needed <= 0:
 			return
 		try:
@@ -2831,9 +3020,35 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		self._tests_flush_scheduled = False
 		if not getattr(self, '_tests_dirty', False):
 			return
+		if getattr(self, '_tests_busy', False):
+			# A write is in flight on the worker thread. Mark dirty again so
+			# _tests_saved() runs one more round when it lands, instead of
+			# either dropping the fresh data or queueing a second thread.
+			return
 		self._tests_dirty = False
 		tests_data = [x.memorize() for x in (self.tester.get_tests())]
-		if not save_tests(self.dbg_file, tests_data):
+		# Pretty printing (tab-indented, hand-editable) inflates a
+		# multi-megabyte output a lot; past ~256 KB of test data the file is
+		# not hand-edited in practice, so it is written compact.
+		total = 0
+		for entry in tests_data:
+			if isinstance(entry, dict):
+				for key in ('test', 'stdout', 'expected_output'):
+					try:
+						total += len(entry.get(key) or '')
+					except Exception:
+						pass
+		pretty = total <= 256 * 1024
+		dbg = self.dbg_file
+		self._tests_busy = True
+		# Serialization and the (up to four) file writes happen on the
+		# save_tests_async worker; _tests_saved lands on the main thread.
+		save_tests_async(dbg, tests_data, pretty=pretty,
+						 on_done=self._tests_saved)
+
+	def _tests_saved(self, ok):
+		self._tests_busy = False
+		if not ok:
 			# Every other save path reports this (cph_companion,
 			# cph_extras, cph_import, cph_stress). Silently dropping it
 			# here meant "my test points are gone" with no explanation -
@@ -2842,6 +3057,9 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			# itself only to the console: a read-only folder fails on every
 			# single run, and a dialog on every run is a disabled plugin.
 			notify_io_error(self.dbg_file)
+		if getattr(self, '_tests_dirty', False):
+			# Data changed while the write was in flight: one more round.
+			self._flush_tests()
 
 	def on_insert(self, s):
 		self.view.run_command('cph_test_manager', {'action': 'insert_opd_input', 'text': s})
@@ -2869,6 +3087,9 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 		test_id = self.tester.running_test
 		_inp = self.tester.tests[test_id].test_string
+		# The pump has folded its parts by now (tester __on_stop), but fold
+		# again here: the panel also lands on this path for parallel results.
+		self.tester.fold_outputs()
 		_outp = self.tester.prog_out[test_id]
 		_outp = _outp.rstrip()
 
@@ -3064,7 +3285,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 		input_end = v.line(Region(self.delta_input)).end()
 
-		if tester.running_new and self.tester.tests[test_id].is_correct_answer(self.tester.prog_out[test_id], float_tolerance):
+		if tester.running_new and self.tester.tests[test_id].is_correct_answer(self.tester.output_at(test_id), float_tolerance):
 			v.run_command('cph_test_manager', {
 				'action': 'replace',
 				'region': (self.input_start, input_end),
@@ -3127,7 +3348,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 						self.close_test_detail(test_id)
 					else:
 						pt = self.get_tie_pos(test_id)
-						pt += len(tester.tests[test_id].test_string) + len(tester.prog_out[test_id]) + 1
+						pt += len(tester.tests[test_id].test_string) + len(tester.output_at(test_id)) + 1
 						detail = tester.tests[test_id].get_detail(test_id, pt, self.on_test_action, self.view)
 						if test_id < len(self.detail_phantoms):
 							self.detail_phantoms[test_id].update([detail])
@@ -3473,22 +3694,55 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		if not v.settings().get('word_wrap'):
 			v.run_command('toggle_setting', {'setting': 'word_wrap'})
 
-		previously_accepted = set()
-		clear_failures = []
-		if not clr_tests:
-			# Try to load tests from all possible locations (traditional + cph-ng style folder)
-			loaded_data = load_all_tests(run_file)
+		# Loading the samples reads up to four tests files and decodes all of
+		# them; with a multi-megabyte stored output that is several MB of work
+		# that used to run on the main thread before a single card was on
+		# screen, so pressing Run on a big problem froze the editor. The panel
+		# now comes up empty immediately and the load runs on a worker thread;
+		# `start_runner` fires once BOTH the compile and the load have landed,
+		# whichever is later. The holder keeps the callback from reaching a
+		# panel that has since been rebuilt (the epoch check below).
+		loaded_holder = {'tests': None, 'previously_accepted': set()}
+		my_epoch = getattr(self, 'tester_epoch', 0)
+
+		def load_worker(rf=run_file):
+			loaded = load_all_tests(rf)
+			sublime.set_timeout(lambda: tests_loaded(loaded), 0)
+
+		def tests_loaded(loaded_data):
+			if self.view.window() is None:
+				return
+			if getattr(self, 'tester_epoch', 0) != my_epoch:
+				return  # the panel was rebuilt while the load was in flight
+			cards = [self.Test(x) for x in (loaded_data or [])
+					 if isinstance(x, dict)]
 			# A tests file that cannot be parsed yields []: the panel then shows
 			# an empty problem, and the only symptom is "my samples disappeared"
 			# - which reads exactly like the plugin forgetting to load them.
 			notify_io_error(run_file, kind='read')
-			if loaded_data:
-				# Keep tests whose input is empty too: a legitimate test can
-				# read nothing, and a stress-test counterexample with empty
-				# input used to be dropped here on every reload.
-				tests = [self.Test(x) for x in loaded_data if isinstance(x, dict)]
-			else:
-				tests = []
+			if not load_session:
+				# Pressing Run starts a clean evaluation. The verdicts that came
+				# out of the tests file describe the *previous* run: leaving them
+				# in place made the summary report 'N/N passed' for a run that had
+				# just failed, and kept green badges on the tests this run never
+				# reached. 'Run failed tests' still has to know what was AC, so
+				# remember that before wiping.
+				# NOTE: the loop variable must not be called 't' - that shadows the
+				# i18n helper t() imported at module level.
+				previously_accepted = set(
+					index for index, card in enumerate(cards)
+					if isinstance(getattr(card, 'verdict', None), dict)
+					and card.verdict.get('name') == 'AC')
+				for card in cards:
+					card.reset_run_state()
+				loaded_holder['previously_accepted'] = previously_accepted
+			loaded_holder['tests'] = cards
+			start_runner()
+
+		clear_failures = []
+		if not clr_tests:
+			# Try to load tests from all possible locations (traditional + cph-ng style folder)
+			sublime.set_timeout_async(load_worker, 0)
 		else:
 			# Clear EVERY tests file this source file uses. Only clearing
 			# the traditional path left tests/foo.cpp__tests behind, which
@@ -3507,27 +3761,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					clear_failures.append('%s: %s' % (tests_path, e))
 			if clear_failures:
 				sublime.status_message(t('tests_clear_failed', error='; '.join(clear_failures)[:300]))
-			tests = []
+			tests_loaded([])
 
-		if not load_session:
-			# Pressing Run starts a clean evaluation. The verdicts that came
-			# out of the tests file describe the *previous* run: leaving them
-			# in place made the summary report 'N/N passed' for a run that had
-			# just failed, and kept green badges on the tests this run never
-			# reached. 'Run failed tests' still has to know what was AC, so
-			# remember that before wiping.
-			# NOTE: the loop variable must not be called 't' - that shadows the
-			# i18n helper t() imported at module level, and since Python treats
-			# any assignment as making the name local for the WHOLE function,
-			# the later self.set_compile_bar(t('compiling')) blew up with
-			# UnboundLocalError: local variable 't' referenced before
-			# assignment. tests/run_tests.py guards against this now.
-			previously_accepted = set(
-				index for index, card in enumerate(tests)
-				if isinstance(getattr(card, 'verdict', None), dict)
-				and card.verdict.get('name') == 'AC')
-			for card in tests:
-				card.reset_run_state()
 		file_ext = path.splitext(run_file)[1][1:]
 
 		self.change_process_status('COMPILING')
@@ -3547,6 +3782,45 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			process_manager.set_time_limit(time_limit_ms)
 		if memory_limit_mb is not None:
 			process_manager.set_memory_limit(memory_limit_mb)
+
+		def start_runner():
+			"""Build the Tester and start the first run.
+
+			Called once, after BOTH the compile and the (threaded) sample load
+			have landed - whichever finished later re-arms it, via the
+			'pending' marker. While the load is still in flight the compile
+			bar already shows the outcome; only the cards wait for it.
+			"""
+			if loaded_holder.get('started') or loaded_holder.get('failed'):
+				return
+			tests = loaded_holder.get('tests')
+			if tests is None:
+				loaded_holder['pending'] = True
+				return
+			loaded_holder['started'] = True
+			v.settings().set('edit_mode', False)
+			self.tester_epoch = getattr(self, 'tester_epoch', 0) + 1
+			self.tester = self.Tester(process_manager, \
+				self.on_insert, self.on_out, self.on_stop, self.change_process_status, \
+				tests=tests, sync_out=sync_out, epoch=self.tester_epoch,
+				run_failed=run_failed)
+			self.tester.run_all = run_all
+			# Which tests were AC *before* this run started (see above).
+			self.tester.previously_accepted = loaded_holder.get(
+				'previously_accepted') or set()
+			interactive = self.interactor_for() is not None
+			if parallel or interactive:
+				# Judge every test at once with a small worker pool
+				# (see core/cph_parallel); an interactive problem has to
+				# go through it too, because the dialogue replaces the
+				# single run (see core/cph_interactive).
+				self.run_parallel_batch(interactive=interactive)
+			elif run_failed or run_all:
+				# These modes pick their own starting test and may skip
+				# already-accepted ones, so drive the chain explicitly.
+				self.advance_chain()
+			else:
+				v.run_command('cph_test_manager', {'action': 'new_test'})
 
 		def after_compile(cmp_data, cached, fingerprint):
 			"""Apply the compile result. Runs on the main thread, on purpose."""
@@ -3576,29 +3850,9 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 										 chip_text=t('compile_warning'))
 				else:
 					self.set_compile_bar(note)
-				self.tester_epoch = getattr(self, 'tester_epoch', 0) + 1
-				self.tester = self.Tester(process_manager, \
-					self.on_insert, self.on_out, self.on_stop, self.change_process_status, \
-					tests=tests, sync_out=sync_out, epoch=self.tester_epoch,
-					run_failed=run_failed)
-				self.tester.run_all = run_all
-				# Which tests were AC *before* this run started (see above).
-				self.tester.previously_accepted = previously_accepted
-				v.settings().set('edit_mode', False)
-				interactive = self.interactor_for() is not None
-				if parallel or interactive:
-					# Judge every test at once with a small worker pool
-					# (see core/cph_parallel); an interactive problem has to
-					# go through it too, because the dialogue replaces the
-					# single run (see core/cph_interactive).
-					self.run_parallel_batch(interactive=interactive)
-				elif run_failed or run_all:
-					# These modes pick their own starting test and may skip
-					# already-accepted ones, so drive the chain explicitly.
-					self.advance_chain()
-				else:
-					v.run_command('cph_test_manager', {'action': 'new_test'})
+				start_runner()
 			else:
+				loaded_holder['failed'] = True
 				v.run_command('cph_test_manager', {'action': 'insert_opd_out', 'text': '\n' + cmp_data[1]})
 				self.set_compile_bar(cmp_data[1], type='error',
 									 chip_text=t('compilation_error'))
@@ -3613,6 +3867,9 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				# to: the key means start over, and it is the way back down when
 				# the code no longer uses anything newer than the floor.
 				std_ladder_reset(process_manager.file)
+				# ...and the binary-name mismatches reported once per pair: a
+				# fresh build deserves to be heard again (see build_artifact).
+				reset_build_announcements()
 			if get_settings().get('compile_cache_enabled', True):
 				try:
 					fingerprint = _source_fingerprint(process_manager)
@@ -3653,7 +3910,9 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 		sublime.set_timeout_async(compile, 10)
 
-	def delete_test(self, edit, id):
+	def delete_test(self, edit, id, commit=True):
+		"""Remove one test. `commit=False` skips the persist + redraw so a
+		batch delete can do both exactly once (delete_tests)."""
 		v = self.view
 		tester = self.tester
 		if not tester.tests[id].fold:
@@ -3683,6 +3942,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		del tester.tests[id]
 		if id < len(tester.prog_out):
 			del tester.prog_out[id]
+			del tester._prog_out_parts[id]
+			del tester._prog_out_total[id]
 		# test_iter counts the tests already run: deleting one that was never
 		# reached must not move the chain backwards (that made already-run
 		# tests run a second time).
@@ -3693,8 +3954,9 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		# one test all following ones shift down, so their open tabs would
 		# keep a stale name and content.
 		self.close_stale_detail_views(id)
-		self.memorize_tests()
-		self.update_configs()
+		if commit:
+			self.memorize_tests()
+			self.update_configs()
 
 	def delete_tests(self, edit):
 		v = self.view
@@ -3720,9 +3982,12 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					break
 
 		sublime.status_message(t('deleted_tests', ids=', '.join(map(lambda x: str(x + 1), to_del))))
+		# One erase + one renumber + ONE redraw for the whole selection; the
+		# old loop re-ran the full card rebuild after every single deletion.
 		for test in reversed(to_del):
-			self.delete_test(edit, test)
+			self.delete_test(edit, test, commit=False)
 		self.memorize_tests()
+		self.update_configs()
 
 	def sync_read_only(self):
 		view = self.view
@@ -3808,12 +4073,18 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		# IndexError.
 		while len(tester.prog_out) < len(tester.tests):
 			tester.prog_out.append('')
+			tester._prog_out_parts.append([])
+			tester._prog_out_total.append(0)
 		if dir == 1:
 			selected.reverse()
 		for sel in selected:
 			if 0 <= sel + dir < len(tester.tests):
 				tester.tests[sel], tester.tests[sel + dir] = tester.tests[sel + dir], tester.tests[sel]
 				tester.prog_out[sel], tester.prog_out[sel + dir] = tester.prog_out[sel + dir], tester.prog_out[sel]
+				parts = tester._prog_out_parts
+				parts[sel], parts[sel + dir] = parts[sel + dir], parts[sel]
+				totals = tester._prog_out_total
+				totals[sel], totals[sel + dir] = totals[sel + dir], totals[sel]
 
 		for i in range(len(tester.tests)):
 			if tester.tests[i].__unfold:
@@ -3853,7 +4124,11 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		except Exception:
 			pass
 
-		v.set_read_only(False)
+		# Unlock only for a branch that really writes the buffer (see
+		# _WRITE_ACTIONS); the trailing sync_read_only() restores read-only
+		# after a write and no-ops otherwise.
+		if action in _WRITE_ACTIONS and v.is_read_only():
+			v.set_read_only(False)
 
 		if self.tester is None and action in self.ACTIONS_NEEDING_TESTER:
 			sublime.status_message(t('panel_not_ready'))
@@ -3940,9 +4215,6 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			except Exception as e:
 				print('[Algorithm Competition Assistant] terminate failed: %s' % e)
 				sublime.status_message(t('no_running_process'))
-
-		elif action == 'sync_read_only':
-			self.sync_read_only()
 
 		elif action == 'show_test_menu':
 			self.show_test_menu()

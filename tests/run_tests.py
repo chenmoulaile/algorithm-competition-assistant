@@ -1131,8 +1131,8 @@ def main():
     check('the detail template shows no time/mem label placeholder',
           '{time_label}' not in detail_tpl and '{memory_label}' not in detail_tpl)
     _i18n = importlib.import_module(pkg + '.core.cph_i18n')
-    check('the time/mem label entries are gone from the translation table',
-          'time' not in _i18n.STRINGS and 'memory' not in _i18n.STRINGS)
+    check('the time/mem label entries are back (show_time_mem_labels)',
+          'time' in _i18n.STRINGS and 'memory' in _i18n.STRINGS)
     check('the card width estimator counts the label-free rows',
           "': 9999ms '" not in _detail_src and "' 9999ms '" in _detail_src)
     _tle_card = tm.CphTestManagerCommand.Test({'test': '1\n'})
@@ -1246,6 +1246,27 @@ def main():
         def open_file(self, path):
             self.opened.append(path)
             return fake_sublime.View(file_name=path)
+
+    # The reworked companion does its data work on the HTTP thread and
+    # hands only view work to the main thread via set_timeout. The fake
+    # module has no main loop, so the hops queue up here and the test
+    # drains them after each POST - resolve first, then the UI step the
+    # resolve's completion enqueues.
+    main_queue = []
+    fake_sublime.set_timeout = lambda fn, delay=0: main_queue.append(fn)
+
+    def _drain_main():
+        """Run every queued main-thread hop until the listener is quiet."""
+        quiet = 0
+        while quiet < 6:
+            if main_queue:
+                fn = main_queue.pop(0)
+                fn()
+                quiet = 0
+            else:
+                time.sleep(0.05)
+                quiet += 1
+        main_queue[:] = []
 
     def _free_port():
         probe = socket.socket()
@@ -1628,6 +1649,7 @@ def main():
             ack = _post_at(payload, port)
         finally:
             comp._stop_listener()
+            _drain_main()
             fake_sublime.status_message = saved_status_message
             if saved_packages_path is None:
                 try:
@@ -1688,6 +1710,7 @@ def main():
             ack2 = _post_at(payload, port)
         finally:
             comp._stop_listener()
+            _drain_main()
         lines_after = 0
         if os.path.exists(log_path):
             with io.open(log_path, encoding='utf-8') as f:
@@ -1746,6 +1769,7 @@ def main():
                                          {'Origin': 'https://evil.example'})
         finally:
             comp._stop_listener()
+            _drain_main()
             if saved_packages_path is None:
                 try:
                     del fake_sublime.packages_path
@@ -1849,6 +1873,7 @@ def main():
             _post_at(solo, port)
         finally:
             comp._stop_listener()
+            _drain_main()
         made_view = rec_win.made[-1] if rec_win.made else None
         check('the new-file click creates the file and runs nothing',
               made_view is not None
@@ -1872,6 +1897,7 @@ def main():
             _post_at(solo, port)
         finally:
             comp._stop_listener()
+            _drain_main()
         check('the fill-the-current-file click does run them',
               [name for name, _a in fill_view.panel_runs] == ['cph_view_tester'],
               repr(fill_view.panel_runs))
@@ -1898,8 +1924,17 @@ def main():
                                               'output': '2\n'}]}
                                   ).encode('utf-8')
                 _post_at(body, port)
+            # The handler answers 200 BEFORE it finishes judging the click
+            # (the browser must not wait for the merge+write), so the last
+            # POST's processing can still be running when this loop ends.
+            # In real Sublime the UI hops queue on the main thread and the
+            # debounce holds; here they run inline on the handler thread and
+            # must be left alone to finish before _stop_listener() wipes the
+            # debounce state.
+            time.sleep(0.3)
         finally:
             comp._stop_listener()
+            _drain_main()
         check('a burst of problems into one file runs the samples once',
               len(burst_view.panel_runs) == 1, repr(burst_view.panel_runs))
         burst_tests = []
@@ -2116,9 +2151,17 @@ def main():
 
     print('== saving the cards: once per chain, not once per sample ==')
     real_save = tm.save_tests
+    real_save_async = tm.save_tests_async
     saves = []
     try:
-        tm.save_tests = lambda f, tests: (saves.append(f), True)[1]
+        # The flush hands the write to save_tests_async (a worker
+        # thread); the stand-in runs it synchronously so the
+        # single-flight bookkeeping below is exercised as-is.
+        def fake_async(f, tests, pretty=True, on_done=None):
+            saves.append(f)
+            if on_done:
+                on_done(True)
+        tm.save_tests_async = fake_async
         mgr.dbg_file = os.path.join('x', 'a.cpp')
         mgr.tester = tester3
         mgr._tests_dirty = False
@@ -2137,6 +2180,7 @@ def main():
               repr(saves))
     finally:
         tm.save_tests = real_save
+        tm.save_tests_async = real_save_async
 
     print('== settings panels: the JSON-only switches, one keystroke away ==')
     opts = importlib.import_module(pkg + '.cph_options')
@@ -2204,6 +2248,15 @@ def main():
         check('and the picker mode with it',
               store.get('stress_file_picker') == 'native',
               repr(store.get('stress_file_picker')))
+
+        # The panel's log row distinguishes "log on disk" from "no log yet".
+        # Earlier POST tests append to the log through the fake's default
+        # packages path; start this panel from a clean slate so the row's
+        # "missing" branch is the one being tested.
+        try:
+            os.remove(settings_mod.companion_log_path())
+        except OSError:
+            pass
 
         store.set('companion_target', 'new_file')
         messages = []
@@ -3808,9 +3861,9 @@ def main():
     # a word, because the only trace was a console line nobody opens.
     _tm_src = open(os.path.join(ROOT, 'test_manager.py'), encoding='utf-8').read()
     check('memorize_tests reports a failed save',
-          'if not save_tests(self.dbg_file, tests_data):' in _tm_src
+          'def _tests_saved(self, ok):' in _tm_src
           and 'notify_io_error(self.dbg_file)' in _tm_src,
-          'the return value must not be discarded again')
+          'the async write must still report the failure it reported before')
     check('a tests file that cannot be read is reported when the panel loads it',
           "notify_io_error(run_file, kind='read')" in _tm_src,
           'an empty panel must not be the only symptom of a broken file')
@@ -4045,7 +4098,7 @@ def main():
     check('a fresh run clears the verdicts and remembers the AC ones',
           'previously_accepted = set(' in tm_src
           and 'card.reset_run_state()' in tm_src
-          and 'self.tester.previously_accepted = previously_accepted' in tm_src
+          and 'self.tester.previously_accepted = loaded_holder.get(' in tm_src
           and "getattr(self.tester, 'previously_accepted', ())" in tm_src)
 
     # A local variable that shadows a module-level name AND is called in the
@@ -5932,6 +5985,8 @@ def main():
         check('a working store leaves no error behind',
               stats_mod.take_save_error() == '')
         stats_mod.record_run(os.path.join(tempfile.mkdtemp(), 'x.cpp'), ['AC'])
+        # the write is debounced now; the failure surfaces on flush
+        stats_mod.flush()
         first = stats_mod.take_save_error()
         check('a failed save keeps the reason for the caller',
               'blocker' in first and first != '', repr(first))
@@ -6890,7 +6945,7 @@ def main():
           handler.__name__ == '_CompanionHandler'
           and all(callable(getattr(handler, m, None))
                   for m in ('do_POST', '_host_allowed', '_deny',
-                            '_handle_on_main', 'log_message')),
+                            '_process_incoming', 'log_message')),
           repr(handler))
 
     class _FakeRequest(object):
@@ -7047,6 +7102,372 @@ def main():
                                  encoding='utf-8').read()
           and 'package_name' in open(os.path.join(ROOT, 'test_edit.py'),
                                      encoding='utf-8').read())
+
+
+    print('== performance and correctness rework: regressions ==')
+
+    verdict_mod = importlib.import_module(pkg + '.core.cph_verdict')
+
+    # --- P2-9: fix() is lazy; every verdict stays exactly what it was ---
+    def _vd(out, exp, ole=None, pe=False, tol=0):
+        return verdict_mod.get_verdict_by_code(
+            rtcode=0, runtime=1, time_limit_ms=1000, memory_limit_mb=0,
+            stderr='', stdout=out, expected_output=exp,
+            ole_size=ole, regard_pe_as_ac=pe, float_tolerance=tol)['name']
+
+    check('fix() lazy: a plain AC stays AC', _vd('1 2 3', '1 2 3') == 'AC')
+    check('fix() lazy: token-equal whitespace difference is still PE',
+          _vd('1 2\n', '1  2\n') == 'PE')
+    check('fix() lazy: regard_pe_as_ac still promotes PE',
+          _vd('1 2\n', '1  2\n', pe=True) == 'AC')
+    check('fix() lazy: token-equal but oversized output is OLE (before WA)',
+          _vd('1 2 3 ' * 1000, '1 2 3', ole=2) == 'OLE')
+    check('fix() lazy: differing tokens are WA even with ole_size set',
+          _vd('1 2 4', '1 2 3', ole=2) == 'WA')
+    check('fix() lazy: the float-tolerance path is unchanged',
+          _vd('0.10001', '0.1', tol=0.001) == 'AC')
+
+    # --- P1-4: looks_like_crash scans a window, signatures still seen ---
+    clean = ('x' * 127 + '\n') * 8200          # ~1.04 MB of innocent output
+    t0 = time.time()
+    result_clean = verdict_mod.looks_like_crash(clean)
+    scan_ms = (time.time() - t0) * 1000.0
+    check('looks_like_crash: 1 MB of clean output is not a crash',
+          result_clean is False)
+    check('looks_like_crash: the window keeps the scan fast',
+          scan_ms < 20.0, '%.1f ms' % scan_ms)
+    check('looks_like_crash: a traceback at the head is still detected',
+          verdict_mod.looks_like_crash(
+              'Traceback (most recent call last)' + chr(10) + clean[:70000]))
+    check('looks_like_crash: a segfault at the tail is still detected',
+          verdict_mod.looks_like_crash(clean[:70000] + chr(10) + 'Segmentation fault'))
+    check('looks_like_crash: mid-stream sanitizer text alone no longer flags',
+          not verdict_mod.looks_like_crash(
+              clean[:100000] + 'runtime error: x' + chr(10) + clean[:100000]))
+
+    # --- P0-2a: insert() loops over partial raw writes ---
+    pm_mod = importlib.import_module(pkg + '.Modules.ProcessManager')
+
+    class _RawStdin(object):
+        def __init__(self, cap):
+            self.cap = cap
+            self.total = 0
+            self.calls = 0
+
+        def write(self, data):
+            n = min(len(data), self.cap)
+            self.total += n
+            self.calls += 1
+            return n
+
+        def flush(self):
+            pass
+
+    def _insert_probe(payload, cap):
+        stdin = _RawStdin(cap)
+        inst = pm_mod.ProcessManager.__new__(pm_mod.ProcessManager)
+        inst.process = types.SimpleNamespace(stdin=stdin, poll=lambda: None)
+        inst.is_io_files = lambda: False
+        inst.stdin_closed = False
+        inst.insert(payload)
+        return stdin
+
+    fed = _insert_probe('a' * 200000, 65536)
+    check('insert() loops until a partial raw write is fully consumed',
+          fed.total == 200000 and fed.calls >= 4,
+          'total=%d calls=%d' % (fed.total, fed.calls))
+    stuck = _insert_probe('a' * 200000, 0)
+    check('insert() defends against a zero-byte write (no spin)',
+          stuck.total == 0 and stuck.calls == 1)
+
+    # --- P0-1 / P0-2b: the parallel judge drains the pipe and feeds safely ---
+    par = importlib.import_module(pkg + '.core.cph_parallel')
+
+    class _ParManager(object):
+        """Duck-typed ProcessManager for _run_one."""
+
+        def __init__(self, output='', exit_after=0.25, hang_stdin=False):
+            self._output = output
+            self._pos = 0
+            self._spawn = time.monotonic()
+            self._exit_after = exit_after
+            self._terminated = False
+            self._hang_stdin = hang_stdin
+            self._stopped = None
+            self.insert_returned = False
+            self.stdin_closed = False
+
+        def set_separate_stderr(self, v):
+            pass
+
+        def set_time_limit(self, v):
+            pass
+
+        def set_memory_limit(self, v):
+            pass
+
+        def set_io_input(self, text):
+            pass
+
+        def is_io_files(self):
+            return False
+
+        def run_file(self):
+            pass
+
+        def insert(self, s):
+            if self._hang_stdin:
+                # a program that never reads stdin: the feeder blocks in
+                # write() until the deadline kill closes the pipe
+                while not self._terminated:
+                    time.sleep(0.01)
+            self.insert_returned = True
+
+        def close_stdin(self):
+            self.stdin_closed = True
+
+        def is_stopped(self):
+            if self._stopped is None and (
+                    self._terminated
+                    or time.monotonic() - self._spawn > self._exit_after):
+                self._stopped = 0
+            return self._stopped
+
+        def wait_for_exit(self, timeout):
+            end = time.monotonic() + max(0.0, timeout)
+            while time.monotonic() < end:
+                if self.is_stopped() is not None:
+                    return 0
+                time.sleep(0.005)
+            return self.is_stopped()
+
+        def read(self, bfsize=None):
+            if self._pos >= len(self._output):
+                return ''
+            chunk = self._output[self._pos:self._pos + 4096]
+            self._pos += 4096
+            return chunk
+
+        def get_stderr(self):
+            return ''
+
+        def runtime_ms(self):
+            return int((time.monotonic() - self._spawn) * 1000)
+
+        def finish_memory_sampling(self):
+            return None
+
+        def terminate(self):
+            self._terminated = True
+            self._stopped = 0
+
+        def close_stderr(self):
+            pass
+
+    big_out = ('x' * 127 + chr(10)) * 8200     # ~1 MB, the old parallel killer
+    res = par._run_one(lambda: _ParManager(big_out), '', big_out,
+                       10000, 0, 0, False)
+    check('parallel: a 1 MB output arrives complete',
+          res['stdout'] == big_out and res['error'] is None,
+          'len=%s err=%s' % (len(res.get('stdout') or ''), res.get('error')))
+    check('parallel: it is judged AC, not a fake TLE',
+          res['verdict']['name'] == 'AC', str(res['verdict']))
+
+    res = par._run_one(lambda: _ParManager('', hang_stdin=True),
+                       'i' * 70000, 'ans', 150, 0, 0, False)
+    check('parallel: a program that never reads stdin still finishes',
+          res['verdict']['name'] == 'TLE' and res['error'] is None,
+          '%s err=%s' % (res['verdict'], res.get('error')))
+
+    # --- P0-3: the interactor verdict survives a normal dialogue ---
+    inter = importlib.import_module(pkg + '.core.cph_interactive')
+
+    class _FakeSolution(object):
+        def __init__(self):
+            self._stopped = None
+            self._stdin_closed_at = None
+            self.stdin_closed = False
+            self.inserted = []
+            self._read_once = False
+
+        def set_separate_stderr(self, v):
+            pass
+
+        def set_time_limit(self, v):
+            pass
+
+        def run_file(self):
+            pass
+
+        def read(self, bfsize=None):
+            if self._read_once:
+                return ''
+            self._read_once = True
+            return 'A 1' + chr(10)
+
+        def insert(self, s):
+            self.inserted.append(s)
+
+        def close_stdin(self):
+            self.stdin_closed = True
+            self._stdin_closed_at = time.monotonic()
+
+        def is_stopped(self):
+            if (self._stopped is None and self._stdin_closed_at is not None
+                    and time.monotonic() - self._stdin_closed_at > 0.15):
+                self._stopped = 0
+            return self._stopped
+
+        def get_stderr(self):
+            return ''
+
+        def finish_memory_sampling(self):
+            return None
+
+        def terminate(self):
+            self._stopped = 0
+
+        def close_stderr(self):
+            pass
+
+    interactor_cmd = [sys.executable, '-c',
+                      "import sys; sys.stdout.write('Q?'); sys.stdout.flush(); "
+                      "sys.stdin.readline(); sys.exit(0)"]
+    solution = _FakeSolution()
+    res = inter.run_case(lambda: solution, interactor_cmd, 'input', 'answer',
+                         10000)
+    print('DBG interactive: stdin_closed=%s stopped=%s inserted=%s' % (
+        solution.stdin_closed, solution._stopped, solution.inserted))
+    check('interactive: the interactor exit code decides the verdict',
+          res['verdict']['name'] == 'AC', str(res['verdict']))
+    check('interactive: EOF reaches the solution once the interactor judged',
+          solution.stdin_closed and solution.inserted == ['Q?'],
+          repr(solution.inserted))
+    check('interactive: the runtime is the real dialogue time',
+          0 < res['runtime'] < 5000, str(res['runtime']))
+
+    # --- P1-5(3): record_run is memory work; the store lands later ---
+    stats_mod = importlib.import_module(pkg + '.core.cph_stats')
+    stats_dir = tempfile.mkdtemp(prefix='cph-stats-suite-')
+    saved_stats_path_env = os.environ.get('CPH_STATS_PATH')
+    try:
+        os.environ['CPH_STATS_PATH'] = os.path.join(stats_dir, 'stats.json')
+        stats_mod.reset()
+        stats_mod.load()
+        for _ in range(5000):
+            stats_mod.record_run('p.cpp', ['AC'])
+        t0 = time.time()
+        stats_mod.record_run('p.cpp', ['AC'])
+        rec_ms = (time.time() - t0) * 1000.0
+        check('record_run with 5000 history entries stays under 5 ms',
+              rec_ms < 5.0, '%.1f ms' % rec_ms)
+        stats_mod.flush()
+        with open(os.environ['CPH_STATS_PATH'], encoding='utf-8') as f:
+            stored = json.load(f)
+        check('the debounced flush lands the whole ledger on disk',
+              stored.get('problems', {}).get(
+                  stats_mod.key_for('p.cpp'), {}).get('runs') == 5001,
+              'runs=%s' % stored.get('problems', {}).get(
+                  stats_mod.key_for('p.cpp'), {}).get('runs'))
+    finally:
+        stats_mod.reset()
+        if saved_stats_path_env is None:
+            os.environ.pop('CPH_STATS_PATH', None)
+        else:
+            os.environ['CPH_STATS_PATH'] = saved_stats_path_env
+        shutil.rmtree(stats_dir, ignore_errors=True)
+
+    # --- P2-11: judge() reuses a workdir; stdin checkers write nothing ---
+    checker_mod = importlib.import_module(pkg + '.core.cph_checker')
+    wd = tempfile.mkdtemp(prefix='cph-checker-suite-')
+    try:
+        stdin_cfg = {'style': 'stdin', 'dir': wd, 'time_limit_ms': 5000}
+        stdin_exe = [sys.executable, '-c',
+                     "import sys; sys.stdin.readline(); sys.exit(1)"]
+        r1 = checker_mod.judge(stdin_cfg, stdin_exe, 'in', 'out', 'ans',
+                               workdir=wd)
+        r2 = checker_mod.judge(stdin_cfg, stdin_exe, 'in', 'out', 'ans',
+                               workdir=wd)
+        check('a stdin-style checker runs twice from one workdir',
+              r1['verdict'] == 'wrong_answer' and r2['verdict'] == 'wrong_answer',
+              '%s / %s' % (r1['verdict'], r2['verdict']))
+        check('a stdin-style checker writes no scratch files',
+              os.listdir(wd) == [], repr(os.listdir(wd)))
+        check('a reused workdir survives its calls',
+              os.path.isdir(wd))
+        testlib_cfg = {'style': 'testlib', 'dir': wd, 'time_limit_ms': 5000}
+        testlib_exe = [sys.executable, '-c', "import sys; sys.exit(0)"]
+        r = checker_mod.judge(testlib_cfg, testlib_exe, 'in', 'out', 'ans',
+                              workdir=wd)
+        check('a testlib-style checker reuses the workdir too',
+              r['verdict'] == 'accepted' and os.path.isdir(wd),
+              str(r['verdict']))
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
+
+    # --- P1-6: run() unlocks the view only for the branches that write ---
+    _tm_src2 = open(os.path.join(ROOT, 'test_manager.py'),
+                    encoding='utf-8').read()
+    check('run() unlocks the view only for writing actions',
+          'if action in _WRITE_ACTIONS and v.is_read_only():' in _tm_src2
+          and "elif action == 'sync_read_only':" not in _tm_src2)
+
+    # --- P1-7: the pump coalesces output instead of one hop per chunk ---
+    tester_flush = make_tester([card_cls('1' + chr(10))])
+    tester_flush.running_test = 0
+    dispatched = []
+    tester_flush.on_out = lambda s, epoch=None: dispatched.append(s)
+    for _ in range(50):
+        tester_flush.post_out('chunk' + chr(10))
+    check('pump output queues as one pending batch',
+          len(tester_flush._out_pending) == 50
+          and tester_flush._out_flush_scheduled is True)
+    tester_flush.flush_pending_out()
+    check('one flush delivers one dispatch for the whole batch',
+          dispatched == [('chunk' + chr(10)) * 50],
+          'dispatches=%d' % len(dispatched))
+    pump_in = getattr(tester_flush, '_Tester__on_out')
+    for _ in range(50):
+        pump_in('chunk' + chr(10))
+    check('the pump appends chunks as parts and folds on demand',
+          len(tester_flush._prog_out_parts[0]) == 50
+          and tester_flush.output_at(0) == ('chunk' + chr(10)) * 50,
+          'parts=%d' % len(tester_flush._prog_out_parts[0]))
+
+    # --- the panel width is fitted to the cards that ARE there ---
+    _sub_mod = sys.modules['sublime']
+    fit_view = _sub_mod.View()
+    fit_view.em_width = lambda: 10.0
+    wide = tm.estimate_card_width_px(fit_view, True)
+    narrow = tm.estimate_card_width_px(
+        fit_view, True,
+        rows=((' test 1 ', ' edit ', ' run ', ' detail ', ' 42ms '),))
+    check('actual cards ask for less width than the worst case',
+          0 < narrow < wide, 'narrow=%.0f wide=%.0f' % (narrow, wide))
+    labeled = tm.estimate_card_width_px(
+        fit_view, True,
+        rows=((' test 1 ', ' edit ', ' run ', ' detail ',
+                ' time: 42ms ', ' mem: 4 MB '),))
+    check('the optional time/mem labels widen the estimate again',
+          labeled > narrow, 'labeled=%.0f narrow=%.0f' % (labeled, narrow))
+
+    # --- the label setting: i18n entries are back, default stays bare ---
+    i18n_mod = importlib.import_module(pkg + '.core.cph_i18n')
+    check('the time/mem labels are translatable again',
+          i18n_mod.STRINGS.get('time', {}).get('en') == 'time'
+          and i18n_mod.STRINGS.get('memory', {}).get('zh'))
+    check('the label prefix helper honours the setting',
+          tm._label_prefixed('42ms', 'time') == '42ms')
+    saved_settings_map = {}
+    _settings_holder = importlib.import_module(pkg + '.core.cph_settings')
+
+    # --- the companion merge/write moved off the main thread ---
+    comp_src = open(os.path.join(ROOT, 'cph_companion.py'),
+                    encoding='utf-8').read()
+    check('the companion no longer merges or saves on the main thread',
+          'def _process_incoming' in comp_src
+          and '_merge_with_stored(file_name, incoming)' in comp_src
+          and '_handle_on_main' not in comp_src)
 
     print('')
     print('%d checks, %d failures' % (CHECKS[0], len(FAILURES)))

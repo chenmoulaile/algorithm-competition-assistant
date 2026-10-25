@@ -125,10 +125,15 @@ def merge_tests(file_name, incoming):
     re-sent sample must never overwrite an answer the user accepted by
     hand. Conflicting answers are reported through the status bar.
     """
-    merged, conflicts = merge_stored_with(load_all_tests(file_name), incoming)
+    merged, conflicts = _merge_with_stored(file_name, incoming)
     if conflicts:
         sublime.status_message(t('answer_conflict_kept'))
     return merged
+
+
+def _merge_with_stored(file_name, incoming):
+    """Pure-data twin of merge_tests: (merged, conflicts), no UI."""
+    return merge_stored_with(load_all_tests(file_name), incoming)
 
 
 def remember_limits(file_name, time_limit_ms, memory_limit_mb):
@@ -279,68 +284,118 @@ def build_handler():
                 self._deny(400)
                 return
 
-            # Everything below touches the Sublime API -> main thread only
-            sublime.set_timeout(lambda data=data: self._handle_on_main(data), 0)
-
+            # Reply before the work: the extension only needs to know the
+            # request arrived. 保持服务器运行, 不 shutdown —— 浏览器扩展可以反复点击
             try:
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(b'ok')
             except Exception:
                 pass
-            # 保持服务器运行, 不 shutdown —— 浏览器扩展可以反复点击
 
-        def _handle_on_main(self, data):
+            # Everything below used to run on the MAIN thread: merge_tests
+            # reads up to four tests files and save_tests writes them back,
+            # and a problem-list click sends N of these in a burst - the
+            # editor froze for every one. Only two steps here need the main
+            # thread (resolving the target view, and the UI feedback); the
+            # rest is pure data + file work and stays on THIS thread.
+            self._process_incoming(data)
+
+        def _process_incoming(self, data):
+            tests = data.get('tests', []) or []
+            problem_name = data.get('name', '')
+            time_limit_ms = _as_int(data.get('timeLimit'))
+            memory_limit_mb = _as_int(data.get('memoryLimit'))
+
+            incoming = []
+            for test in tests:
+                output = (test.get('output') or '').strip()
+                incoming.append({
+                    'test': test.get('input', ''),
+                    'correct_answers': [output] if output else [],
+                })
+
+            # 1. Resolve the target on the main thread (it touches views and
+            # may create a file). Bounded wait: a wedged UI must not wedge
+            # the listener with it.
+            holder = {}
+            done = threading.Event()
+
+            def _resolve():
+                try:
+                    holder['target'] = resolve_target(
+                        problem_name, data.get('url') or '',
+                        time_limit_ms, memory_limit_mb)
+                except Exception as e:
+                    holder['error'] = e
+                finally:
+                    done.set()
+
             try:
-                tests = data.get('tests', []) or []
-                problem_name = data.get('name', '')
-                time_limit_ms = _as_int(data.get('timeLimit'))
-                memory_limit_mb = _as_int(data.get('memoryLimit'))
+                sublime.set_timeout(_resolve, 0)
+            except Exception as e:
+                _debug_log('target resolve dispatch failed: %s' % e)
+                return
+            if not done.wait(10.0):
+                _debug_log('target resolve timed out after 10s; POST dropped')
+                return
+            if 'error' in holder:
+                print(t('error_handling_post', error=str(holder['error'])))
+                return
 
-                incoming = []
-                for test in tests:
-                    output = (test.get('output') or '').strip()
-                    incoming.append({
-                        'test': test.get('input', ''),
-                        'correct_answers': [output] if output else [],
-                    })
+            target = holder.get('target')
+            if target is None or not target.file_name():
+                _debug_log('incoming "%s" tests=%d mode=%s -> no target'
+                           % (problem_name, len(incoming), _target_mode()))
+                sublime.set_timeout(
+                    lambda: sublime.status_message(t('listener_no_target')), 0)
+                return
 
-                target = resolve_target(problem_name, data.get('url') or '',
-                                        time_limit_ms, memory_limit_mb)
-                if target is None or not target.file_name():
-                    _debug_log('incoming "%s" tests=%d mode=%s -> no target'
-                               % (problem_name, len(incoming), _target_mode()))
-                    sublime.status_message(t('listener_no_target'))
-                    return
+            file_name = target.file_name()
+            _debug_log('incoming "%s" tests=%d tl=%s ml=%s mode=%s -> %s'
+                       % (problem_name, len(incoming), time_limit_ms,
+                          memory_limit_mb, _target_mode(), file_name))
 
-                file_name = target.file_name()
-                _debug_log('incoming "%s" tests=%d tl=%s ml=%s mode=%s -> %s'
-                           % (problem_name, len(incoming), time_limit_ms,
-                              memory_limit_mb, _target_mode(), file_name))
-                merged = merge_tests(file_name, incoming)
-                if not save_tests(file_name, merged):
-                    # A status_message flashes past while the browser has
-                    # already been answered with 200 "ok": the click looked
-                    # accepted and the samples were not on disk. Name the file
-                    # and the OS reason - it runs on the main thread (_handle_on_main).
-                    if not notify_io_error(file_name):
+            # 2. Merge + write HERE, on the HTTP thread. encode_value /
+            # decode_value are pure converters and the data is plain
+            # str/list/dict, so none of this touches view state.
+            try:
+                merged, conflicts = _merge_with_stored(file_name, incoming)
+                saved = save_tests(file_name, merged)
+            except Exception as e:
+                print(t('error_handling_post', error=str(e)))
+                return
+            if not saved:
+                # A status_message flashes past while the browser has already
+                # been answered with 200 "ok": the click looked accepted and
+                # the samples were not on disk. notify_io_error names the
+                # file and the OS reason (it must run on the main thread).
+                payload = file_name
+
+                def _report_io_error():
+                    if not notify_io_error(payload):
                         sublime.status_message(t('import_save_failed'))
-                    return
-                remember_limits(file_name, time_limit_ms, memory_limit_mb)
-                print('[Algorithm Competition Assistant] %s' % t('new_test_file_path', path=file_name))
+                sublime.set_timeout(_report_io_error, 0)
+                return
+            remember_limits(file_name, time_limit_ms, memory_limit_mb)
+            print('[Algorithm Competition Assistant] %s' % t('new_test_file_path', path=file_name))
 
-                count = len(incoming)
-                tl = time_limit_ms if time_limit_ms is not None else '-'
-                ml = memory_limit_mb if memory_limit_mb is not None else '-'
+            count = len(incoming)
+            tl = time_limit_ms if time_limit_ms is not None else '-'
+            ml = memory_limit_mb if memory_limit_mb is not None else '-'
 
-                # Auto-run only where it can mean something. `new_file` just
-                # created an empty problem file: there is no code to test yet,
-                # and a panel plus a compile for every click is memory spent on
-                # nothing. `current_file` fills the file being written, and
-                # running its samples right there is the point.
-                # The panel belongs to the file that was resolved above: the
-                # view the request arrived on may have been closed by
-                # auto-create, and running a command on a closed view raised.
+            # 3. UI feedback + optional auto-run, back on the main thread.
+            # Auto-run only where it can mean something. `new_file` just
+            # created an empty problem file: there is no code to test yet,
+            # and a panel plus a compile for every click is memory spent on
+            # nothing. `current_file` fills the file being written, and
+            # running its samples right there is the point.
+            # The panel belongs to the file that was resolved above: the
+            # view the request arrived on may have been closed by
+            # auto-create, and running a command on a closed view raised.
+            def _ui():
+                if conflicts:
+                    sublime.status_message(t('answer_conflict_kept'))
                 if _target_mode() == _TARGET_CURRENT and _should_run(file_name):
                     target.run_command('cph_view_tester', {
                         'action': 'make_opd',
@@ -354,8 +409,7 @@ def build_handler():
                                          name=problem_name or '?',
                                          count=count, time=tl, memory=ml,
                                          file=os.path.basename(file_name)))
-            except Exception as e:
-                print(t('error_handling_post', error=str(e)))
+            sublime.set_timeout(_ui, 0)
 
     return _CompanionHandler
 

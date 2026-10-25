@@ -192,6 +192,12 @@ _STD_IDENT = re.compile(
 _NEW_KEYWORD = re.compile(r'\b(consteval|constinit|co_await|co_yield)\b')
 _MAX_HINT_BYTES = 512 * 1024
 
+# suggested_rung() re-reads up to 512 KB and runs three regex scans, and a
+# single Run walks it two or three times (hint, retry ladder, escalation).
+# Keyed by (mtime, size) so an edited file re-reads; reset(source_file)
+# drops the entry so the escape-hatch reset really forgets everything.
+_rung_memo = {}
+
 
 def suggested_rung(source_file):
 	"""The rung this source clearly needs, or None when nothing says.
@@ -202,6 +208,14 @@ def suggested_rung(source_file):
 	"""
 	if not source_file:
 		return None
+	try:
+		st = os.stat(source_file)
+		stamp = (int(st.st_mtime), st.st_size)
+	except Exception:
+		return None
+	cached = _rung_memo.get(source_file)
+	if cached is not None and cached[0] == stamp:
+		return cached[1]
 	try:
 		with open(source_file, 'rb') as f:
 			raw = f.read(_MAX_HINT_BYTES)
@@ -220,6 +234,7 @@ def suggested_rung(source_file):
 		for rung in ('c++23',):
 			if best is None or RUNGS.index(rung) > RUNGS.index(best):
 				best = rung
+	_rung_memo[source_file] = (stamp, best)
 	return best
 
 
@@ -315,3 +330,5 @@ def escalate(cmd, source_file, stderr, settings=None):
 def reset(source_file):
 	"""Forget this file's rung (what force-recompile does)."""
 	set_remembered_std(source_file, None)
+	if source_file:
+		_rung_memo.pop(source_file, None)

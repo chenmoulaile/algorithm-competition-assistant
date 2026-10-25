@@ -1026,7 +1026,16 @@ def _communicate_abortable(proc, data, timeout, abort):
     deadline = (time.time() + timeout) if timeout and timeout > 0 else None
     timed_out = False
     aborted = False
-    while proc.poll() is None:
+    while True:
+        try:
+            # wait(timeout) returns the instant the child dies; the old
+            # poll() + sleep(0.02) kept every round alive ~10-20 ms per
+            # process past its real exit (three programs per round, so
+            # ~30-60 s of pure sleep over a 1000-round session).
+            proc.wait(timeout=0.05)
+            break
+        except subprocess.TimeoutExpired:
+            pass
         if abort is not None and abort():
             aborted = True
             _kill_tree(proc)
@@ -1035,11 +1044,6 @@ def _communicate_abortable(proc, data, timeout, abort):
             timed_out = True
             _kill_tree(proc)
             break
-        time.sleep(0.02)
-    try:
-        proc.wait()
-    except Exception:
-        pass
     for th in threads:
         th.join(timeout=2)
     if feeder is not None:
@@ -1204,6 +1208,14 @@ def _finish_stress(sess):
         try:
             import shutil
             shutil.rmtree(root, ignore_errors=True)
+        except Exception:
+            pass
+    workdir = sess.pop('checker_workdir', None)
+    if workdir:
+        unregister_temp_dir(workdir)
+        try:
+            import shutil
+            shutil.rmtree(workdir, ignore_errors=True)
         except Exception:
             pass
     for key in sess.get('live_keys') or ():
@@ -1482,9 +1494,20 @@ def _run_stress_loop(sess):
             compared += 1
             checker_msg = ''
             if checker_exe is not None:
-                # Both answers can be valid: let the checker decide.
+                # Both answers can be valid: let the checker decide. One
+                # scratch directory for the whole session: every round used
+                # to create and delete its own (three ~1 MB files), which
+                # churned ~3 GB of disk over 1000 rounds.
+                workdir = sess.get('checker_workdir')
+                if workdir is None:
+                    try:
+                        workdir = tempfile.mkdtemp(prefix='cph-stress-checker-')
+                        register_temp_dir(workdir)
+                    except Exception:
+                        workdir = None
+                    sess['checker_workdir'] = workdir
                 res = cph_checker.judge(checker_cfg, checker_exe, inp,
-                                        user_out, std_out)
+                                        user_out, std_out, workdir=workdir)
                 is_diff = not res.get('ok')
                 checker_msg = (res.get('message') or '').strip()
             else:
@@ -1811,8 +1834,14 @@ class CphStressReplayCommand(sublime_plugin.TextCommand):
 						% (why1 or '', why2 or ''))
 					return
 				limit = float(get_settings().get('stress_time_limit_seconds', 2) or 2)
-				_rc1, user_out, _e1, tle1 = _run_program(user_exe, inp, time_limit=limit, sess=sess)
-				_rc2, std_out, _e2, _tle2 = _run_program(std_exe, inp, time_limit=limit, sess=sess)
+				# argv looked up once, like the main loop does (see
+				# _program_command there): _run_program would otherwise walk
+				# the settings + format + shlex for the same binary on
+				# every replay.
+				user_argv = _program_command(user_exe, user_file) or _program_argv(user_file)
+				std_argv = _program_command(std_exe, std_file) or _program_argv(std_file)
+				_rc1, user_out, _e1, tle1 = _run_program(user_argv or user_exe, inp, time_limit=limit, sess=sess)
+				_rc2, std_out, _e2, _tle2 = _run_program(std_argv or std_exe, inp, time_limit=limit, sess=sess)
 				if tle1:
 					say('[Algorithm Competition Assistant] ' + t('stress_replay_tle') + '\n')
 					return

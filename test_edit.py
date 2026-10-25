@@ -279,5 +279,21 @@ class EditModifyListener(sublime_plugin.EventListener):
 	def on_modified(self, view):
 		# Keep the save/delete buttons pinned to the top of the edit tabs:
 		# an insertion at point 0 can push the phantom anchor into the text.
-		if view.settings().get('cph_edit_view'):
-			view.run_command('cph_test_edit', {'action': 'update_phantom'})
+		# Only an edit AT POINT 0 can move the anchor (the phantom sits on
+		# Region(0)), so re-hanging the phantom on every keystroke was pure
+		# overhead - and it re-ran on every keystroke of a pasted sample too.
+		# A short debounce folds bursts (a paste is one edit, but IME input
+		# and auto-pair can fire several) into one update.
+		if not view.settings().get('cph_edit_view'):
+			return
+		key = 'cph_edit_phantom_update_scheduled'
+		if view.settings().get(key):
+			return
+		view.settings().set(key, True)
+
+		def update(v=view):
+			v.settings().erase(key)
+			if v.is_valid() and v.settings().get('cph_edit_view'):
+				v.run_command('cph_test_edit', {'action': 'update_phantom'})
+
+		sublime.set_timeout(update, 100)

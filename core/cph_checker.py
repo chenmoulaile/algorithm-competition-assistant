@@ -215,24 +215,35 @@ def _reap(proc):
 		pass
 
 
-def judge(cfg, exe, input_text, output_text, expected_text):
+def judge(cfg, exe, input_text, output_text, expected_text, workdir=None):
 	"""Run the checker. Returns a dict:
 
 	{'ok': bool, 'verdict': 'accepted'|'wrong_answer'|..., 'message': str}
+
+	`workdir` lets a caller reuse one scratch directory across rounds (the
+	stress session does): each call wrote ~1 MB of files and deleted them
+	again, so 1000 rounds churned ~3 GB of disk traffic. When None, a
+	per-call temp directory is created and cleaned up as before.
 	"""
-	workdir = tempfile.mkdtemp(prefix='cph-checker-')
+	owns_dir = workdir is None
+	if owns_dir:
+		workdir = tempfile.mkdtemp(prefix='cph-checker-')
 	in_path = os.path.join(workdir, 'input.txt')
 	out_path = os.path.join(workdir, 'output.txt')
 	ans_path = os.path.join(workdir, 'answer.txt')
 	try:
-		_write(in_path, input_text)
-		_write(out_path, output_text)
-		_write(ans_path, expected_text)
+		if cfg['style'] != 'stdin':
+			_write(in_path, input_text)
+			_write(out_path, output_text)
+			_write(ans_path, expected_text)
+		# A stdin-style checker reads its payload from stdin and never opens
+		# the three files, so nothing is written for it.
 	except Exception as e:
 		# A full disk or a locked folder used to raise straight through
 		# apply_checker() into on_stop(), which aborted the verdict for that
 		# test with nothing on the card. Say which stage failed instead.
-		_cleanup(workdir)
+		if owns_dir:
+			_cleanup(workdir)
 		return {'ok': False, 'verdict': 'unknown_error',
 				'message': t('checker_write_failed', error=str(e)[:200])}
 
@@ -265,16 +276,19 @@ def judge(cfg, exe, input_text, output_text, expected_text):
 		code = proc.returncode
 	except subprocess.TimeoutExpired:
 		_reap(proc)
-		_cleanup(workdir)
+		if owns_dir:
+			_cleanup(workdir)
 		return {'ok': False, 'verdict': 'unknown_error',
 				'message': t('checker_timeout', limit='%g' % limit_s)}
 	except Exception as e:
 		_reap(proc)
-		_cleanup(workdir)
+		if owns_dir:
+			_cleanup(workdir)
 		return {'ok': False, 'verdict': 'unknown_error',
 				'message': t('checker_run_failed', error=str(e))}
 
-	_cleanup(workdir)
+	if owns_dir:
+		_cleanup(workdir)
 	message = decode_output(out).strip()
 	name = EXIT_CODES.get(code, 'unknown_error')
 	if code is not None and code < 0:

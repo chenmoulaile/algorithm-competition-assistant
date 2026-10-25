@@ -42,6 +42,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 
 # ISO 时间戳格式，strftime / strptime 两端保持一致（本地时区）。
@@ -64,6 +65,103 @@ _HISTORY_LIMIT = 5000
 
 # 最近一次 save() 失败的原因，由 take_save_error() 取走（见 save 的 docstring）。
 _last_save_error = ''
+
+# ---------------------------------------------------------------------------
+# 常驻缓存：record_run() 曾经每次"读全量 + 追加一条 + 写全量"，而调用点在判题
+# 链末的主线程回调里。5000 条 history 时单次调用 18.4 ms，全是 JSON 解析与
+# 序列化。数据改为模块级常驻 + 脏标志 + 1 s 去抖落盘（single-flight：已在
+# 落盘期间再次变脏，则落盘完成后补一轮），主线程路径只剩内存字典操作。
+# 本模块是纯标准库，所以去抖用 threading.Timer 而不是 sublime.set_timeout；
+# Timer 线程 daemon，解释器退出时未满 1 s 的尾巴允许丢——这是练习统计，
+# 不是账本审计。
+# ---------------------------------------------------------------------------
+_cache = None
+# The store path the cache was read from: tests switch CPH_STATS_PATH
+# between cases, and a cache built for one path must never answer for
+# another (production keeps the path constant for the whole session).
+_cache_path = None
+_cache_dirty = False
+_cache_timer = None
+_cache_lock = threading.Lock()
+
+_FLUSH_DELAY_SECONDS = 1.0
+
+
+def _read_disk():
+	"""原始读盘（无锁、不碰缓存）。文件缺失/损坏返回空账本。"""
+	try:
+		f = open(stats_path(), 'r', encoding='utf-8')
+	except Exception:
+		return {}
+	try:
+		data = json.load(f)
+	except Exception:
+		return {}
+	finally:
+		try:
+			f.close()
+		except Exception:
+			pass
+	if not isinstance(data, dict):
+		return {}
+	return data
+
+
+def _load_unlocked():
+	"""读盘一次进缓存（调用方须持锁）。"""
+	global _cache, _cache_path
+	_cache = _read_disk()
+	_cache_path = stats_path()
+	return _cache
+
+
+def _cached_unlocked():
+	"""缓存命中（调用方须持锁）；存储路径变了就作废重读。"""
+	global _cache
+	if _cache is not None and _cache_path != stats_path():
+		_cache = None
+	return _cache
+
+
+def _mark_dirty():
+	"""置脏 + 安排去抖落盘（调用方须持锁）。
+
+	The assignment must live in a helper: doing it inline inside
+	record_run()/record_stress() would create a plain local variable
+	and the flush timer would never see the change.
+	"""
+	global _cache_dirty
+	_cache_dirty = True
+	_schedule_flush_unlocked()
+
+
+def _schedule_flush_unlocked():
+	"""安排一次去抖落盘（调用方须持锁）。"""
+	global _cache_timer
+	if _cache_timer is not None:
+		return
+	timer = threading.Timer(_FLUSH_DELAY_SECONDS, flush)
+	timer.daemon = True
+	timer.start()
+	_cache_timer = timer
+
+
+def flush():
+	"""把缓存写盘（若脏）。可从任意线程调用；重复调用安全。"""
+	global _cache_timer, _cache_dirty
+	timer = None
+	with _cache_lock:
+		_cache_timer = None
+		if not _cache_dirty or _cached_unlocked() is None:
+			return
+		data = _cache
+		_cache_dirty = False
+	if save(data):
+		return
+	# 写失败：标记重新变脏，下一次 record 或 flush 重试（save 的失败原因
+	# 已由 take_save_error 通道报告）。
+	with _cache_lock:
+		_cache_dirty = True
 
 
 def stats_path():
@@ -95,23 +193,16 @@ def stats_path():
 
 
 def load():
-	"""读取并解析存储；文件缺失或损坏时返回 {}，永不抛异常。"""
-	try:
-		f = open(stats_path(), 'r', encoding='utf-8')
-	except Exception:
-		return {}
-	try:
-		data = json.load(f)
-	except Exception:
-		return {}
-	finally:
-		try:
-			f.close()
-		except Exception:
-			pass
-	if not isinstance(data, dict):
-		return {}
-	return data
+	"""读取并解析存储；文件缺失或损坏时返回 {}，永不抛异常。
+
+	读的是常驻缓存副本（首个调用方读盘，之后全部命中内存）：报表与 summary
+	因此不再碰磁盘。返回深拷贝，调用方改动不会泄漏进账本。
+	"""
+	import copy
+	with _cache_lock:
+		if _cached_unlocked() is not None:
+			return copy.deepcopy(_cache)
+		return copy.deepcopy(_load_unlocked())
 
 
 def save(data):
@@ -138,7 +229,9 @@ def save(data):
 	try:
 		f = open(tmp, 'w', encoding='utf-8')
 		try:
-			json.dump(data, f, ensure_ascii=False, indent=2)
+			# compact：这个文件从不手编（报表全部走 API），indent=2 只让
+			# 5000 条 history 的体积翻倍、写盘时间翻倍。
+			json.dump(data, f, ensure_ascii=False)
 		finally:
 			try:
 				f.close()
@@ -291,65 +384,68 @@ def record_run(file, verdicts, now=None):
 			break
 	worst = 'UKE' if not items else worst_verdict(items)
 
-	data = load()
-	problems = data.get('problems')
-	if not isinstance(problems, dict):
-		problems = {}
-	rec = problems.get(key)
-	if not isinstance(rec, dict):
-		rec = {}
+	with _cache_lock:
+		data = _cached_unlocked()
+		if data is None:
+			data = _load_unlocked()
+		problems = data.get('problems')
+		if not isinstance(problems, dict):
+			problems = {}
+		rec = problems.get(key)
+		if not isinstance(rec, dict):
+			rec = {}
 
-	rec['file'] = file
-	rec['runs'] = int(rec.get('runs') or 0) + 1
-	rec['attempts'] = int(rec.get('attempts') or 0)
-	rec['ac_runs'] = int(rec.get('ac_runs') or 0)
+		rec['file'] = file
+		rec['runs'] = int(rec.get('runs') or 0) + 1
+		rec['attempts'] = int(rec.get('attempts') or 0)
+		rec['ac_runs'] = int(rec.get('ac_runs') or 0)
 
-	if all_ac:
-		rec['ac_runs'] += 1
-		rec['solved'] = True
-		if not rec.get('first_ac'):
-			rec['first_ac'] = iso
-	else:
-		rec['attempts'] += 1
-		if 'solved' not in rec:
-			rec['solved'] = False
-		if 'first_ac' not in rec:
-			rec['first_ac'] = None
+		if all_ac:
+			rec['ac_runs'] += 1
+			rec['solved'] = True
+			if not rec.get('first_ac'):
+				rec['first_ac'] = iso
+		else:
+			rec['attempts'] += 1
+			if 'solved' not in rec:
+				rec['solved'] = False
+			if 'first_ac' not in rec:
+				rec['first_ac'] = None
 
-	rec['last'] = iso
-	rec['last_verdict'] = worst
+		rec['last'] = iso
+		rec['last_verdict'] = worst
 
-	by_verdict = rec.get('by_verdict')
-	if not isinstance(by_verdict, dict):
-		by_verdict = {}
-	for v in items:
-		by_verdict[v] = int(by_verdict.get(v) or 0) + 1
-	rec['by_verdict'] = by_verdict
-	if 'stress_rounds' not in rec:
-		rec['stress_rounds'] = 0
+		by_verdict = rec.get('by_verdict')
+		if not isinstance(by_verdict, dict):
+			by_verdict = {}
+		for v in items:
+			by_verdict[v] = int(by_verdict.get(v) or 0) + 1
+		rec['by_verdict'] = by_verdict
+		if 'stress_rounds' not in rec:
+			rec['stress_rounds'] = 0
 
-	problems[key] = rec
-	data['problems'] = problems
+		problems[key] = rec
+		data['problems'] = problems
 
-	history = data.get('history')
-	if not isinstance(history, list):
-		history = []
-	history.append({
-		'key': key,
-		'file': file,
-		'time': iso,
-		'verdict': worst,
-		'all_ac': all_ac,
-	})
-	# 只保留最新 _HISTORY_LIMIT 条（见该常量的注释）：problems 里的累计字段
-	# 才是账本，history 只是"最近发生了什么"。丢掉的都是最老的记录，而报表
-	# 窗口默认只有 7 天。"已解决"因此不能只靠 history 判断——summary_data
-	# 会先读 problems 里的 first_ac，再拿 history 补齐。
-	if len(history) > _HISTORY_LIMIT:
-		del history[:len(history) - _HISTORY_LIMIT]
-	data['history'] = history
+		history = data.get('history')
+		if not isinstance(history, list):
+			history = []
+		history.append({
+			'key': key,
+			'file': file,
+			'time': iso,
+			'verdict': worst,
+			'all_ac': all_ac,
+		})
+		# 只保留最新 _HISTORY_LIMIT 条（见该常量的注释）：problems 里的累计字段
+		# 才是账本，history 只是"最近发生了什么"。丢掉的都是最老的记录，而报表
+		# 窗口默认只有 7 天。"已解决"因此不能只靠 history 判断——summary_data
+		# 会先读 problems 里的 first_ac，再拿 history 补齐。
+		if len(history) > _HISTORY_LIMIT:
+			del history[:len(history) - _HISTORY_LIMIT]
+		data['history'] = history
 
-	save(data)
+		_mark_dirty()
 	return rec
 
 
@@ -363,18 +459,21 @@ def record_stress(file, rounds, now=None):
 	if rounds < 0:
 		rounds = 0
 
-	data = load()
-	problems = data.get('problems')
-	if not isinstance(problems, dict):
-		problems = {}
-	rec = problems.get(key)
-	if not isinstance(rec, dict):
-		rec = {}
-	rec['file'] = file
-	rec['stress_rounds'] = int(rec.get('stress_rounds') or 0) + rounds
-	problems[key] = rec
-	data['problems'] = problems
-	save(data)
+	with _cache_lock:
+		data = _cached_unlocked()
+		if data is None:
+			data = _load_unlocked()
+		problems = data.get('problems')
+		if not isinstance(problems, dict):
+			problems = {}
+		rec = problems.get(key)
+		if not isinstance(rec, dict):
+			rec = {}
+		rec['file'] = file
+		rec['stress_rounds'] = int(rec.get('stress_rounds') or 0) + rounds
+		problems[key] = rec
+		data['problems'] = problems
+		_mark_dirty()
 	return rec
 
 
@@ -686,10 +785,14 @@ def summary_localized(days=7, now=None):
 
 def reset():
 	"""删除存储文件。文件已不存在或删除成功都返回 True。"""
+	global _cache, _cache_dirty
 	path = stats_path()
 	try:
 		if os.path.exists(path):
 			os.remove(path)
+		with _cache_lock:
+			_cache = None
+			_cache_dirty = False
 		return not os.path.exists(path)
 	except Exception:
 		return False
