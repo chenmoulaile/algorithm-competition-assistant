@@ -745,9 +745,13 @@ def main():
         check('the detail compares this run with the previous one',
               '300ms' in fact_text and '1200ms' in fact_text and '4.00x' in fact_text,
               [l for l in fact_text.split('\n')[:6]])
-        check('the detail says how much of the input this is (lines and bytes)',
-              '3' in fact_text and 'bytes' in fact_text.lower() or '字节' in fact_text,
-              fact_text.split('\n')[8:10])
+        _fact_text, _fact_blocks = cmd.build_detail(0, fact_test, [])
+        _metas = dict((b['id'], b['meta']) for b in _fact_blocks)
+        _size_meta = _metas.get('expected') or _metas.get('input') or ''
+        check('the size of a section is on its card (lines and bytes)',
+              '3' in _size_meta
+              and ('bytes' in _size_meta.lower() or u'\u5b57\u8282' in _size_meta),
+              _size_meta)
         check('marks name the diff lines by side, not the whole body',
               sum(1 for _l, k in marks if k == 'want') >= 1
               and sum(1 for _l, k in marks if k == 'got') >= 1,
@@ -1065,6 +1069,70 @@ def main():
           [b['id'] for b in card_blocks]
           == ['input', 'expected', 'actual', 'diff', 'stderr', 'message'],
           str([b['id'] for b in card_blocks]))
+    # v3.0.4: the body used to spell each section title out a second time
+    # ("[Input]", "[Expected Output]" ...) right under the card that already
+    # says it, and the page opened with a "Test 2 | WA | 51ms" line that the
+    # badge bar above it already showed. The page is the cards and their
+    # bodies now.
+    check('the body no longer repeats the section titles',
+          not any(line.startswith('[') for line in card_text.split('\n')),
+          [line for line in card_text.split('\n') if line.startswith('[')][:3])
+    check('the body no longer repeats the verdict header',
+          card_text.startswith('\n')
+          and '====' not in card_text.split('\n')[0],
+          repr(card_text[:40]))
+    # The first card hangs from the one empty line the page opens with; the
+    # rest hang from the line before their block, because minihtml draws a
+    # block phantom BELOW the line its region points at.
+    check('each card hangs from the line before its block',
+          card_blocks[0]['start'] == 1
+          and all(b['start'] >= 1 for b in card_blocks),
+          str([(b['id'], b['start']) for b in card_blocks]))
+    _kinds = dict((b['id'], b.get('kind')) for b in card_blocks)
+    check('the expected card is green and the differing actual card is red',
+          _kinds.get('expected') == 'test-accept'
+          and _kinds.get('actual') == 'test-decline'
+          and _kinds.get('diff') == 'test-decline'
+          and _kinds.get('input') == '',
+          str(_kinds))
+    _same_test = _DetailTest()
+    _same_test.test_string = '1 2'
+    _same_test.expected_output = '3'
+    _same_test.stdout = '3'
+    _same_text, _same_blocks = cmd.build_detail(0, _same_test, [])
+    _same_kinds = dict((b['id'], b.get('kind')) for b in _same_blocks)
+    check('a matching actual output is green, like the expected one',
+          _same_kinds.get('actual') == 'test-accept'
+          and _same_kinds.get('diff') == 'test-accept',
+          str(_same_kinds))
+
+    # A section body is a whole output, newlines and all. `start`/`count` and
+    # every mark row are PHYSICAL line numbers - the view, the fold and
+    # _install_blocks all count physical lines. Counting list entries instead
+    # (the body appended as one entry) made folding erase the wrong span and
+    # the diff colours land one line off on every real test: that is the
+    # "clicking fold misaligns everything" report.
+    _multi = _DetailTest()
+    _multi.test_string = '5\n1 2 3 4 5\n'
+    _multi.expected_output = '15\n'
+    _multi.stdout = '14\n'
+    _m_marks = []
+    _m_text, _m_blocks = cmd.build_detail(0, _multi, _m_marks)
+    _m_lines = _m_text.split('\n')
+    _in = [b for b in _m_blocks if b['id'] == 'input'][0]
+    check('a multi-line body counts physical lines, not entries',
+          _m_lines[_in['start']:_in['start'] + _in['count']]
+          == ['5', '1 2 3 4 5', ''],
+          str(_m_lines[_in['start']:_in['start'] + _in['count']]))
+    _want_rows = [r for r, k in _m_marks if k == 'want']
+    _got_rows = [r for r, k in _m_marks if k == 'got']
+    check('the diff marks land on the -/+ lines of a real output',
+          _want_rows and _got_rows
+          and _m_lines[_want_rows[0]].startswith('- ')
+          and _m_lines[_got_rows[0]].startswith('+ '),
+          'want %r -> %r' % (_want_rows,
+                             [_m_lines[r] for r in _want_rows[:1]]))
+
     check('blocks tile the document without gaps or overlaps',
           all(b2['start'] >= b1['start'] + b1['count']
               for b1, b2 in zip(card_blocks, card_blocks[1:]))
@@ -1207,6 +1275,28 @@ def main():
     check('the detail card only uses classes the run card already has',
           _class_tokens(_dcard_tpl) <= _class_tokens(_run_card_tpl),
           str(sorted(_class_tokens(_dcard_tpl) - _class_tokens(_run_card_tpl))))
+    # v3.0.4: the cards were flat grey. They take the run card's colours now -
+    # the identity chip carries the section's verdict tint, fold is the blue
+    # "run" action, copy the purple "detail" one - and the labels sit on their
+    # own line inside the anchor, which is what gives the run card's chips
+    # their inner spacing (minihtml collapses that whitespace to the leading
+    # and trailing space the -run chips have).
+    check('the fold chip is the run card\u0027s blue action chip',
+          'class="config config-run"' in _dcard_tpl)
+    check('the copy chip is the run card\u0027s purple chip',
+          'class="config config-detail"' in _dcard_tpl)
+    check('the identity chip carries the section tint',
+          'class="test {test_type}"' in _dcard_tpl)
+    # Every label sits on its own line inside the anchor AND is wrapped in a
+    # span: the whitespace is what gives the run card's chips their inner
+    # spacing, and the span is what keeps minihtml from drawing bare anchor
+    # text in the default (larger, proportional) UI font - the detail cards
+    # came out nearly twice the height of a run card without it.
+    check('every chip keeps the run card\u0027s inner spacing',
+          'href="{fold_href}">\n\t\t<span>{title}</span>\n\t</a>' in _dcard_tpl
+          and 'href="{fold_href}">\n\t\t<span>{fold_label}</span>\n\t</a>' in _dcard_tpl
+          and 'href="{copy_href}">\n\t\t<span>{copy_label}</span>\n\t</a>' in _dcard_tpl,
+          _dcard_tpl[:200])
     check('the detail card is one .panel row of chips',
           _card_html.count('class="panel"') == 1
           and _card_html.count('<a class="') == 4,
@@ -1221,10 +1311,9 @@ def main():
           'display: none;' in _msg_card and 'runtime-info' in _msg_card,
           _msg_card[:240])
     check('a block with no payload hides the copy chip',
-          _diff_card.count('display: none;') == 2
-          and _msg_card.count('display: none;') == 1,
-          'diff=%d msg=%d' % (_diff_card.count('display: none;'),
-                              _msg_card.count('display: none;')))
+          'config config-detail" style="display: none;"' in _diff_card
+          and 'config config-detail" style="display: none;"' not in _msg_card,
+          _diff_card[:240])
     check('the filled buffer is the exact plain text',
           _cv.text == card_text)
     _cc.run(None, action='fold', block='input')
@@ -1239,6 +1328,27 @@ def main():
     _cc.run(None, action='fold', block='input')
     check('unfolding writes them back byte for byte',
           _cv.text == card_text)
+    _m_view = _CardView()
+    _mc = tm.CphTestDetailViewCommand.__new__(tm.CphTestDetailViewCommand)
+    _mc.view = _m_view
+    _mc.phantoms = _StrictPhantomSet()
+    _mc._copy_payload = ('', '')
+    _mc._blocks = []
+    _mc._order = []
+    _mc._marks_full = []
+    _mc._folded = set()
+    _mc._header_html = None
+    _mc._jump_spec = None
+    _mc.run(None, text=_m_text, marks=_m_marks, blocks=_m_blocks,
+            header='<div class="panel">h</div>')
+    _in_text = [b for b in _mc._blocks if b['id'] == 'input'][0]['text']
+    _mc.run(None, action='fold', block='input')
+    check('folding a multi-line body erases exactly its lines',
+          _m_view.text == _m_text.replace(_in_text, '', 1),
+          '%r' % (_m_view.text.split('\n')[3:9],))
+    _mc.run(None, action='fold', block='input')
+    check('unfolding a multi-line body restores it byte for byte',
+          _m_view.text == _m_text)
     _cc.run(None, action='fold', block='diff')
     check('folding the diff drops its colour',
           'cph-detail-want' not in _cv.regions
@@ -1259,7 +1369,8 @@ def main():
     _cc.run(None, action='fold', block='input')
     _anchors = [p.region.a for p in _cc.phantoms.updates[-1][1:]]
     check('cards re-anchor after folds shift the text',
-          _anchors == [_cc._block_point(b['idx']) for b in _cc._blocks],
+          _anchors == [max(0, _cc._block_point(b['idx']) - 1)
+                       for b in _cc._blocks],
           'anchors %r' % _anchors)
     # unfold 'expected' so the refresh check below has exactly two folds left
     _cc.run(None, action='fold', block='expected')

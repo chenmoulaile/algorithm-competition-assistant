@@ -2341,28 +2341,29 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
         the file-IO line stay static (always visible, no card): each is one
         line that never needs hiding.
 		"""
-		verdict_short = test.verdict['name'] if test.verdict else 'UKE'
-		runtime_str = test.get_nice_runtime().replace('&nbsp;', ' ').strip()
-		# Values carry their own unit; the optional "time:" / "mem:" prefix
-		# follows the show_time_mem_labels setting (plain text here, no NBSP).
-		labels_on = bool(get_settings().get('show_time_mem_labels', False))
-		if labels_on:
-			runtime_str = t('time') + ': ' + runtime_str
-		header = '%s %d  |  %s  |  %s' % (t('test_label').capitalize(), i + 1,
-			verdict_short, runtime_str)
-		if test.memory not in ('-', None):
-			memory_str = test.get_nice_memory().replace('&nbsp;', ' ')
-			if labels_on:
-				memory_str = t('memory') + ': ' + memory_str
-			header += '  |  %s' % memory_str
-		lines = [header, '=' * max(len(header), 40), '']
+		# The page opens with ONE empty line. It is the line the first card
+		# hangs from (a LAYOUT_BLOCK phantom is drawn BELOW the line its
+		# region points at - see _card_phantom), and it replaces the text
+		# header that used to repeat "Test 2 | WA | 51ms" directly under the
+		# badge bar. Every section title the body used to spell out
+		# ("[Input]", "[Expected Output]" ...) is on its card instead: the
+		# same words twice on one page read as a rendering bug.
+		lines = ['']
 		blocks = []
 
-		def begin_block(bid, title, meta='', copy=None):
+		def begin_block(bid, title, meta='', copy=None, kind=''):
 			rec = {'id': bid, 'title': title, 'meta': meta, 'copy': copy,
-			       'start': len(lines), 'count': 0}
+			       'kind': kind, 'start': len(lines), 'count': 0}
 			blocks.append(rec)
 			return rec
+
+		def add_body(text):
+			# One entry per PHYSICAL line. A section body is a whole output,
+			# newlines and all: appending it as one entry made `start` and
+			# `count` count entries while the view, the fold and every mark
+			# row count physical lines - so folding erased the wrong span and
+			# the diff colours landed one line off on any real test.
+			lines.extend((text or '').split('\n'))
 
 		def end_block(rec):
 			rec['count'] = len(lines) - rec['start']
@@ -2434,10 +2435,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			test_input.count('\n') + 1 if test_input else 0, t('detail_lines'),
 			in_bytes, t('detail_bytes'))
 		rec = begin_block('input', t('input'), in_meta, test.test_string or '')
-		lines.append('[%s] (%s)' % (t('input'), in_meta))
-		if marks is not None:
-			marks.append((len(lines) - 1, 'head'))
-		lines.append(test_input if test_input.strip() else t('detail_empty'))
+		add_body(test_input if test_input.strip() else t('detail_empty'))
 		lines.append('')
 		end_block(rec)
 
@@ -2452,12 +2450,10 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		exp_meta = '%d %s / %d %s' % (
 			expected.count('\n') + 1 if expected else 0, t('detail_lines'),
 			len((expected or '').encode('utf-8')), t('detail_bytes'))
+		same = outputs_equal(expected, stdout)
 		rec = begin_block('expected', t('expected_output'), exp_meta,
-			self.detail_expected(test))
-		lines.append('[%s]' % t('expected_output'))
-		if marks is not None:
-			marks.append((len(lines) - 1, 'head'))
-		lines.append(expected.rstrip('\n') if expected.strip() else t('detail_empty'))
+			self.detail_expected(test), kind='test-accept')
+		add_body(expected.rstrip('\n') if expected.strip() else t('detail_empty'))
 		lines.append('')
 		end_block(rec)
 
@@ -2465,11 +2461,9 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			stdout.count('\n') + 1 if stdout else 0, t('detail_lines'),
 			len((test.stdout or '').encode('utf-8')), t('detail_bytes'))
 		rec = begin_block('actual', t('actual_output'), out_meta,
-			getattr(test, 'stdout', '') or '')
-		lines.append('[%s] (%s)' % (t('actual_output'), out_meta))
-		if marks is not None:
-			marks.append((len(lines) - 1, 'head'))
-		lines.append(stdout.rstrip('\n') if stdout.strip() else t('detail_empty'))
+			getattr(test, 'stdout', '') or '',
+			kind=('test-accept' if same else 'test-decline'))
+		add_body(stdout.rstrip('\n') if stdout.strip() else t('detail_empty'))
 		lines.append('')
 		end_block(rec)
 
@@ -2496,10 +2490,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					lines.append('')
 					break
 
-		rec = begin_block('diff', t('diff'))
-		lines.append('[%s] (%s)' % (t('diff'), t('diff_ignore_trailing')))
-		if marks is not None:
-			marks.append((len(lines) - 1, 'head'))
+		rec = begin_block('diff', t('diff'), t('diff_ignore_trailing'),
+			kind=('test-accept' if same else 'test-decline'))
 		if not expected.strip():
 			lines.append(t('diff_no_expected'))
 		else:
@@ -2537,21 +2529,15 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 		if test.stderr and test.stderr.strip():
 			rec = begin_block('stderr', t('error_output'), '',
-				getattr(test, 'stderr', '') or '')
-			lines.append('[%s]' % t('error_output'))
-			if marks is not None:
-				marks.append((len(lines) - 1, 'head'))
-			lines.append(self._clean_output(test.stderr).rstrip('\n'))
+				getattr(test, 'stderr', '') or '', kind='test-decline')
+			add_body(self._clean_output(test.stderr).rstrip('\n'))
 			lines.append('')
 			end_block(rec)
 
 		if test.message:
 			rec = begin_block('message', t('message'), '',
 				getattr(test, 'message', '') or '')
-			lines.append('[%s]' % t('message'))
-			if marks is not None:
-				marks.append((len(lines) - 1, 'head'))
-			lines.append(test.message)
+			add_body(test.message)
 			lines.append('')
 			end_block(rec)
 
@@ -2766,20 +2752,24 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		# between the number and its unit (get_nice_memory's own comment)
 		runtime_str = esc(_label_prefixed(
 			test.get_nice_runtime().replace('&nbsp;', '\u00a0').strip(), 'time'))
+		# minihtml does not implement margin-left: a bar built out of margins
+		# rendered as "WA test 251ms", with the runtime glued to the test
+		# number. The gaps are explicit non-breaking spaces now.
+		gap = '&nbsp;&nbsp;'
 		parts = ['<span class="verdict-badge verdict-%s">%s</span>' % (esc(name), esc(name)),
-		         '<span style="margin-left: 6px;">%s %d</span>' % (esc(t('test_label')), i + 1),
-		         '<span class="runtime-info" style="margin-left: 8px;">%s</span>' % runtime_str]
+		         '<span>%s %d</span>' % (esc(t('test_label')), i + 1),
+		         '<span class="runtime-info">%s</span>' % runtime_str]
 		if test.memory not in ('-', None):
-			parts.append('<span class="memory-info" style="margin-left: 8px;">%s</span>'
+			parts.append('<span class="memory-info">%s</span>'
 			             % esc(_label_prefixed(
 			                 test.get_nice_memory().replace('&nbsp;', '\u00a0').strip(),
 			                 'memory')))
-		parts.append('<a class="config" href="detail-copy-expected" style="margin-left: 12px;">%s</a>'
+		parts.append('<a class="config" href="detail-copy-expected">%s</a>'
 		             % esc(t('detail_copy_expected')))
-		parts.append('<a class="config" href="detail-copy-actual" style="margin-left: 8px;">%s</a>'
+		parts.append('<a class="config" href="detail-copy-actual">%s</a>'
 		             % esc(t('detail_copy_actual')))
-		parts.append('<a class="config" href="detail-close" style="margin-left: 12px; color: var(--redish);">&#10005;</a>')
-		return '<div class="panel">' + ' '.join(parts) + '</div>'
+		parts.append('<a class="config" href="detail-close" style="color: var(--redish);">&#10005;</a>')
+		return '<div class="panel">' + gap.join(parts) + '</div>'
 
 	def show_test_detail_phantom(self, i):
 		"""Original inline minihtml detail panel (detail_style = 'phantom')."""
@@ -4722,9 +4712,16 @@ class CphTestDetailViewCommand(sublime_plugin.TextCommand):
 		inline chips: an identity chip (.test), the action chips (.config), then
 		the measured value inside a .config chip. This card is the same row -
 		identity, fold, copy, and the "N lines / M bytes" value in a .config
-		chip - so the two surfaces read as one design. No arrow: the fold state
-		is already spelled out by the fold/unfold chip, and a triangle glyph in
-		a proportional font was the one element the run card never had.
+		chip - with the same colours the run card uses: the identity chip takes
+		the section's verdict tint (expected green, actual/stderr/diff red when
+		they disagree), fold is the blue "run" action and copy the purple
+		"detail" one. No arrow: the fold state is spelled out by the chip.
+
+		The anchor is the character BEFORE the block's first line, not its
+		first character: Sublime draws a LAYOUT_BLOCK phantom BELOW the line
+		its region points at, so anchoring on the first line put every card one
+		line too low - and once the block was folded, the card drifted onto the
+		previous section, which is the misalignment that was reported.
 		"""
 		v = self.view
 		folded = one['id'] in self._folded
@@ -4734,6 +4731,7 @@ class CphTestDetailViewCommand(sublime_plugin.TextCommand):
 		meta = esc(one['meta'] or '').replace(' ', '&nbsp;')
 		content = template.format(
 			title=esc(one['title'] or one['id']),
+			test_type=one.get('kind') or '',
 			meta=meta,
 			meta_display='inline' if one['meta'] else 'none',
 			fold_label=(t('detail_unfold') if folded else t('detail_fold')),
@@ -4747,7 +4745,7 @@ class CphTestDetailViewCommand(sublime_plugin.TextCommand):
 		def onclick(event, cmd=self):
 			return cmd.on_card_event(event)
 
-		return Phantom(Region(self._block_point(one['idx'])), content,
+		return Phantom(Region(max(0, self._block_point(one['idx']) - 1)), content,
 		               sublime.LAYOUT_BLOCK, onclick)
 
 	def on_card_event(self, event):

@@ -1,0 +1,44 @@
+Algorithm Competition Assistant 3.0.4
+=====================================
+
+The detail page's cards are finished: they look like the run panel's cards,
+they carry the run panel's colours, and folding no longer moves them.
+
+Folding was erasing the wrong lines
+
+* The detail page counted its lines in list ENTRIES, but a section body is a
+  whole output with newlines in it - one entry, several physical lines. Every
+  block's start/count, and every diff mark row, is a physical line number, so
+  on any real test the block spans were off by however many newlines the body
+  contained: folding erased the wrong lines and the green/red diff bands
+  landed one line above the lines they described. Both are physical lines now
+  (tests: a multi-line body counts physical lines, folds exactly its lines,
+  and unfolds byte for byte).
+* A card hangs from the line BEFORE its block: minihtml draws a block phantom
+  below the line its region points at, so anchoring on the block's first line
+  put every card one line too low - and once the block was folded the card
+  drifted onto the previous section. That is the misalignment that was
+  reported.
+
+The cards take the run panel's colours and spacing
+
+* The identity chip carries the section's tint - expected output green (the AC
+  colour), actual output and the diff red when they disagree, green when they
+  match, stderr red. `fold` is the run card's blue `run` chip and `copy` its
+  purple `detail` chip, so a detail page and a run panel read as one design.
+* Every label sits on its own line inside its anchor AND inside a `<span>`.
+  The whitespace is what gives the run card's chips their inner padding; the
+  span is what keeps minihtml from drawing bare anchor text in the default
+  (larger, proportional) UI font, which made the first cut of the cards nearly
+  twice the height of a run card.
+
+The body stops repeating what the cards already say
+
+* `[Input]`, `[Expected Output]`, `[Actual Output]`, `[Diff]`, `[Message]`,
+  `[Error Output]` are gone from the body - the card above each section says
+  it. The page also no longer opens with "Test 2 | WA | 51ms": the badge bar
+  above it already carries the verdict, the test number and the timings.
+* The "line-by-line, ignoring trailing spaces" note moved into the Diff card's
+  size chip, and the section sizes (lines/bytes) count lines properly now.
+
+Regression suite: 997 -> 1001 checks.

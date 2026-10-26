@@ -1,9 +1,15 @@
 <div class="panel">
-	<a class="test" href="{fold_href}">{title}</a>
+	<a class="test {test_type}" href="{fold_href}">
+		<span>{title}</span>
+	</a>
 
-	<a class="config" href="{fold_href}">{fold_label}</a>
+	<a class="config config-run" href="{fold_href}">
+		<span>{fold_label}</span>
+	</a>
 
-	<a class="config" style="display: {copy_display};" href="{copy_href}">{copy_label}</a>
+	<a class="config config-detail" style="display: {copy_display};" href="{copy_href}">
+		<span>{copy_label}</span>
+	</a>
 
 	<a class="config" style="display: {meta_display};">
 		<i class="runtime-info" style="padding: 1px 5px; position: relative; font-style: normal">{meta}</i>
