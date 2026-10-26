@@ -826,3 +826,25 @@ entry in `wbond/package_control_channel` should be updated to the new one.
   → SIGKILL) and on Windows (`taskkill /F /T`).
 - `Modules/` must stay inside the package: `test_edit.py` and `test_manager.py`
   import `ProcessManager` from it.
+
+## Releasing so Package Control actually sees it
+
+Package Control's version for this package comes from **git tags**, not from
+the default branch, not from GitHub Releases and not from the `tests` workflow.
+packagecontrol.io crawls the repo, turns each version-like tag into a channel
+release and publishes `channel_v3.json`; every Sublime then upgrades from that
+file. A version that is committed but never tagged is invisible: v3.0.0 ..
+v3.0.3 shipped as plain commits on `main` and every user stayed on 2.9.2 until
+v3.0.4 was tagged.
+
+So a release is three steps, in this order:
+
+1. bump `VERSION` in `plugin_init.py`, add the `messages/<version>.txt` file and
+   the `messages.json` entry (the `check_messages` job fails otherwise);
+2. `git push` the commit;
+3. `git tag vX.Y.Z <sha> && git push origin vX.Y.Z` (or `gh release create`,
+   which creates the tag). The tag name must parse as a version: `v3.0.4`.
+
+Then packagecontrol.io needs one crawl before the channel lists it (the package
+page shows "Last Seen" - that is the last crawl), and after that a user runs
+*Package Control: Upgrade Package*.
