@@ -22,7 +22,8 @@ from .core.cph_settings import get_settings
 from .core.cph_stats import (record_run, reset as stats_reset,
 							 summary_localized as stats_summary_localized)
 from .core.cph_tests_merge import merge_tests
-from .core.cph_settings import load_all_tests, save_tests, notify_io_error
+from .core.cph_settings import (load_all_tests, save_tests, notify_io_error,
+								tests_lock)
 
 
 def _settings():
@@ -57,8 +58,10 @@ def _add_samples_to(view, pairs):
 		return 0
 	entries = [{'test': inp, 'correct_answers': [out] if out.strip() else []}
 			   for inp, out in pairs]
-	merged, _conflicts = merge_tests(load_all_tests(file_name), entries)
-	if not save_tests(file_name, merged):
+	with tests_lock():
+		merged, _conflicts = merge_tests(load_all_tests(file_name), entries)
+		saved = save_tests(file_name, merged)
+	if not saved:
 		# 'save' as the whole error told the user nothing about a sample set
 		# that is not on disk. Name the file and the reason.
 		notify_io_error(file_name)

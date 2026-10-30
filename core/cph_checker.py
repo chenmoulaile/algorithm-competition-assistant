@@ -40,6 +40,36 @@ DEFAULT_COMPILE_CMD = 'g++ -O2 -std=c++17 -I "{checker_dir}" "{checker}" -o "{ch
 
 #: checker path -> (mtime, exe_path) so a checker is built once per session
 _compiled = {}
+#: checker path -> (mtime, error). A failed build is remembered for the same
+#: source mtime so a broken checker does not retry (and block the UI) on every
+#: single test; editing the source changes the mtime and clears it.
+_failed = {}
+
+#: A checker build is a compiler invocation like any other: the main compile
+#: path bounds it at 30s, so this one must not be able to hang the caller
+#: (which used to be the UI thread) forever.
+_COMPILE_TIMEOUT = 30
+
+
+def _source_newer(source, binary):
+	"""True when `source` was edited after `binary` was built.
+
+	A generated `<checker>.exe` that already exists must not shadow the
+	mtime cache: without this check, fixing a checker's rule never rebuilt
+	it and every later verdict silently used the old binary.
+
+	A missing source is not "newer": the pre-built exe is all that is left,
+	and refusing it turned a working checker into checker_missing.
+	"""
+	try:
+		source_mtime = os.path.getmtime(source)
+	except Exception:
+		return False
+	try:
+		binary_mtime = os.path.getmtime(binary)
+	except Exception:
+		return True
+	return source_mtime > binary_mtime
 
 
 def config(run_settings, file, settings=None):
@@ -126,7 +156,7 @@ def executable(cfg):
 	exe = cfg['path'] + '.exe'
 	if _is_binary(cfg['path']):
 		return cfg['path'], ''
-	if _is_binary(exe):
+	if _is_binary(exe) and not _source_newer(cfg['path'], exe):
 		return exe, ''
 
 	try:
@@ -135,11 +165,16 @@ def executable(cfg):
 	except Exception as e:
 		return None, t('checker_missing', path=cfg['path'], error=str(e))
 
+	failed = _failed.get(key)
+	if failed and failed[0] == mtime:
+		return None, failed[1]
+
 	cached = _compiled.get(key)
 	if cached and cached[0] == mtime and os.path.isfile(cached[1]):
 		return cached[1], ''
 
 	cmd = _expand(cfg['compile_cmd'], cfg)
+	proc = None
 	try:
 		startupinfo = None
 		startupinfo = hidden_startupinfo()
@@ -147,13 +182,25 @@ def executable(cfg):
 								stdout=subprocess.PIPE,
 								stderr=subprocess.STDOUT,
 								cwd=cfg['dir'], startupinfo=startupinfo)
-		out = proc.communicate()[0]
+		out = proc.communicate(timeout=_COMPILE_TIMEOUT)[0]
+	except subprocess.TimeoutExpired:
+		_reap(proc)
+		msg = t('checker_compile_failed', cmd=cmd,
+				error='timed out after %ss' % _COMPILE_TIMEOUT)
+		_failed[key] = (mtime, msg)
+		return None, msg
 	except Exception as e:
-		return None, t('checker_compile_failed', cmd=cmd, error=str(e))
+		_reap(proc)
+		msg = t('checker_compile_failed', cmd=cmd, error=str(e))
+		_failed[key] = (mtime, msg)
+		return None, msg
 
 	text = decode_output(out)
 	if proc.returncode != 0:
-		return None, t('checker_compile_failed', cmd=cmd, error=text[-800:])
+		msg = t('checker_compile_failed', cmd=cmd, error=text[-800:])
+		_failed[key] = (mtime, msg)
+		return None, msg
+	_failed.pop(key, None)
 	_compiled[key] = (mtime, exe)
 	return exe, ''
 

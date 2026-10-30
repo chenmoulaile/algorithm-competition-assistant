@@ -5,6 +5,71 @@
 
 ---
 
+# v3.0.7
+
+**一次主链路正确性与可靠性修复：并行批次可以被停止，第一个失败真的会停，多答案全部参与判题，checker 不再冻结编辑器**
+
+## 修复
+
+- **并行 / 交互评测不可停止、可重复启动、旧结果覆盖新面板**。`Ctrl+Alt+Shift+P`
+  与交互题原来不设置 `proc_run` / RUNNING，Stop、Ctrl+X、关闭面板都碰不到那批
+  worker；批次结束时又直接写当前 `tester`，面板重建后旧结果会覆盖新测试点（数量
+  不同还会 IndexError）。现在批次有独立的取消 Event 与 epoch：运行期间显示 RUNNING，
+  每个 `ProcessManager` 和 interactor 都登记可终止，关闭面板 / Ctrl+X 立即停止；
+  旧批次的完成回调与进度更新按 epoch 丢弃。
+- **`stop_on_first_failure` 对 WA / PE 不生效**。续跑条件用的是 `rtcode == '0'`，
+  而 WA / PE / OLE 的正常退出码就是 0，默认设置下第一个点错了仍会跑完全部。
+  现在按 verdict 判断：失败即停；纯输入（UKE）样例仍会全部运行，手动停止不会
+  自动链到下一个点。
+- **多答案判题只取集合里任意一个**。`accept` 是往 `correct_answers` 里追加，但
+  串行 / 并行 / benchmark / 详情 / 答案编辑都只取 `next(iter(...))`——用户明确接受过
+  的输出可能被判 WA，取哪个还会随解释器哈希种子变化。现在判题接受任意一个已存答案，
+  详情页显示 / 复制实际匹配的那一个；从答案编辑页原样保存不会再丢掉其它答案
+  （从输入页保存也保留了这一状态）。
+- **checker / interactor 的编译与 SPJ 判定跑在主线程且编译无超时**。第一次带
+  checker 运行时 g++ 在 `post_to_ui` 回调里编译，慢 checker 每个测试点最多阻塞
+  UI 10 秒，卡住的编译则永远不返回。现在两者在编译 worker 上预编译、SPJ 在
+  pump 线程判定，编译统一 30 秒上限；失败结果按源码 mtime 缓存，避免反复重试。
+- **已有 `.exe` 时 checker / interactor 永不重建**。`_is_binary(exe)` 的判断在
+  mtime 缓存之前，第一次编译成功后修改 checker 源码不会生效，判定静默沿用旧
+  二进制。现在源码比 `.exe` 新就重编译；源码已删除但二进制还在时仍按原行为使用。
+- **编译缓存命中但产物已被删除**。缓存只比源码/命令指纹，不检查二进制是否还在；
+  删掉 `.exe`（`git clean`、杀软、手动清理）后每次 Run 都打印 "compile skipped"，
+  Popen 失败且面板停在 RUNNING。现在缓存命中还要求 `-o` 产物（javac 为 `.class`）
+  存在；真正的启动失败会以一条可读的 RE 消息结束本次运行，不再卡住。
+- **DIP 与设备像素混用导致高 DPI 下面板反而留白**。宽度估算只把 CJK 宽度和
+  padding 乘了 `scale_factor()`，而 `em_width()`、`viewport_extent()` 与
+  `set_layout()` 都是 DIP；125%–200% 缩放下估算偏大，面板收不回去。现在整条
+  估算链路使用 DIP；时间/内存标签改用真实 NBSP，不再被当成 6 个 ASCII 字符。
+- **测试数据写入非原子且跨模块无锁**。面板、Companion、导入、对拍会同时写同一批
+  `__tests` 文件；`open(path, 'w')` 截断后写入，崩溃或并发读会看到半截 JSON，
+  下一次保存还可能用不完整的数据覆盖。现在所有 load+merge+save 共用一把可重入锁，
+  每个文件先写临时文件再 `os.replace`，任一副本写入失败都会如实报告。
+- **详情页把 checker / 浮点容差 AC 画成红色 diff**。Actual/Diff 的颜色只看
+  tolerance=0 的文本比较，SPJ 接受的合法输出会显示绿色 AC 徽章 + 红色差异；
+  没有期望答案的空输出又会显示绿色"全部一致"。现在颜色跟随 verdict；文本不同
+  但已接受时显示一行说明而不是红绿 diff。
+- **对拍输出缓冲无上限**。对拍路径没有 `max_output_bytes` 那样的上限，跑飞的
+  generator / 选手程序可在时限内把插件宿主内存吃光。现在每个流按
+  `max_output_bytes`（设为 0 时 64 MB）截断并停止该轮，避免把截断误报成差异。
+- **对拍 Stop 可能在已回收的 PID 上执行 `taskkill`**：补上 `proc.poll()` 检查，
+  与 ProcessManager 的同一保护一致。
+- **交互题收尾**：先 kill 再 join 泵线程，读取 testlib 最后一条 `quitf` 消息不会
+  再丢；interactor 注册进 live 进程表并在超时后 `_reap`，Windows 上不再留下
+  `cph-interactor-*` 临时目录。
+- **详情 tab 只按文件名区分**：两个运行面板（或两个同名 `main.cpp`）会复用/关闭
+  对方的详情页。现在 tab 在 settings 里记录所属源文件，查找与 stale-close 都按它匹配。
+
+## 说明
+
+- 回归测试：1011 -> 1044 项。新增的检查覆盖：WA 续跑规则、多答案 AC、取消/epoch、
+  checker 预编译与超时、mtime 重建、缺失产物缓存、DIP 估算、原子写入与临时文件、
+  对拍截断、详情 tab 归属。
+- 没有新增设置项；对拍截断复用 `max_output_bytes`（0 = 64 MB 上限）。
+- Package Control 仍按 tag 发布：本版 tag 为 `v3.0.7`。
+
+---
+
 # v3.0.6
 
 **详情页收掉两行没人看的东西：顶部徽章卡片独占第一行，"本次运行"整块删除，每张卡片少一颗按钮**

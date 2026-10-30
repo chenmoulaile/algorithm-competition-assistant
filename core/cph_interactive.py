@@ -24,11 +24,34 @@ import tempfile
 import threading
 import time
 
-from .cph_checker import EXIT_CODES, decode_output, hidden_startupinfo
+from .cph_checker import (EXIT_CODES, decode_output, hidden_startupinfo,
+						  _reap)
 from .cph_i18n import t
+from .cph_state import register_live, unregister_live
 
-#: interactor 路径 -> (mtime, exe) 只编译一次
+#: interactor 路径 -> (mtime, exe)
 _compiled = {}
+#: path -> (mtime, error): a failed build is not retried for the same source
+#: mtime, so a broken interactor cannot freeze every run with a compile.
+_failed = {}
+_COMPILE_TIMEOUT = 30
+
+
+def _source_newer(source, binary):
+	"""True when the interactor source was edited after its binary.
+
+	A missing source is not "newer" (the pre-built binary is all that is
+	left); an unreadable binary is, so a normal rebuild is attempted.
+	"""
+	try:
+		source_mtime = os.path.getmtime(source)
+	except Exception:
+		return False
+	try:
+		binary_mtime = os.path.getmtime(binary)
+	except Exception:
+		return True
+	return source_mtime > binary_mtime
 
 DEFAULT_COMPILE_CMD = 'g++ -O2 -std=c++17 -I "{interactor_dir}" "{interactor}" -o "{interactor}.exe"'
 
@@ -107,7 +130,7 @@ def executable(cfg):
 	exe = cfg['path'] + '.exe'
 	if _is_binary(cfg['path']):
 		return cfg['path'], ''
-	if _is_binary(exe):
+	if _is_binary(exe) and not _source_newer(cfg['path'], exe):
 		return exe, ''
 
 	try:
@@ -116,24 +139,41 @@ def executable(cfg):
 	except Exception as e:
 		return None, t('interactor_missing', path=cfg['path'], error=str(e))
 
+	failed = _failed.get(key)
+	if failed and failed[0] == mtime:
+		return None, failed[1]
+
 	cached = _compiled.get(key)
 	if cached and cached[0] == mtime and os.path.isfile(cached[1]):
 		return cached[1], ''
 
 	cmd = _expand(cfg['compile_cmd'], cfg)
+	proc = None
 	try:
 		proc = subprocess.Popen(cmd, shell=True, stdin=None,
 								stdout=subprocess.PIPE,
 								stderr=subprocess.STDOUT,
 								cwd=cfg['dir'],
 								startupinfo=hidden_startupinfo())
-		out = proc.communicate()[0]
+		out = proc.communicate(timeout=_COMPILE_TIMEOUT)[0]
+	except subprocess.TimeoutExpired:
+		_reap(proc)
+		msg = t('interactor_compile_failed', cmd=cmd,
+				error='timed out after %ss' % _COMPILE_TIMEOUT)
+		_failed[key] = (mtime, msg)
+		return None, msg
 	except Exception as e:
-		return None, t('interactor_compile_failed', cmd=cmd, error=str(e))
+		_reap(proc)
+		msg = t('interactor_compile_failed', cmd=cmd, error=str(e))
+		_failed[key] = (mtime, msg)
+		return None, msg
 
 	if proc.returncode != 0:
-		return None, t('interactor_compile_failed', cmd=cmd,
-					   error=decode_output(out)[-800:])
+		msg = t('interactor_compile_failed', cmd=cmd,
+				error=decode_output(out)[-800:])
+		_failed[key] = (mtime, msg)
+		return None, msg
+	_failed.pop(key, None)
 	_compiled[key] = (mtime, exe)
 	return exe, ''
 
@@ -144,12 +184,17 @@ def _write(path, text):
 
 
 def run_case(make_solution, exe, input_text, answer_text, time_limit_ms,
-			 cwd=None):
+			 cwd=None, cancel=None, register_kill=None):
 	"""Run one interaction and return a result dict.
 
 	Same shape as cph_parallel._run_one so the panel code can be shared:
 	{'rtcode','stdout','stderr','runtime','memory','verdict','crash','error',
 	 'message','interactor_output'}
+
+	`cancel` is the run panel's threading.Event and `register_kill` receives
+	callables that terminate this dialogue's two processes, so closing the
+	panel / Ctrl+X can stop an interactive batch (the pool itself only knows
+	about the per-case runner, not the processes it creates).
 	"""
 	from .cph_verdict import get_verdict, looks_like_crash
 
@@ -169,6 +214,7 @@ def run_case(make_solution, exe, input_text, answer_text, time_limit_ms,
 
 	solution = None
 	interactor = None
+	live_key = None
 	stop = threading.Event()
 	collected = {'solution': [], 'interactor': [], 'interactor_err': []}
 
@@ -177,6 +223,8 @@ def run_case(make_solution, exe, input_text, answer_text, time_limit_ms,
 		solution.set_separate_stderr(True)
 		if time_limit_ms:
 			solution.set_time_limit(time_limit_ms)
+		if register_kill is not None:
+			register_kill(solution.terminate)
 
 		prefix = list(exe) if isinstance(exe, list) else [exe]
 		# cwd must come from the config: with a command-style interactor
@@ -189,6 +237,14 @@ def run_case(make_solution, exe, input_text, answer_text, time_limit_ms,
 			stdin=subprocess.PIPE, stdout=subprocess.PIPE,
 			stderr=subprocess.PIPE, cwd=cwd,
 			startupinfo=hidden_startupinfo())
+		# The pool tracks the solution manager, but the interactor is a bare
+		# Popen: register it for plugin unload and for the panel's Stop.
+		live_key = 'interactor:%s:%s' % (os.getpid(), interactor.pid)
+		register_live(live_key,
+					  lambda p=interactor: p.poll() is None,
+					  lambda p=interactor: _reap(p))
+		if register_kill is not None:
+			register_kill(lambda p=interactor: _reap(p))
 
 		started = time.monotonic()
 		solution.run_file()
@@ -276,8 +332,12 @@ def run_case(make_solution, exe, input_text, answer_text, time_limit_ms,
 		limit_s = float(time_limit_ms or 10000) / 1000.0
 		deadline = started + limit_s + _GRACE_SECONDS
 		timed_out = False
+		cancelled = False
 		while True:
 			if interactor.poll() is not None and solution.is_stopped() is not None:
+				break
+			if cancel is not None and cancel.is_set():
+				cancelled = True
 				break
 			if time.monotonic() > deadline:
 				timed_out = True
@@ -285,20 +345,25 @@ def run_case(make_solution, exe, input_text, answer_text, time_limit_ms,
 			time.sleep(0.01)
 
 		stop.set()
-		runtime = int((time.monotonic() - started) * 1000)
-		solution_output = ''.join(collected['solution'])
-		interactor_output = ''.join(collected['interactor'])
-		interactor_error = ''.join(collected['interactor_err']).strip()
-
-		if timed_out:
+		if cancelled or timed_out:
+			# Kill first, then join: a pump blocked in read() only sees EOF
+			# once the process is gone. Joining before the kill cost every
+			# timed-out dialogue a full second of the join timeout.
 			try:
 				solution.terminate()
 			except Exception:
 				pass
-			try:
-				interactor.kill()
-			except Exception:
-				pass
+			_reap(interactor)
+		# The pumps may still be inside read1() holding the interactor's last
+		# quitf line. Reading the transcript before they have seen EOF lost
+		# exactly the message a WA needs (testlib writes it just before it
+		# exits).
+		for thread in threads:
+			thread.join(timeout=1.0)
+		runtime = int((time.monotonic() - started) * 1000)
+		solution_output = ''.join(collected['solution'])
+		interactor_output = ''.join(collected['interactor'])
+		interactor_error = ''.join(collected['interactor_err']).strip()
 
 		solution_err = solution.get_stderr() if hasattr(solution, 'get_stderr') else ''
 		try:
@@ -307,7 +372,9 @@ def run_case(make_solution, exe, input_text, answer_text, time_limit_ms,
 			memory = None
 
 		code = interactor.poll()
-		if timed_out:
+		if cancelled:
+			verdict = 'skipped'
+		elif timed_out:
 			verdict = ('runtime_error'
 					   if looks_like_crash(solution_err or solution_output)
 					   else 'time_limit_exceed')
@@ -335,13 +402,17 @@ def run_case(make_solution, exe, input_text, answer_text, time_limit_ms,
 		result['verdict'] = get_verdict('unknown_error')
 	finally:
 		stop.set()
+		if live_key is not None:
+			unregister_live(live_key)
 		for proc in (solution, interactor):
 			if proc is None:
 				continue
 			try:
 				if isinstance(proc, subprocess.Popen):
-					proc.kill()
+					_reap(proc)
 				else:
+					if proc.is_stopped() is None:
+						proc.terminate()
 					proc.close_stderr()
 			except Exception:
 				pass

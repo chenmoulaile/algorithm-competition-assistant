@@ -21,8 +21,8 @@ import time
 
 import sublime
 
-from .cph_verdict import (get_verdict, get_verdict_by_code, find_crash_location,
-                          looks_like_crash)
+from .cph_verdict import (get_verdict, get_verdict_for_answers,
+                          find_crash_location, looks_like_crash)
 from .cph_gdb_trace import names_source as _names_source
 
 #: Extra allowance on top of the time limit before we kill a run. It covers
@@ -53,15 +53,41 @@ def _replay_crash(manager, source_file, stdin_text, time_limit_ms):
 
 
 def _run_one(make_manager, input_text, expected, time_limit_ms, memory_limit_mb,
-             float_tolerance, regard_pe_as_ac, judge=None):
-    """Run one test in this thread. Never raises: errors become a result."""
+             float_tolerance, regard_pe_as_ac, judge=None, cancel=None,
+             on_manager=None):
+    """Run one test in this thread. Never raises: errors become a result.
+
+    `cancel` is an optional threading.Event owned by the run panel, and
+    `on_manager` receives every ProcessManager created here so closing the
+    panel / Ctrl+X can terminate a batch instead of orphaning four workers.
+    """
     result = {
         'rtcode': None, 'stdout': '', 'stderr': '', 'runtime': 0,
         'memory': None, 'verdict': None, 'crash': None, 'error': None,
     }
+    # `expected` is a list of accepted answers for the normal parallel judge
+    # (one test point can carry several accepted outputs); the interactive and
+    # benchmark paths still pass a single string. The checker compares against
+    # the primary answer, because its argv contract only has one answer file.
+    if isinstance(expected, (list, tuple)):
+        expected_answers = [str(a) for a in expected if a is not None]
+    elif expected is None:
+        expected_answers = []
+    else:
+        expected_answers = [str(expected)]
+    expected_primary = expected_answers[0] if expected_answers else ''
     manager = None
     try:
+        if cancel is not None and cancel.is_set():
+            result['verdict'] = get_verdict('skipped')
+            return result
         manager = make_manager()
+        if on_manager is not None:
+            on_manager(manager)
+        if cancel is not None and cancel.is_set():
+            # Cancelled between the check above and the spawn: do not start.
+            result['verdict'] = get_verdict('skipped')
+            return result
         manager.set_separate_stderr(True)
         if time_limit_ms:
             manager.set_time_limit(time_limit_ms)
@@ -140,6 +166,7 @@ def _run_one(make_manager, input_text, expected, time_limit_ms, memory_limit_mb,
             drain_th.start()
 
         killed = False
+        cancelled = False
         waiter = getattr(manager, 'wait_for_exit', None)
         if waiter is not None:
             # wait() returns the instant the child dies, so the exit stamp
@@ -148,6 +175,13 @@ def _run_one(make_manager, input_text, expected, time_limit_ms, memory_limit_mb,
             # could flip an AC into a TLE.
             while True:
                 if manager.is_stopped() is not None:
+                    break
+                if cancel is not None and cancel.is_set():
+                    cancelled = True
+                    try:
+                        manager.terminate()
+                    except Exception:
+                        pass
                     break
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -164,6 +198,13 @@ def _run_one(make_manager, input_text, expected, time_limit_ms, memory_limit_mb,
                     break
         else:
             while manager.is_stopped() is None:
+                if cancel is not None and cancel.is_set():
+                    cancelled = True
+                    try:
+                        manager.terminate()
+                    except Exception:
+                        pass
+                    break
                 if time.monotonic() > deadline:
                     killed = True
                     try:
@@ -223,7 +264,12 @@ def _run_one(make_manager, input_text, expected, time_limit_ms, memory_limit_mb,
         if getattr(manager, 'output_capped', False):
             result['capped'] = True
 
-        if killed:
+        if cancelled:
+            # The panel closed / Ctrl+X: a manual stop is not a judgement.
+            # Keep the bytes already drained for the card, but never let the
+            # kill's exit code turn into TLE or a saved counterexample.
+            result['verdict'] = get_verdict('skipped')
+        elif killed:
             # Same rule as the serial path: a crash signature means the
             # process died on its own and our kill was collateral. When
             # nothing was printed, ask gdb instead - on Windows an aborting
@@ -240,26 +286,27 @@ def _run_one(make_manager, input_text, expected, time_limit_ms, memory_limit_mb,
             else:
                 result['verdict'] = get_verdict('time_limit_exceed')
         else:
-            result['verdict'] = get_verdict_by_code(
+            result['verdict'] = get_verdict_for_answers(
                 rtcode=int(rtcode) if rtcode is not None else 0,
                 runtime=runtime,
                 time_limit_ms=time_limit_ms,
                 memory_limit_mb=memory_limit_mb,
                 stderr=stderr,
                 stdout=stdout,
-                expected_output=expected,
+                expected_outputs=expected_answers,
                 ignore_error=True,
                 regard_pe_as_ac=regard_pe_as_ac,
                 memory_used_mb=memory,
                 float_tolerance=float_tolerance,
             )
 
-        if judge is not None:
+        if judge is not None and not cancelled:
             # Optional custom judging (a configured SPJ checker). It may
             # replace the verdict and add a message; failures inside it must
             # never lose the result we already have.
             try:
-                replacement = judge(input_text, stdout, expected, result['verdict'])
+                replacement = judge(input_text, stdout, expected_primary,
+                                    result['verdict'])
                 if replacement:
                     verdict, message = replacement
                     if verdict:
@@ -295,7 +342,7 @@ def _run_one(make_manager, input_text, expected, time_limit_ms, memory_limit_mb,
 def run_batch(make_manager, cases, workers=4, time_limit_ms=None,
               memory_limit_mb=None, float_tolerance=0, regard_pe_as_ac=False,
               on_done=None, on_progress=None, judge=None,
-              case_runner=None):
+              case_runner=None, cancel=None, on_manager=None):
     """Judge every case in `cases` concurrently.
 
     `cases` is a list of (input_text, expected_output) pairs.
@@ -307,6 +354,8 @@ def run_batch(make_manager, cases, workers=4, time_limit_ms=None,
     pool (they need a dialogue instead of a single run).
     `on_done(results)` and `on_progress(done, total)` are called on the MAIN
     thread (via sublime.set_timeout), so they may touch views.
+    `cancel` (a threading.Event) stops workers between cases; `on_manager`
+    receives each ProcessManager so the owner can terminate a live batch.
     Returns the number of worker threads started.
     """
     total = len(cases)
@@ -329,6 +378,8 @@ def run_batch(make_manager, cases, workers=4, time_limit_ms=None,
 
     def worker():
         while True:
+            if cancel is not None and cancel.is_set():
+                return
             with lock:
                 if state['next'] >= total:
                     return
@@ -340,7 +391,8 @@ def run_batch(make_manager, cases, workers=4, time_limit_ms=None,
             else:
                 results[index] = _run_one(
                     make_manager, input_text, expected, time_limit_ms,
-                    memory_limit_mb, float_tolerance, regard_pe_as_ac, judge)
+                    memory_limit_mb, float_tolerance, regard_pe_as_ac, judge,
+                    cancel=cancel, on_manager=on_manager)
             report()
 
     def supervise():

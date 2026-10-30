@@ -30,7 +30,7 @@ import time
 from .core.cph_i18n import t
 from .core.cph_settings import (get_settings, is_run_supported_ext, load_all_tests,
 								save_tests, set_problem_limits, settings_file,
-								notify_io_error)
+								notify_io_error, tests_lock)
 from .core.cph_tests_merge import merge_tests as merge_stored_with
 from .core.cph_state import set_listener
 
@@ -360,8 +360,11 @@ def build_handler():
             # decode_value are pure converters and the data is plain
             # str/list/dict, so none of this touches view state.
             try:
-                merged, conflicts = _merge_with_stored(file_name, incoming)
-                saved = save_tests(file_name, merged)
+                # Read+merge+write as one critical section: the run panel's
+                # async save may be writing the same file at this instant.
+                with tests_lock():
+                    merged, conflicts = _merge_with_stored(file_name, incoming)
+                    saved = save_tests(file_name, merged)
             except Exception as e:
                 print(t('error_handling_post', error=str(e)))
                 return

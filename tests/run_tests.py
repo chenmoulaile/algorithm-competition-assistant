@@ -27,6 +27,7 @@ import string
 import sys
 import subprocess
 import tempfile
+import threading
 import time
 import types
 
@@ -8451,6 +8452,346 @@ def main():
           'def _process_incoming' in comp_src
           and '_merge_with_stored(file_name, incoming)' in comp_src
           and '_handle_on_main' not in comp_src)
+
+    # ======================================================================
+    # v3.0.7 regression checks: the review findings
+    # ======================================================================
+    _tm_src_all = open(os.path.join(ROOT, 'test_manager.py'),
+                       encoding='utf-8').read()
+    _par = importlib.import_module(pkg + '.core.cph_parallel')
+
+    # --- P2: stop_on_first_failure is about the verdict, not the exit code --
+    _ac = verdict.get_verdict_by_name('AC')
+    _wa = verdict.get_verdict_by_name('WA')
+    _pe = verdict.get_verdict_by_name('PE')
+    _uke = verdict.get_verdict('unknown_error')
+    _sk = verdict.get_verdict('skipped')
+    check('stop_on_first stops after an AC and after a WA',
+          tm.chain_continues(_ac, True) is True
+          and tm.chain_continues(_wa, True) is False
+          and tm.chain_continues(_pe, True) is False,
+          '%r %r %r' % (tm.chain_continues(_ac, True),
+                        tm.chain_continues(_wa, True),
+                        tm.chain_continues(_pe, True)))
+    check('input-only (UKE) samples keep running, a manual stop does not',
+          tm.chain_continues(_uke, True) is True
+          and tm.chain_continues(_sk, True) is False)
+    check('stop_on_first=false and run-all still continue after a failure',
+          tm.chain_continues(_wa, False)
+          and tm.chain_continues(_wa, True, run_all=True)
+          and tm.chain_continues(_wa, True, run_failed=True))
+    check('the chain no longer keys off the process exit code',
+          'ok = str(rtcode) == \'0\'' not in _tm_src_all
+          and 'chain_continues(' in _tm_src_all)
+
+    # --- P3: every accepted answer participates in the verdict --------------
+    _multi_ok = verdict.get_verdict_for_answers(
+        rtcode=0, runtime=10, time_limit_ms=1000, memory_limit_mb=256,
+        stderr='', stdout='2', expected_outputs=['1', '2'])
+    _multi_wa = verdict.get_verdict_for_answers(
+        rtcode=0, runtime=10, time_limit_ms=1000, memory_limit_mb=256,
+        stderr='', stdout='3', expected_outputs=['1', '2'])
+    _multi_float = verdict.get_verdict_for_answers(
+        rtcode=0, runtime=10, time_limit_ms=1000, memory_limit_mb=256,
+        stderr='', stdout='0.3',
+        expected_outputs=['0.30000000000000004'], float_tolerance=1e-6)
+    check('a match against any stored answer is AC',
+          _multi_ok['name'] == 'AC' and _multi_wa['name'] == 'WA'
+          and _multi_float['name'] == 'AC',
+          '%s %s %s' % (_multi_ok['name'], _multi_wa['name'],
+                        _multi_float['name']))
+    _answer_test = tm.CphTestManagerCommand.Test(
+        {'test': '', 'correct_answers': ['b', 'a']})
+    check('answers are ordered deterministically for display',
+          tm._ordered_answers(_answer_test) == ['a', 'b']
+          and tm._matching_answer(_answer_test, 'b') == 'b')
+    check('an unchanged answer-editor save keeps the other answers',
+          tm._answers_after_edit(set(['1', '2']), '1', '1') == set(['1', '2'])
+          and tm._answers_after_edit(set(['1', '2']), '1', '9') == set(['9']),
+          repr((tm._answers_after_edit(set(['1', '2']), '1', '1'),
+                tm._answers_after_edit(set(['1', '2']), '1', '9'))))
+    _detail_cmd = tm.CphTestManagerCommand.__new__(tm.CphTestManagerCommand)
+    _detail_cmd.view = sys.modules['sublime'].View()
+    _detail_cmd.tester = None
+    _detail_cmd.dbg_file = None
+    _ac_test = _DetailTest()
+    _ac_test.verdict = _ac
+    _ac_test.test_string = ''
+    _ac_test.expected_output = '1'
+    _ac_test.stdout = '2'
+    _ac_text, _ac_blocks = _detail_cmd.build_detail(0, _ac_test, [])
+    _ac_kinds = dict((b['id'], b.get('kind')) for b in _ac_blocks)
+    check('an AC whose text differs (SPJ / tolerance) is not painted red',
+          _ac_kinds.get('actual') == 'test-accept'
+          and _ac_kinds.get('diff') == 'test-accept'
+          and i18n_mod.t('diff_accepted_other') in _ac_text,
+          str(_ac_kinds))
+
+    # --- P1: the parallel batch is visible, cancellable and epoch-guarded --
+    _batch_tester = make_tester([tm.CphTestManagerCommand.Test('1')])
+    _batch_cancel = threading.Event()
+    _batch_tester.begin_batch(_batch_cancel)
+
+    class _BatchManager(object):
+        terminated = False
+        def terminate(self):
+            self.terminated = True
+
+    _batch_mgr = _BatchManager()
+    _batch_tester.add_batch_manager(_batch_mgr)
+    _batch_tester.cancel_batch()
+    _deadline = time.time() + 1.0
+    while time.time() < _deadline and not _batch_mgr.terminated:
+        time.sleep(0.01)
+    check('a cancelled batch sets the flag and kills its managers',
+          _batch_cancel.is_set() and _batch_tester.batch_cancelled
+          and _batch_tester.proc_run is False and _batch_mgr.terminated)
+    _batch_tester.finish_batch()
+    check('finishing a batch clears the running state',
+          not _batch_tester.batch_active and not _batch_tester.proc_run)
+
+    _cancel_pre = threading.Event()
+    _cancel_pre.set()
+    _spawned = []
+    _sk = _par._run_one(
+        lambda: _spawned.append(True) or _BatchManager(), '1', '1',
+        1000, 256, 0, False, cancel=_cancel_pre)
+    check('a pre-cancelled parallel case is SK and spawns nothing',
+          _sk['verdict']['name'] == 'SK' and not _spawned,
+          repr(_sk['verdict']))
+
+    class _RunManager(object):
+        output_capped = False
+        def __init__(self):
+            self.seen = []
+        def set_separate_stderr(self, value=True): pass
+        def set_time_limit(self, ms): pass
+        def set_memory_limit(self, mb): pass
+        def set_io_input(self, text): pass
+        def is_io_files(self): return True
+        def run_file(self): pass
+        def is_stopped(self): return 0
+        def read(self, size=None): return ''
+        def get_stderr(self): return ''
+        def runtime_ms(self): return 7
+        def collect_output(self): return ('2', '')
+        def finish_memory_sampling(self): return None
+        def close_stderr(self): pass
+        def terminate(self): pass
+
+    _made = []
+    _run_result = _par._run_one(
+        lambda: _RunManager(), '1', ['1', '2'], 1000, 256, 0, False,
+        on_manager=_made.append)
+    check('the pool registers each manager and judges every answer',
+          _made and _run_result['verdict']['name'] == 'AC',
+          repr(_run_result['verdict']))
+
+    _finish_cmd = tm.CphTestManagerCommand.__new__(tm.CphTestManagerCommand)
+    _finish_cmd.tester_epoch = 7
+    _applied = []
+    _finish_cmd.change_process_status = lambda status: None
+    _finish_cmd.apply_parallel_results = (
+        lambda results, final=True: _applied.append((results, final)))
+    _old_batch = make_tester([])
+    _old_batch.begin_batch(threading.Event())
+    _finish_cmd.tester = make_tester([])
+    _finish_cmd.tester_epoch = 7
+    _finish_cmd._finish_parallel_batch(
+        _old_batch, 6, threading.Event(), [])
+    check('results of a replaced batch are dropped',
+          _applied == [] and not _old_batch.batch_active)
+    _current_batch = make_tester([])
+    _current_batch.begin_batch(threading.Event())
+    _finish_cmd.tester = _current_batch
+    _finish_cmd.tester_epoch = 7
+    _finish_cmd._finish_parallel_batch(
+        _current_batch, 7, threading.Event(), [])
+    check('the current batch results are applied',
+          _applied == [([], True)] and not _current_batch.batch_active,
+          repr(_applied))
+    check('the pool is wired into the panel run state',
+          'tester.begin_batch(cancel)' in _tm_src_all
+          and 'on_manager=tester.add_batch_manager' in _tm_src_all
+          and 'register_kill=tester.add_batch_kill' in _tm_src_all)
+    check('a live batch blocks the serial-only panel actions',
+          _tm_src_all.count("getattr(self, 'batch_active', False)") >= 3
+          and "getattr(tester, 'batch_active', False)" in _tm_src_all
+          and "and not getattr(\n\t\t\t\ttester, 'batch_active', False)"
+          in _tm_src_all)
+
+    # --- P4/P5: checker/interactor work is off the UI thread and bounded ---
+    _checker_src = open(os.path.join(ROOT, 'core', 'cph_checker.py'),
+                        encoding='utf-8').read()
+    _inter_src = open(os.path.join(ROOT, 'core', 'cph_interactive.py'),
+                      encoding='utf-8').read()
+    check('checker and interactor builds have a timeout',
+          'communicate(timeout=_COMPILE_TIMEOUT)' in _checker_src
+          and 'communicate(timeout=_COMPILE_TIMEOUT)' in _inter_src)
+    check('the per-test checker is judged outside the UI callback',
+          'def _judge_checker' in _tm_src_all
+          and 'checker_result = self._judge_checker()' in _tm_src_all
+          and '_prebuild_auxiliary()' in _tm_src_all)
+    check('a generated checker exe is rebuilt when the source is newer',
+          "if _is_binary(exe) and not _source_newer(cfg['path'], exe):"
+          in _checker_src
+          and "if _is_binary(exe) and not _source_newer(cfg['path'], exe):"
+          in _inter_src)
+    _cs = importlib.import_module(pkg + '.core.cph_checker')
+    _ci = importlib.import_module(pkg + '.core.cph_interactive')
+    _mt_tmp = _tempfile.mkdtemp(prefix='cph_mtime_')
+    try:
+        _mt_src = os.path.join(_mt_tmp, 'checker.cpp')
+        _mt_exe = _mt_src + '.exe'
+        open(_mt_src, 'w').close()
+        open(_mt_exe, 'w').close()
+        _now = time.time()
+        os.utime(_mt_src, (_now + 5, _now + 5))
+        os.utime(_mt_exe, (_now, _now))
+        check('a newer source than its exe means rebuild',
+              _cs._source_newer(_mt_src, _mt_exe) is True
+              and _ci._source_newer(_mt_src, _mt_exe) is True)
+        os.utime(_mt_src, (_now - 5, _now - 5))
+        check('an unchanged source keeps the existing exe',
+              _cs._source_newer(_mt_src, _mt_exe) is False
+              and _ci._source_newer(_mt_src, _mt_exe) is False)
+    finally:
+        shutil.rmtree(_mt_tmp, ignore_errors=True)
+
+    # --- P6: a cache hit must not hide a missing artifact ------------------
+    _art_tmp = _tempfile.mkdtemp(prefix='cph_cache_')
+    try:
+        _art_src = os.path.join(_art_tmp, 'a.cpp')
+        _art_exe = os.path.join(_art_tmp, 'a.exe')
+        open(_art_src, 'w').close()
+
+        class _CachePM(object):
+            file = _art_src
+            def get_compile_cmd(self):
+                return 'g++ "%s" -o "%s"' % (_art_src, _art_exe)
+            def artifact_paths(self, cmd=None):
+                return (_art_exe, _art_exe if os.path.exists(_art_exe) else None)
+            def get_compile_inputs(self):
+                return [_art_src]
+
+        _cache_pm = _CachePM()
+        tm._compile_cache[_art_src] = {'fingerprint': 'fp'}
+        _keep_cache_settings = tm.get_settings
+        tm.get_settings = lambda: {'compile_cache_enabled': True}
+        try:
+            check('a cache hit with the binary missing recompiles',
+                  tm.should_skip_compile(_cache_pm, False, 'fp') is False)
+            open(_art_exe, 'w').close()
+            check('a cache hit with the binary present is reused',
+                  tm.should_skip_compile(_cache_pm, False, 'fp') is True)
+        finally:
+            tm.get_settings = _keep_cache_settings
+            tm._compile_cache.pop(_art_src, None)
+    finally:
+        shutil.rmtree(_art_tmp, ignore_errors=True)
+    check('a spawn failure is reported instead of sticking on RUNNING',
+          'could not start %s' in _tm_src_all
+          and 'self.__on_stop(1, 0, gen=self._active_gen)' in _tm_src_all)
+
+    # --- P7: width is measured in DIP, labels use one NBSP -----------------
+    _dip_view = _FitView(_FitWindow([0, 0.5, 1]), em=8.0)
+    _dip_view.settings().set('font_size', 20)
+    _sublime_mod = sys.modules['sublime']
+    _had_scale = hasattr(_sublime_mod, 'scale_factor')
+    _old_scale = getattr(_sublime_mod, 'scale_factor', None)
+    try:
+        _sublime_mod.scale_factor = lambda: 2.0
+        _dip_at_2 = tm.estimate_panel_width_px(_dip_view, ((u'\u6d4b\u8bd5',),))
+        _sublime_mod.scale_factor = lambda: 1.0
+        _dip_at_1 = tm.estimate_panel_width_px(_dip_view, ((u'\u6d4b\u8bd5',),))
+        check('the panel width estimate does not scale with the display',
+              abs(_dip_at_2 - _dip_at_1) < 1e-9,
+              '%.4f vs %.4f' % (_dip_at_2, _dip_at_1))
+    finally:
+        if _had_scale:
+            _sublime_mod.scale_factor = _old_scale
+        else:
+            try:
+                del _sublime_mod.scale_factor
+            except Exception:
+                pass
+    _keep_label_settings = tm.get_settings
+    tm.get_settings = lambda: {'show_time_mem_labels': True}
+    try:
+        _label = tm._label_prefixed('42ms', 'time')
+        check('the time label uses one NBSP, not six entity characters',
+              u'\u00a0' in _label and '&nbsp;' not in _label, repr(_label))
+    finally:
+        tm.get_settings = _keep_label_settings
+
+    # --- P8: test-store writes are atomic and serialized ------------------
+    _store_tmp = _tempfile.mkdtemp(prefix='cph_store_')
+    try:
+        _store_src = os.path.join(_store_tmp, 'p.cpp')
+        open(_store_src, 'w').close()
+        with _settings_holder.tests_lock():
+            with _settings_holder.tests_lock():
+                pass
+        _saved = _settings_holder.save_tests(
+            _store_src, [{'test': '1', 'correct_answers': ['2']}])
+        _loaded = _settings_holder.load_all_tests(_store_src)
+        _leftovers = []
+        for _base, _dirs, _files in os.walk(_store_tmp):
+            _leftovers.extend(_f for _f in _files if _f.endswith('.tmp'))
+        check('the store lock is re-entrant and a save reloads',
+              _saved and len(_loaded) == 1
+              and _loaded[0].get('correct_answers') == ['2'],
+              repr(_loaded))
+        check('no temporary tests file is left behind', not _leftovers,
+              repr(_leftovers))
+    finally:
+        shutil.rmtree(_store_tmp, ignore_errors=True)
+
+    # --- P10: the stress capture buffers are bounded ----------------------
+    _stress_mod = importlib.import_module(pkg + '.cph_stress')
+
+    class _StressStream(object):
+        def __init__(self):
+            self.parts = [b'aaaa'] * 5
+        def read(self, size):
+            return self.parts.pop(0) if self.parts else b''
+
+    _keep_stress_settings = _stress_mod.get_settings
+    _stress_mod.get_settings = lambda: {'max_output_bytes': 10}
+    try:
+        _stress_sink = []
+        _stress_sess = {}
+        _stress_mod._drain(_StressStream(), _stress_sink,
+                           sess=_stress_sess, limit=10)
+        check('a runaway stress stream is capped, not buffered forever',
+              sum(len(part) for part in _stress_sink) <= 10
+              and _stress_sess.get('capture_truncated') is True,
+              'bytes=%d flag=%r' % (
+                  sum(len(part) for part in _stress_sink),
+                  _stress_sess.get('capture_truncated')))
+        check('a truncated round is abandoned with a message',
+              _stress_mod._capture_truncated(_stress_sess) is True
+              and 'capture_truncated' not in _stress_sess)
+    finally:
+        _stress_mod.get_settings = _keep_stress_settings
+    _stress_src = open(os.path.join(ROOT, 'cph_stress.py'),
+                       encoding='utf-8').read()
+    check('stress kills skip an already-reaped PID',
+          'if proc.poll() is not None:' in _stress_src)
+
+    # --- the detail tab is identified by source, not only by its name -----
+    check('detail tabs carry the source they belong to',
+          "cph_detail_source" in _tm_src_all
+          and 'def _detail_view_belongs' in _tm_src_all
+          and 'wv.name() == name and self._detail_view_belongs(wv)'
+          in _tm_src_all)
+    _edit_src = open(os.path.join(ROOT, 'test_edit.py'),
+                     encoding='utf-8').read()
+    check('a save from the input tab keeps the answer tab state',
+          'cph_edit_original_answer' in _edit_src
+          and 'cph_edit_all_answers' in _edit_src
+          and "if self.mode == 'input' and sibling is not None:"
+          in _edit_src)
 
     print('')
     print('%d checks, %d failures' % (CHECKS[0], len(FAILURES)))

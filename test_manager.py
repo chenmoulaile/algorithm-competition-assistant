@@ -34,7 +34,10 @@ from .core.cph_interactive import (config as interactor_config,
 								   run_case as interactive_run_case)
 from .core.cph_resources import read_resource
 from .Highlight.test_interface import get_test_styles
-from .core.cph_verdict import get_verdict, get_verdict_by_code, get_verdict_by_name, build_line_diff, outputs_equal, find_crash_location, looks_like_crash
+from .core.cph_verdict import (get_verdict, get_verdict_for_answers,
+							   get_verdict_by_name, build_line_diff,
+							   outputs_equal, find_crash_location,
+							   looks_like_crash)
 from .core.cph_gdb_trace import names_source as _names_source_impl
 from .core.cph_i18n import t, t_message
 
@@ -80,6 +83,26 @@ def post_to_ui(fn):
 #: generous than a judge. It saves the programs that would have finished inside
 #: a judge's own slack, and matches core/cph_parallel.py's _GRACE_SECONDS.
 _TLE_KILL_GRACE_S = 0.05
+
+
+def chain_continues(verdict, stop_on_first=True, run_all=False,
+					run_failed=False):
+	"""Whether the sample chain should advance after this test point.
+
+	"Failure" is a verdict, not a process exit code: a WA / PE / OLE run that
+	was not killed still exits 0, so the old `rtcode == 0` test kept every
+	remaining sample running under the default stop_on_first_failure.
+	Extracted so the rule is testable without a live Sublime command.
+	"""
+	if not isinstance(verdict, dict):
+		return bool((not stop_on_first) or run_all or run_failed)
+	passed = verdict.get('type') == 'PASSED'
+	# UKE means "nothing to judge against" (the sample has no stored answer),
+	# not "the program failed": a set of input-only samples should still all
+	# run. SK is a manual stop and must not chain into the next sample.
+	unjudged = verdict.get('name') == 'UKE'
+	return bool(passed or unjudged or (not stop_on_first)
+				or run_all or run_failed)
 
 
 def tle_advisory(runtime_ms, time_limit_ms):
@@ -188,7 +211,44 @@ def should_skip_compile(process_manager, force=False, fingerprint=None):
 		return False
 	if fingerprint is None:
 		fingerprint = _source_fingerprint(process_manager)
-	return entry.get('fingerprint') == fingerprint
+	if entry.get('fingerprint') != fingerprint:
+		return False
+	# The fingerprint says "the sources did not change", not "the binary is
+	# still there". Deleting the .exe (git clean, antivirus, a manual clean)
+	# used to keep every later Run on the cache-hit path, and the Popen then
+	# failed with no verdict at all until Force Recompile. Verify the
+	# artifact the compile command named is still on disk.
+	try:
+		cmd = process_manager.get_compile_cmd()
+	except Exception:
+		cmd = None
+	if cmd is None:
+		# Interpreted language: there is no artifact to lose.
+		return True
+	if cmd == -1:
+		return False
+	try:
+		wanted, actual = process_manager.artifact_paths(cmd)
+	except Exception:
+		wanted, actual = None, None
+	if wanted is None:
+		# No -o in the command. javac is the common case: its artifact is
+		# `<stem>.class` next to the source, and a deleted class file must
+		# recompile just like a deleted .exe. Other no--o commands have
+		# nothing to check.
+		try:
+			source = getattr(process_manager, 'file', '') or ''
+			class_file = os.path.splitext(source)[0] + '.class'
+			first = (cmd or '').strip().split()[0].strip('"\'')
+			if 'javac' in os.path.basename(first).lower():
+				return os.path.exists(class_file)
+		except Exception:
+			pass
+		return True
+	try:
+		return bool(actual) and os.path.exists(actual)
+	except Exception:
+		return False
 
 
 def remember_compile(process_manager, fingerprint=None):
@@ -256,6 +316,72 @@ def _clean_newlines(s):
 	if not isinstance(s, str):
 		return s
 	return s.replace('\r\n', '\n').replace('\r', '\n')
+
+
+def _ordered_answers(test):
+	"""Every accepted answer of a test point, in a stable display order.
+
+	`correct_answers` is a set, and set iteration order for strings changes
+	with the interpreter's hash seed. Selecting the primary answer with
+	next(iter(...)) therefore made the detail page, the answer editor and the
+	fallback judge pick a different answer after a Sublime restart. Sorting
+	keeps the choice deterministic; the judge itself accepts any of them (see
+	core/cph_verdict.get_verdict_for_answers).
+	"""
+	try:
+		answers = list(getattr(test, 'correct_answers', None) or ())
+	except Exception:
+		answers = []
+	out = []
+	for answer in answers:
+		if answer is None:
+			continue
+		if not isinstance(answer, str):
+			answer = str(answer)
+		out.append(answer)
+	return sorted(out)
+
+
+def _primary_answer(test):
+	"""The answer shown/copied by the detail page and the editor."""
+	answers = _ordered_answers(test)
+	if answers:
+		return answers[0]
+	try:
+		return getattr(test, 'expected_output', '') or ''
+	except Exception:
+		return ''
+
+
+def _matching_answer(test, stdout, float_tolerance=0):
+	"""The stored answer this output matches, or None."""
+	for answer in _ordered_answers(test):
+		if outputs_equal(stdout, answer, float_tolerance):
+			return answer
+	return None
+
+
+def _answers_after_edit(existing, original, edited):
+	"""The correct-answer set after saving the answer editor.
+
+	`existing` is the whole set, `original` is the answer the editor was
+	opened with, and `edited` is what the user saved. Saving an unchanged
+	buffer must not delete the other accepted answers: the older code always
+	replaced the set with the one visible value, so merely opening and
+	saving the answer tab silently dropped every alternative. A real edit
+	still replaces the set, which is what setting the correct answer means.
+	"""
+	kept = []
+	for answer in (existing or ()):
+		if answer is None:
+			continue
+		kept.append(str(answer))
+	value = (edited or '').strip()
+	if kept and original is not None and value == (original or '').strip():
+		return set(a.lstrip().rstrip() for a in kept if a.strip())
+	if value:
+		return set([value])
+	return set()
 
 
 def _replay_crash(pm, source_file, stdin_text, time_limit_ms):
@@ -359,23 +485,32 @@ def _card_row_segments(with_memory=False):
 def _label_prefixed(value, key):
 	""""time: 2542ms" when the labels setting is on, the bare value otherwise.
 
-	&nbsp; between the label and the value keeps minihtml from wrapping
+	A real NBSP between the label and the value keeps minihtml from wrapping
 	between them on a narrow panel (the reason the labels went away in the
-	first place - the wrapped value landed on the row below).
+	first place - the wrapped value landed on the row below). A real
+	character rather than the &nbsp; entity also means the width estimator
+	counts it as the one cell it occupies instead of six ASCII characters.
 	"""
 	if not get_settings().get('show_time_mem_labels', False):
 		return value
-	return t(key) + ':&nbsp;' + value
+	return t(key) + u':\u00a0' + value
 
 
 def _row_font_metrics(view):
-	"""(em, full_width_char_px) for the view's phantom font.
+	"""(em, full_width_char) for the view's phantom font, both in DIP.
 
 	minihtml phantoms inherit the view font, so em_width is the base unit for
 	ASCII. A CJK character is about font_px wide - wider than one em at the
 	default 10 pt - and counting it as such is what stops a Chinese card row
 	from being measured too narrow (which, now that the panel also NARROWS to
 	its measurement, would wrap a chip).
+
+	Sublime's API reference says every coordinate/dimension API works in
+	DIPs, and View.em_width() is documented as a DIP. The old code multiplied
+	only the wide glyph and the CSS paddings by sublime.scale_factor(), then
+	compared the result with a DIP viewport and fed it to set_layout(): on a
+	125-200% display the estimate was inflated by that factor and the panel
+	could never narrow to its cards.
 	"""
 	try:
 		em = view.em_width()
@@ -383,19 +518,15 @@ def _row_font_metrics(view):
 		em = 0
 	if not em or em <= 0:
 		return 0.0, 0.0
-	try:
-		scale = sublime.scale_factor()
-	except Exception:
-		scale = 1.0
 	font_pt = view.settings().get('font_size')
 	if not font_pt:
 		font_pt = sublime.load_settings('Preferences.sublime-settings').get('font_size', 10)
 	font_px = font_pt * 4.0 / 3.0
-	return em, font_px * 1.05 * scale
+	return em, font_px * 1.05
 
 
 def _widest_row_px(view, rows, badge=False):
-	"""Widest one-line chip row in `rows`, in device px (0 when unmeasurable).
+	"""Widest one-line chip row in `rows`, in DIP (0 when unmeasurable).
 
 	`rows` holds tuples of segment strings, one tuple per row. `badge` adds
 	the verdict badge the run panel's test cards carry; a row that has none
@@ -404,10 +535,6 @@ def _widest_row_px(view, rows, badge=False):
 	em, wide_px = _row_font_metrics(view)
 	if not em:
 		return 0.0
-	try:
-		scale = sublime.scale_factor()
-	except Exception:
-		scale = 1.0
 
 	widest = 0.0
 	for segments in rows:
@@ -422,9 +549,9 @@ def _widest_row_px(view, rows, badge=False):
 		width = ascii_n * em + wide_n * wide_px
 		if badge:
 			# verdict badge: 10px monospace bold, up to 3 chars + padding + margin
-			width += (3 * 10 * 0.65 + 3 + 2) * scale
-		# 1px padding around each of the ~6 buttons + block spacing (CSS px)
-		width += (6 * 2 + 8) * scale
+			width += 3 * 10 * 0.65 + 3 + 2
+		# 1px padding around each of the ~6 buttons + block spacing (CSS px = DIP)
+		width += 6 * 2 + 8
 		widest = max(widest, width * 1.08)
 	return widest
 
@@ -450,11 +577,12 @@ def estimate_card_width_px(view, with_memory=False, rows=None):
 		row = list(_card_row_segments(with_memory))
 		if get_settings().get('show_time_mem_labels', False):
 			# segments end with the runtime and, when measured, the memory chip
+			nbsp = u'\u00a0'
 			if with_memory:
-				row[-2] = ' ' + t('time') + ':&nbsp;9999ms '
-				row[-1] = ' ' + t('memory') + ':&nbsp;888.88 MB '
+				row[-2] = ' ' + t('time') + ':' + nbsp + '9999ms '
+				row[-1] = ' ' + t('memory') + ':' + nbsp + '888.88 MB '
 			else:
-				row[-1] = ' ' + t('time') + ':&nbsp;9999ms '
+				row[-1] = ' ' + t('time') + ':' + nbsp + '9999ms '
 		rows = (tuple(row),)
 	return _widest_row_px(view, rows, badge=True)
 
@@ -832,7 +960,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			# otherwise the expected output; hidden when neither exists.
 			if self.correct_answers:
 				expected_label = t('correct_answer')
-				expected = escape_html(next(iter(self.correct_answers)))
+				expected = escape_html(_primary_answer(self))
 				expected_display = 'block'
 			elif self.expected_output:
 				expected_label = t('expected_output')
@@ -946,6 +1074,16 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			# __on_stop after a new Tester replaced this one; on_stop uses
 			# the epoch to drop those outdated callbacks.
 			self.epoch = epoch
+			# Parallel / interactive batches: the pool owns the processes, so
+			# the panel's serial manager cannot stop them. These fields make
+			# the batch visible to the running-state machinery (Run again,
+			# Ctrl+X, closing the panel) and let it be cancelled.
+			self.batch_active = False
+			self.batch_cancelled = False
+			self._batch_cancel = None
+			self._batch_managers = []
+			self._batch_kills = []
+			self._batch_lock = threading.Lock()
 			# Set by the TLE watchdog when it kills the process for
 			# exceeding the time limit, so on_stop can judge TLE
 			self.tle_killed = False
@@ -980,6 +1118,42 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			"""
 			return self._active_gen
 
+		def _judge_checker(self):
+			"""Run the configured SPJ checker off the UI thread.
+
+			Returns None when no checker is configured, else (verdict, message).
+			Both the compile (first use) and the run used to happen inside the
+			main-thread on_stop callback: a g++ compile or a slow checker froze
+			the whole editor, up to checker_time_limit_ms per test point.
+			"""
+			try:
+				pm = self.process_manager
+				target = getattr(pm, 'file', None)
+				cfg = checker_config(get_settings().get('run_settings'), target)
+			except Exception as e:
+				return (None, 'checker config: %s: %s'
+						% (type(e).__name__, e))
+			if not cfg:
+				return None
+			try:
+				exe, error = checker_executable(cfg)
+				if error:
+					return (None, error)
+				test = self.tests[self.running_test]
+				answers = _ordered_answers(test)
+				if not answers:
+					answers = [getattr(test, 'expected_output', '') or '']
+				result = checker_judge(cfg, exe, test.test_string,
+									   self.prog_out[self.running_test].rstrip(),
+									   answers[0])
+				message = result.get('message') or ''
+				if message:
+					message = '%s %s' % (t_message(
+						'checker_judged', verdict=result['verdict']), message)
+				return (get_verdict(result['verdict']), message)
+			except Exception as e:
+				return (None, 'checker: %s: %s' % (type(e).__name__, e))
+
 		def __on_stop(self, rtcode, runtime=-1, crash_line=None, gen=None):
 			if gen is not None and gen != self._active_gen:
 				# Thread of an older run (its process was replaced): its
@@ -1002,12 +1176,22 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			if self.running_new:
 				self.test_iter += 1
 
+			# The checker is compiled and judged here, on the pump thread:
+			# this used to run inside the main-thread on_stop below, where a
+			# slow checker blocked the editor for up to its 10s limit.
+			# A run that never spawned has no output to check, and letting
+			# the checker run would compile it just to reject an empty file.
+			if getattr(self, '_spawn_failed', False):
+				checker_result = (None, '')
+			else:
+				checker_result = self._judge_checker()
+
 			# State above is updated inline; everything below touches views and
 			# must run on the main thread. This callback arrives from the pump
 			# thread, and building the verdict cards / phantoms off-thread is
 			# what made the panel crash at random.
 			def deliver(self=self, rtcode=rtcode, runtime=runtime,
-						crash_line=crash_line):
+						crash_line=crash_line, checker=checker_result):
 				if type(self.process_manager) == ProcessManager:
 					self.on_status_change('STOPPED')
 				# The verdict redraws the panel from prog_out on the main
@@ -1018,7 +1202,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				# delta_input the chain had moved to - and the text strayed
 				# into the wrong card (or the top of the panel).
 				self.flush_pending_out()
-				self.on_stop(rtcode, runtime, crash_line=crash_line, epoch=self.epoch)
+				self.on_stop(rtcode, runtime, crash_line=crash_line,
+							 epoch=self.epoch, checker=checker)
 
 			post_to_ui(deliver)
 
@@ -1272,6 +1457,10 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				sleep(0.05)
 
 		def insert(self, s, call_on_insert=False):
+			if getattr(self, 'batch_active', False):
+				# The batch owns its per-case pipes; the serial manager has no
+				# process, and running_test may still point at the old card.
+				return
 			n = self.running_test
 			if self.proc_run:
 				self.tests[n].append_string(s)
@@ -1334,7 +1523,25 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				self.process_manager.set_io_spec(io_spec, input_text)
 			elif type(self.process_manager) == ProcessManager:
 				self.process_manager.set_io_spec({'mode': 'stdin'})
-			self.process_manager.run()
+			self._spawn_failed = False
+			try:
+				self.process_manager.run()
+			except Exception as e:
+				# The compile cache can say "source unchanged" while the
+				# artifact is gone, and a custom run_cmd can be wrong. Letting
+				# the exception escape killed the listener thread with the
+				# panel stuck on RUNNING and no verdict; report it as a failed
+				# run instead.
+				detail = '%s: %s' % (type(e).__name__, e)
+				print('[Algorithm Competition Assistant] could not start %s: %s'
+					  % (getattr(self.process_manager, 'file', '?'), detail))
+				self._spawn_failed = True
+				self._clock_start = None
+				message = t_message('run_failed', error=detail)
+				self.prog_out[self.running_test] = message + '\n'
+				self.tests[self.running_test].message = message
+				self.__on_stop(1, 0, gen=self._active_gen)
+				return
 			# The program's clock starts when the process came to life, never
 			# before it: creating the child costs tens of milliseconds on
 			# Windows and none of that is the program's doing. Feeding the
@@ -1358,6 +1565,13 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			n = self.test_iter
 			tests = self.tests
 			prog_out = self.prog_out
+
+			if getattr(self, 'batch_active', False):
+				# A parallel/interactive batch is not this serial manager's
+				# process; treating its idle PM as "stale" would start a
+				# second run on the same panel and corrupt both.
+				sublime.status_message(t('process_already_running'))
+				return
 
 			if self.proc_run:
 				# Recover from a stale proc_run whose listener thread died
@@ -1405,6 +1619,9 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			sublime.set_timeout_async(go, 10)
 
 		def run_test(self, id):
+			if getattr(self, 'batch_active', False):
+				sublime.status_message(t('process_already_running'))
+				return
 			# The test menu can run any test directly, before the chain ever
 			# materialised it. prog_out starts empty, so self.prog_out[id]
 			# raised IndexError and the run never started (status stuck at
@@ -1497,6 +1714,86 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			tests[nth].remove_correct_answer(out)
 			tests[nth].add_uncorrect_answer(out)
 
+		def begin_batch(self, cancel):
+			"""Mark a parallel/interactive pool as this tester's running work."""
+			self.batch_active = True
+			self.batch_cancelled = False
+			self._batch_cancel = cancel
+			with self._batch_lock:
+				self._batch_managers = []
+				self._batch_kills = []
+			self.proc_run = True
+
+		def add_batch_manager(self, manager):
+			"""Track one per-case manager; kill it at once if already cancelled."""
+			with self._batch_lock:
+				stop_now = self.batch_cancelled
+				if not stop_now:
+					self._batch_managers.append(manager)
+			if stop_now:
+				try:
+					manager.terminate()
+				except Exception:
+					pass
+
+		def add_batch_kill(self, kill):
+			"""Track an extra process (interactor) the pool created."""
+			with self._batch_lock:
+				stop_now = self.batch_cancelled
+				if not stop_now:
+					self._batch_kills.append(kill)
+			if stop_now:
+				try:
+					kill()
+				except Exception:
+					pass
+
+		def cancel_batch(self):
+			"""Stop every process this batch owns; safe from the UI thread.
+
+			The flag is set synchronously (workers stop at the next case) and
+			the actual kills run on a daemon thread: a Windows taskkill /T can
+			take seconds and must not block the editor.
+			"""
+			if not self.batch_active:
+				return
+			self.batch_cancelled = True
+			self.proc_run = False
+			cancel = self._batch_cancel
+			if cancel is not None:
+				cancel.set()
+			with self._batch_lock:
+				managers = list(self._batch_managers)
+				kills = list(self._batch_kills)
+				self._batch_managers = []
+				self._batch_kills = []
+
+			def _stop_all():
+				for manager in managers:
+					try:
+						manager.terminate()
+					except Exception:
+						pass
+				for kill in kills:
+					try:
+						kill()
+					except Exception:
+						pass
+
+			thread = threading.Thread(target=_stop_all)
+			thread.daemon = True
+			thread.start()
+
+		def finish_batch(self):
+			"""The pool has returned: drop the running state and the kill list."""
+			self.batch_active = False
+			self.batch_cancelled = False
+			self.proc_run = False
+			self._batch_cancel = None
+			with self._batch_lock:
+				self._batch_managers = []
+				self._batch_kills = []
+
 		def terminate(self):
 			self.process_manager.terminate()
 
@@ -1507,6 +1804,9 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			a live process, the stop button) reaches this from the main thread,
 			where the real kill would freeze the editor for up to 3 seconds.
 			"""
+			if self.batch_active:
+				self.cancel_batch()
+				return
 			pm = self.process_manager
 			if type(pm) == ProcessManager:
 				pm.terminate_async()
@@ -1516,6 +1816,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 	def insert_text(self, edit, text=None):
 		v = self.view
 		if not self.tester:
+			return None
+		if getattr(self.tester, 'batch_active', False):
 			return None
 		expected = v.line(self.delta_input).end()
 		if len(v.sel()) > 1: return
@@ -1534,6 +1836,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 	def insert_cb(self, edit):
 		v = self.view
 		if not self.tester:
+			return
+		if getattr(self.tester, 'batch_active', False):
 			return
 		# Sublime prints "Unable to open clipboard" and returns '' when
 		# another process holds the clipboard; just do nothing then.
@@ -1620,12 +1924,10 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		window = v.window()
 		tester = self.tester
 		test = tester.tests[i]
-		# 'data' carries the current correct answer for the answer view
-		correct_answer = ''
-		if test.correct_answers:
-			correct_answer = next(iter(test.correct_answers))
-		elif test.expected_output:
-			correct_answer = test.expected_output
+		# 'data' carries the answer the answer view opens with; the whole set
+		# travels along so saving an unchanged buffer keeps its siblings.
+		correct_answer = _primary_answer(test)
+		all_answers = _ordered_answers(test)
 		# Two separate tabs: input and expected answer. A dedicated answer
 		# view replaces the old fragile "------ answer ------" separator
 		# line which was easy to delete by accident.
@@ -1653,6 +1955,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			'test_id': i,
 			'test': '',
 			'data': correct_answer,
+			'all_answers': all_answers,
 			'source_view_id': v.id()
 		})
 		window.focus_view(input_view)
@@ -1865,6 +2168,41 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		return checker_config(get_settings().get('run_settings'),
 							  target or self.dbg_file)
 
+	def _prebuild_auxiliary(self):
+		"""Compile the configured checker/interactor on the compile worker.
+
+		`checker_executable()` / `interactor_executable()` used to run on the
+		main thread - the first run with an SPJ compiled g++ inside a
+		post_to_ui callback and froze the editor, and a checker that hung
+		froze it forever (the subprocess call had no timeout). Doing it here,
+		next to the main compile, keeps the UI free; the module caches make
+		the later per-test lookups cheap. Failures are only printed: the run
+		itself must still start, and apply_checker reports the real error.
+		"""
+		settings = get_settings()
+		run_settings = settings.get('run_settings')
+		target = self.dbg_file
+		try:
+			cfg = checker_config(run_settings, target, settings)
+			if cfg:
+				exe, error = checker_executable(cfg)
+				if error:
+					print('[Algorithm Competition Assistant] checker prebuild: %s'
+						  % error)
+		except Exception as e:
+			print('[Algorithm Competition Assistant] checker prebuild failed: %s'
+				  % e)
+		try:
+			cfg = interactor_config(run_settings, target)
+			if cfg:
+				exe, error = interactor_executable(cfg)
+				if error:
+					print('[Algorithm Competition Assistant] interactor prebuild: %s'
+						  % error)
+		except Exception as e:
+			print('[Algorithm Competition Assistant] interactor prebuild failed: %s'
+				  % e)
+
 	def apply_checker(self, test_id, stdout, expected):
 		"""(verdict, message) from a configured checker, or (None, '').
 
@@ -1898,6 +2236,10 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		if tester is None or not tester.tests:
 			sublime.status_message('[Algorithm Competition Assistant] ' + t('benchmark_no_test'))
 			return
+		if getattr(tester, 'proc_run', False) or getattr(
+				tester, 'batch_active', False):
+			sublime.status_message(t('process_already_running'))
+			return
 		index = self.test_index_at_cursor()
 		if index is None or index >= len(tester.tests):
 			index = 0
@@ -1909,10 +2251,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		runs = max(2, min(runs, 50))
 
 		test = tester.tests[index]
-		if test.correct_answers:
-			expected = next(iter(test.correct_answers))
-		else:
-			expected = test.expected_output or ''
+		expected = _primary_answer(test)
 
 		time_limit_ms = None
 		memory_limit_mb = None
@@ -2023,6 +2362,9 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		tester = self.tester
 		if tester is None or not tester.tests:
 			return
+		if getattr(tester, 'batch_active', False):
+			sublime.status_message(t('process_already_running'))
+			return
 		settings = get_settings()
 		try:
 			workers = int(settings.get('parallel_workers', 4) or 4)
@@ -2041,12 +2383,18 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 		cases = []
 		for test in tester.tests:
-			expected = ''
-			if test.correct_answers:
-				expected = next(iter(test.correct_answers))
-			elif test.expected_output:
-				expected = test.expected_output
+			answers = _ordered_answers(test)
+			primary = answers[0] if answers else (test.expected_output or '')
+			# The interactive runner writes the expected answer to a file, so
+			# it needs one text; the normal parallel judge compares against
+			# every accepted answer (core/cph_parallel handles a list).
+			expected = primary if interactive else (answers or [primary])
 			cases.append((test.test_string, expected))
+
+		my_epoch = getattr(self, 'tester_epoch', 0)
+		cancel = threading.Event()
+		tester.begin_batch(cancel)
+		self.change_process_status('RUNNING')
 
 		# Build the checker (if any) BEFORE the workers start: compiling it
 		# from several threads at once would race on the same output file.
@@ -2074,6 +2422,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			if error:
 				sublime.status_message('[Algorithm Competition Assistant] ' + error)
 				self.set_compile_bar(error)
+				tester.finish_batch()
+				self.change_process_status('STOPPED')
 				return
 			if exe and cfg:
 				# One worker: an interactor is normally not reentrant, and a
@@ -2081,21 +2431,60 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				workers = 1
 
 				def case_runner(index, input_text, expected):
-					return interactive_run_case(make_manager, exe, input_text,
-												expected, cfg['time_limit_ms'],
-												cwd=cfg.get('dir'))
+					return interactive_run_case(
+						make_manager, exe, input_text, expected,
+						cfg['time_limit_ms'], cwd=cfg.get('dir'),
+						cancel=cancel,
+						register_kill=tester.add_batch_kill)
 
 		label = 'interactive_running' if interactive else 'parallel_running'
 		self.set_compile_bar(t(label, done=0, total=len(cases)))
+
+		def _progress(done, total, tester=tester, epoch=my_epoch):
+			# A batch that was replaced by a newer Run (or whose panel was
+			# closed, or that the user just stopped) must not repaint a bar
+			# that is gone or claim progress after "stopped".
+			if cancel.is_set():
+				return
+			if tester is not self.tester or epoch != getattr(
+					self, 'tester_epoch', None):
+				return
+			try:
+				if self.view.window() is None:
+					return
+			except Exception:
+				return
+			self.set_compile_bar(t(label, done=done, total=total))
+
 		run_parallel_batch(
 			make_manager, cases, workers=workers,
 			time_limit_ms=time_limit_ms, memory_limit_mb=memory_limit_mb,
 			float_tolerance=settings.get('float_tolerance', 0) or 0,
 			regard_pe_as_ac=bool(settings.get('regard_pe_as_ac', False)),
-			on_done=self.apply_parallel_results,
-			on_progress=lambda done, total: self.set_compile_bar(
-				t(label, done=done, total=total)),
-			judge=checker_hook, case_runner=case_runner)
+			on_done=lambda results, tester=tester, epoch=my_epoch,
+				cancel=cancel: self._finish_parallel_batch(
+					tester, epoch, cancel, results),
+			on_progress=_progress,
+			judge=checker_hook, case_runner=case_runner,
+			cancel=cancel, on_manager=tester.add_batch_manager)
+
+	def _finish_parallel_batch(self, tester, epoch, cancel, results):
+		"""Close a batch out on the main thread; drop results of a dead run."""
+		tester.finish_batch()
+		if tester is not self.tester or epoch != getattr(
+				self, 'tester_epoch', None):
+			return
+		try:
+			self.change_process_status('STOPPED')
+		except Exception:
+			pass
+		self.apply_parallel_results(results, final=not cancel.is_set())
+		if cancel.is_set():
+			try:
+				if self.view.window() is not None:
+					self.set_compile_bar(t('parallel_cancelled'))
+			except Exception:
+				pass
 
 	def store_parallel_result(self, i, result):
 		"""Copy one parallel result onto its Test (same shape as on_stop)."""
@@ -2142,11 +2531,23 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		tester._prog_out_total[i] = len(result.get('stdout') or '')
 		tester.prog_out[i] = result.get('stdout') or ''
 
-	def apply_parallel_results(self, results):
-		"""Write a finished parallel batch into the panel (main thread)."""
+	def apply_parallel_results(self, results, final=True):
+		"""Write a finished parallel batch into the panel (main thread).
+
+		`final=False` is a user stop: the status/verdicts that landed are
+		shown, but "parallel done" and the practice statistics are not
+		pretended for a run that never finished.
+		"""
 		v = self.view
 		tester = self.tester
-		if tester is None or not results:
+		if tester is None or not results or not any(results):
+			# A batch stopped before its first case produced nothing to draw;
+			# rewriting the panel would only erase what is already on screen.
+			return
+		try:
+			if v.window() is None:
+				return
+		except Exception:
 			return
 		tests = tester.tests
 		blocks = []
@@ -2178,9 +2579,13 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		v.sel().add(Region(v.size()))
 		self.set_compile_bar(t('parallel_done', total=len(tests)))
 		self.update_configs()
-		self.record_stats()
-		sublime.status_message('[Algorithm Competition Assistant] '
-							   + t('parallel_done', total=len(tests)))
+		if final:
+			self.record_stats()
+			sublime.status_message('[Algorithm Competition Assistant] '
+								   + t('parallel_done', total=len(tests)))
+		else:
+			sublime.status_message('[Algorithm Competition Assistant] '
+								   + t('parallel_cancelled'))
 
 	def is_skippable(self, i):
 		"""True when a test must not be executed in the current chain.
@@ -2305,6 +2710,30 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 	def get_detail_view_name(self, i):
 		return path.split(self.dbg_file)[1] + ' - test %d detail' % (i + 1)
 
+	def _detail_source(self):
+		return self.dbg_file or ''
+
+	def _detail_view_belongs(self, view):
+		"""True only for a detail tab opened for THIS source file.
+
+		The tab name is '<basename> - test N detail', which is not unique:
+		two run panels in one window (A.cpp and B.cpp, or two main.cpp files
+		in different folders) produced identically named tabs, and the first
+		match was reused/closed for the wrong file.
+		"""
+		try:
+			return (view.settings().get('cph_detail_source') or '') == \
+				self._detail_source()
+		except Exception:
+			return False
+
+	def _mark_detail_view(self, view, i):
+		try:
+			view.settings().set('cph_detail_source', self._detail_source())
+			view.settings().set('cph_detail_index', i)
+		except Exception:
+			pass
+
 	@staticmethod
 	def _clean_output(s):
 		"""Normalize a program output for display: kill lone \r characters
@@ -2394,18 +2823,30 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		lines.append('')
 		end_block(rec)
 
-		expected = ''
-		if test.correct_answers:
-			expected = next(iter(test.correct_answers))
-		elif test.expected_output:
-			expected = test.expected_output
-		expected = self._clean_output(expected)
 		stdout = self._clean_output(getattr(test, 'stdout', '') or '')
+		float_tolerance = get_settings().get('float_tolerance', 0) or 0
+		# Display the answer the output actually matches when there are
+		# several accepted ones; otherwise the stable primary. This keeps a
+		# checker/tolerance AC from pairing the output with an arbitrary
+		# sibling answer (and the selection deterministic across restarts).
+		matched = _matching_answer(test, stdout, float_tolerance)
+		expected = matched if matched is not None else _primary_answer(test)
+		expected = self._clean_output(expected)
 
 		exp_meta = '%d %s / %d %s' % (
 			expected.count('\n') + 1 if expected else 0, t('detail_lines'),
 			len((expected or '').encode('utf-8')), t('detail_bytes'))
-		same = outputs_equal(expected, stdout)
+		# The tint follows the verdict when there is one: a checker (SPJ) or
+		# float-tolerance AC is accepted even when its bytes differ from the
+		# stored sample. Duck-typed test objects without a verdict keep the
+		# old textual comparison (the detail unit tests rely on it).
+		verdict_name = None
+		if isinstance(getattr(test, 'verdict', None), dict):
+			verdict_name = test.verdict.get('name')
+		if verdict_name is not None:
+			same = (verdict_name == 'AC')
+		else:
+			same = outputs_equal(expected, stdout)
 		rec = begin_block('expected', t('expected_output'), exp_meta,
 			self.detail_expected(test), kind='test-accept')
 		add_body(expected.rstrip('\n') if expected.strip() else t('detail_empty'))
@@ -2454,6 +2895,11 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			ops, total = build_line_diff(expected, stdout)
 			if ops is None:
 				lines.append(t('diff_all_match', n=total))
+			elif same:
+				# Accepted by the checker / float tolerance, yet the text does
+				# not equal the sample: printing the red/green diff under a
+				# green badge reads as "the page disagrees with itself".
+				lines.append(t('diff_accepted_other'))
 			else:
 				lines.append(t('diff_lines_differ', n=len(ops), total=total))
 				lines.append('')
@@ -2590,7 +3036,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		name = self.get_detail_view_name(i)
 		detail_view = None
 		for wv in window.views():
-			if wv.name() == name:
+			if wv.name() == name and self._detail_view_belongs(wv):
 				detail_view = wv
 				break
 		if detail_view is None:
@@ -2625,6 +3071,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		# like the run panel's cards - so the copy/select behaviour the plain
 		# view was chosen for is exactly preserved, and setting it to false
 		# restores today's view with no colour, no bar and no cards.
+		self._mark_detail_view(detail_view, i)
 		detail_view.run_command('cph_test_detail_view',
 		                        self.detail_view_args(i, test))
 		window.focus_view(detail_view)
@@ -2649,10 +3096,17 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		return args
 
 	def detail_expected(self, test):
-		"""The raw expected answer text, for the detail's copy button."""
-		if test.correct_answers:
-			return next(iter(test.correct_answers))
-		return test.expected_output or ''
+		"""The raw expected answer text, for the detail's copy button.
+
+		When the run matched one of several accepted answers, copy that one;
+		otherwise copy the stable primary (not an arbitrary set member).
+		"""
+		tolerance = get_settings().get('float_tolerance', 0) or 0
+		matched = _matching_answer(test, getattr(test, 'stdout', '') or '',
+								   tolerance)
+		if matched is not None:
+			return matched
+		return _primary_answer(test)
 
 	def detail_header_html(self, i, test):
 		"""The run card's own row, on top of the detail page.
@@ -2730,11 +3184,13 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		self.detail_open.add(i)
 
 	def close_stale_detail_views(self, from_index):
-		"""Close detail tabs of tests that shifted down (index >= from_index)."""
+		"""Close THIS file's detail tabs whose test index shifted down."""
 		window = self.view.window()
 		if window is None:
 			return
 		for wv in window.views():
+			if not self._detail_view_belongs(wv):
+				continue
 			m = re.search(r'- test (\d+) detail$', wv.name() or '')
 			if m and int(m.group(1)) - 1 >= from_index:
 				try:
@@ -2755,7 +3211,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			return
 		name = self.get_detail_view_name(i)
 		for wv in window.views():
-			if wv.name() == name:
+			if wv.name() == name and self._detail_view_belongs(wv):
 				wv.close()
 				return
 
@@ -2798,8 +3254,15 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 		self.memorize_tests()
 
-	def set_correct_answer(self, data=None, id=None):
-		"""Set the correct answer for a test. Re-judges existing output."""
+	def set_correct_answer(self, data=None, id=None, answers=None,
+						   original=None):
+		"""Set the correct answer for a test. Re-judges existing output.
+
+		`answers`/`original` come from the answer editor: saving an unchanged
+		buffer keeps every other accepted answer (see `_answers_after_edit`).
+		A manual "set answer" dialog passes neither and therefore replaces the
+		set, which is what that command means.
+		"""
 		if id is None or data is None:
 			return
 		tester = self.tester
@@ -2807,11 +3270,13 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			sublime.status_message(t('test_gone'))
 			return
 		test = tester.tests[id]
-		# Clear and set new correct answer
-		test.correct_answers = set()
+		# Read the CURRENT set, not the snapshot the editor opened with: an
+		# accept clicked while the answer tab was open must survive an
+		# unchanged save. `original` distinguishes "saved as opened" from a
+		# real edit; an edit still replaces the set.
+		test.correct_answers = _answers_after_edit(
+			set(test.correct_answers or ()), original, data)
 		answer = data.strip()
-		if answer:
-			test.add_correct_answer(answer)
 		test.set_expected_output(answer)
 
 		# Re-judge with the new answer if this test already has output
@@ -2820,14 +3285,14 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			if out and str(getattr(test, 'rtcode', '0')) == '0':
 				pm = tester.process_manager
 				float_tolerance = get_settings().get('float_tolerance', 0) or 0
-				verdict = get_verdict_by_code(
+				verdict = get_verdict_for_answers(
 					rtcode=0,
 					runtime=int(test.runtime) if test.runtime not in ('-', None) else 0,
 					time_limit_ms=pm.get_time_limit_ms() if hasattr(pm, 'get_time_limit_ms') else None,
 					memory_limit_mb=pm.get_memory_limit_mb() if hasattr(pm, 'get_memory_limit_mb') else None,
 					stderr=test.stderr,
 					stdout=out,
-					expected_output=answer,
+					expected_outputs=_ordered_answers(test) or [answer],
 					ignore_error=True,
 					regard_pe_as_ac=bool(get_settings().get('regard_pe_as_ac', False)),
 					float_tolerance=float_tolerance
@@ -3251,7 +3716,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		if not self.out_region_set:
 			self.out_region_set = True
 
-	def on_stop(self, rtcode, runtime, crash_line=None, epoch=None):
+	def on_stop(self, rtcode, runtime, crash_line=None, epoch=None,
+				checker=None):
 		v = self.view
 		# Drop callbacks from a stale listener thread whose process was
 		# killed by a re-run: they would corrupt the new tester's state
@@ -3297,11 +3763,12 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		if getattr(pm, 'separate_stderr', False) and hasattr(pm, 'get_stderr'):
 			stderr = pm.get_stderr()
 
-		expected_output = ''
-		if self.tester.tests[test_id].correct_answers:
-			expected_output = next(iter(self.tester.tests[test_id].correct_answers))
-		elif self.tester.tests[test_id].expected_output:
-			expected_output = self.tester.tests[test_id].expected_output
+		# Every stored accepted answer, not one arbitrary set member: the
+		# accept button adds a newly correct output to the set, and a verdict
+		# that only knew about one of them reported the other as WA.
+		answers = _ordered_answers(self.tester.tests[test_id])
+		expected_output = answers[0] if answers else (
+			self.tester.tests[test_id].expected_output or '')
 
 		# A crash location recovered by the gdb replay above. Set before the
 		# verdict is chosen so the RE branch below can prefer it over the
@@ -3333,14 +3800,14 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			# stopped manually by the user -> not a real judge result
 			verdict = get_verdict('skipped')
 		else:
-			verdict = get_verdict_by_code(
+			verdict = get_verdict_for_answers(
 				rtcode=int(rtcode) if rtcode is not None else 0,
 				runtime=runtime,
 				time_limit_ms=time_limit_ms,
 				memory_limit_mb=memory_limit_mb,
 				stderr=stderr,
 				stdout=_outp,
-				expected_output=expected_output,
+				expected_outputs=answers or [expected_output],
 				ignore_error=True,
 				# Many OJ treat PE as AC; user selectable (default: strict)
 				regard_pe_as_ac=bool(get_settings().get('regard_pe_as_ac', False)),
@@ -3428,7 +3895,14 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		# token comparison - and it is the only way to judge a problem whose
 		# answer is "any valid construction". Runs last so the RE/TLE hints
 		# above are kept and the checker message is appended to them.
-		checker_verdict, checker_message = self.apply_checker(test_id, _outp, expected_output)
+		if checker is None:
+			# Fallback for callers that do not pre-compute it (the unit
+			# tests, and any duck-typed tester): the normal serial path
+			# judges on the pump thread and passes the tuple in.
+			checker_verdict, checker_message = self.apply_checker(
+				test_id, _outp, expected_output)
+		else:
+			checker_verdict, checker_message = checker
 		if checker_verdict is not None:
 			self.tester.tests[test_id].set_verdict(checker_verdict)
 		if checker_message:
@@ -3497,10 +3971,15 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		#   run all    - always continue
 		#   run failed - continue, skipping tests already marked AC
 		stop_on_first = get_settings().get('stop_on_first_failure', True)
-		ok = str(rtcode) == '0'
-		cont = (ok or (not stop_on_first)
-				or getattr(tester, 'run_all', False)
-				or getattr(tester, 'run_failed', False))
+		# The checker may have replaced the local verdict, so read what the
+		# card actually carries now (an SPJ that accepts the output must let
+		# the chain continue; one that rejects it must be able to stop it).
+		final_verdict = getattr(self.tester.tests[test_id], 'verdict',
+								None) or verdict
+		cont = chain_continues(
+			final_verdict, stop_on_first=stop_on_first,
+			run_all=getattr(tester, 'run_all', False),
+			run_failed=getattr(tester, 'run_failed', False))
 		if tester.running_new and cont and self.next_runnable_index() is not None:
 			self.update_configs(update_last=True)
 			sublime.set_timeout(self.advance_chain, 10)
@@ -3530,8 +4009,9 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			else:
 				name = self.get_detail_view_name(test_id)
 				for wv in window.views():
-					if wv.name() == name:
+					if wv.name() == name and self._detail_view_belongs(wv):
 						try:
+							self._mark_detail_view(wv, test_id)
 							wv.run_command('cph_test_detail_view',
 							               self.detail_view_args(test_id,
 							                                     tester.tests[test_id]))
@@ -4108,6 +4588,10 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			except Exception as e:
 				print('[Algorithm Competition Assistant] compile exception: %s' % e)
 				cmp_data = (1, '[Algorithm Competition Assistant] compile failed: %s' % e)
+			if cmp_data is None or (cmp_data and cmp_data[0] == 0):
+				# Build the optional checker / interactor here, on this worker,
+				# not inside the per-test UI callback.
+				self._prebuild_auxiliary()
 			# g++ was the right thing to run on Sublime's one shared async
 			# worker; the panel is not. Drawing the compile chip, building the
 			# Tester and starting the chain all touch views, and doing that
@@ -4127,6 +4611,12 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		batch delete can do both exactly once (delete_tests)."""
 		v = self.view
 		tester = self.tester
+		if getattr(tester, 'proc_run', False) or getattr(
+				tester, 'batch_active', False):
+			# The verdicts/indices are still being produced; deleting a card
+			# shifts them under the listener and the batch result assignment.
+			sublime.status_message(t('stop_before_delete'))
+			return
 		if not tester.tests[id].fold:
 			self.toggle_fold(id)
 
@@ -4174,7 +4664,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		v = self.view
 		tester = self.tester
 
-		if tester.proc_run:
+		if tester.proc_run or getattr(tester, 'batch_active', False):
 			sublime.status_message(t('stop_before_delete'))
 			return
 
@@ -4206,7 +4696,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		tester = self.tester
 
 		err = True
-		if tester and tester.proc_run:
+		if tester and tester.proc_run and not getattr(
+				tester, 'batch_active', False):
 			err = False
 			forb_before = self.delta_input
 			forb_after = view.line(self.delta_input).b
@@ -4257,6 +4748,10 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 	def swap_tests(self, edit, dir=-1):
 		tester = self.tester
 		view = self.view
+		if getattr(tester, 'proc_run', False) or getattr(
+				tester, 'batch_active', False):
+			sublime.status_message(t('process_already_running'))
+			return
 		selected = []
 		unfold = []
 
@@ -4324,7 +4819,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			load_session=False, region=None, frame_id=None, data=None, id=None, dir=1,
 			time_limit_ms=None, memory_limit_mb=None,
 			run_all=False, run_failed=False, force_compile=False, part=None,
-			parallel=False):
+			parallel=False, answers=None, original=None):
 
 		v = self.view
 
@@ -4438,7 +4933,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			self.set_test_input(id=id, test=data)
 
 		elif action == 'set_correct_answer':
-			self.set_correct_answer(id=id, data=data)
+			self.set_correct_answer(id=id, data=data,
+									answers=answers, original=original)
 
 		elif action == 'delete_test':
 			self.delete_test(edit, id)

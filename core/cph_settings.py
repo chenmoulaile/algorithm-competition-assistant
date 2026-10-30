@@ -13,6 +13,8 @@ Algorithm Competition Assistant - 设置管理 + 测试数据存储路径解析
 import sublime
 from os import path
 import os
+import tempfile
+import threading
 
 from .cph_i18n import t
 
@@ -61,6 +63,17 @@ tests_folder_name_default = 'tests'
 
 settings = {}
 run_supported_exts = set()
+
+#: One lock for every read/merge/write of the tests store. The run panel,
+#: the Companion HTTP thread, the importer and the stress worker all write the
+#: same `<name>__tests` files; without this a merge could read a half-written
+#: file, and two writers could interleave into one truncated document.
+_tests_lock = threading.RLock()
+
+
+def tests_lock():
+	"""Re-entrant lock covering load_all_tests()/save_tests()."""
+	return _tests_lock
 
 
 def get_settings():
@@ -666,33 +679,34 @@ def load_all_tests(file):
 	seen = set()
 	merged = []
 
-	for p in all_paths:
-		if not os.path.exists(p):
-			continue
-		try:
-			with open(p, 'r', encoding='utf-8') as f:
-				content = f.read().strip()
-			if not content:
+	with _tests_lock:
+		for p in all_paths:
+			if not os.path.exists(p):
 				continue
-			data = sublime.decode_value(content)
-			if not isinstance(data, list):
-				continue
-			for test in data:
-				# Skip the empty placeholder here as well as in save_tests().
-				# Older versions wrote it, and it is enough for ONE stale copy
-				# to live in one of the other candidate files for the entry to
-				# be merged back on every reload - which is why an empty
-				# sample could not be deleted for good.
-				if not is_meaningful_test(test):
+			try:
+				with open(p, 'r', encoding='utf-8') as f:
+					content = f.read().strip()
+				if not content:
 					continue
-				key = (test.get('test', ''),
-					   tuple(sorted(test.get('correct_answers', []))))
-				if key in seen:
+				data = sublime.decode_value(content)
+				if not isinstance(data, list):
 					continue
-				seen.add(key)
-				merged.append(test)
-		except Exception as e:
-			_note_io_error('read', p, e)
+				for test in data:
+					# Skip the empty placeholder here as well as in save_tests().
+					# Older versions wrote it, and it is enough for ONE stale copy
+					# to live in one of the other candidate files for the entry to
+					# be merged back on every reload - which is why an empty
+					# sample could not be deleted for good.
+					if not is_meaningful_test(test):
+						continue
+					key = (test.get('test', ''),
+						   tuple(sorted(test.get('correct_answers', []))))
+					if key in seen:
+						continue
+					seen.add(key)
+					merged.append(test)
+			except Exception as e:
+				_note_io_error('read', p, e)
 
 	return merged
 
@@ -750,41 +764,74 @@ def save_tests_async(file, tests, pretty=True, on_done=None):
 	thread.start()
 
 
+def _write_tests_atomic(target, payload):
+	"""Replace one tests file atomically.
+
+	`open(path, 'w')` truncates before the new bytes exist: a crash, a full
+	disk or a concurrent reader could see an empty/partial document and the
+	next load would silently drop the tests it could not parse. A temporary
+	file in the same directory + os.replace() makes readers see either the
+	old complete file or the new complete file.
+	"""
+	folder = os.path.dirname(target) or '.'
+	fd, tmp = tempfile.mkstemp(prefix='.cph-tests-', suffix='.tmp', dir=folder)
+	try:
+		with os.fdopen(fd, 'w', encoding='utf-8') as f:
+			f.write(payload)
+			f.flush()
+			try:
+				os.fsync(f.fileno())
+			except Exception:
+				pass
+		os.replace(tmp, target)
+		tmp = None
+	finally:
+		if tmp is not None:
+			try:
+				os.remove(tmp)
+			except Exception:
+				pass
+
+
 def _save_tests_impl(file, tests, pretty=True):
-	_last_io_error.clear()
 	if not file:
 		return False
 
 	# Never persist an empty placeholder (see is_meaningful_test).
 	tests = [t for t in (tests or []) if is_meaningful_test(t)]
 
-	# Same choice the limits sidecar is keyed off, so the two always travel
-	# together (see primary_tests_path()).
-	target_path = primary_tests_path(file, create=True)
+	with _tests_lock:
+		_last_io_error.clear()
+		# Same choice the limits sidecar is keyed off, so the two always travel
+		# together (see primary_tests_path()).
+		target_path = primary_tests_path(file, create=True)
 
-	if target_path is None:
-		_note_io_error('write', None, 'no writable tests directory for this file')
-		return False
+		if target_path is None:
+			_note_io_error('write', None,
+						   'no writable tests directory for this file')
+			return False
 
-	# load_all_tests() merges EVERY candidate file, so writing only one of
-	# them is not symmetric: a test the user deleted came straight back from
-	# a stale copy in another one. They all belong to the same source file
-	# (the two storage layouts plus cph-ng's tests/<name>.json), so they are
-	# written together. Files that do not exist yet are left alone - only
-	# the primary target is ever created.
-	targets = [target_path]
-	for other in get_tests_paths(file):
-		if other and other != target_path and os.path.exists(other):
-			targets.append(other)
+		# load_all_tests() merges EVERY candidate file, so writing only one of
+		# them is not symmetric: a test the user deleted came straight back
+		# from a stale copy in another one. They all belong to the same source
+		# file (the two storage layouts plus cph-ng's tests/<name>.json), so
+		# they are written together. Files that do not exist yet are left
+		# alone - only the primary target is ever created.
+		targets = [target_path]
+		for other in get_tests_paths(file):
+			if other and other != target_path and os.path.exists(other):
+				targets.append(other)
 
-	payload = sublime.encode_value(tests, pretty)
+		payload = sublime.encode_value(tests, pretty)
 
-	ok = False
-	for path_ in targets:
-		try:
-			with open(path_, 'w', encoding='utf-8') as f:
-				f.write(payload)
-			ok = True
-		except Exception as e:
-			_note_io_error('write', path_, e)
-	return ok
+		ok = True
+		for path_ in targets:
+			try:
+				_write_tests_atomic(path_, payload)
+			except Exception as e:
+				# A stale legacy copy left behind would resurrect the tests it
+				# still holds on the next load, so this is not reported as a
+				# success just because another copy was writable.
+				ok = False
+				_note_io_error('write', path_, e)
+		return ok

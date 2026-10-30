@@ -4,7 +4,7 @@ import os
 import sublime
 
 # Kept in sync with messages.json by tests/check_messages.py.
-VERSION = '3.0.6'
+VERSION = '3.0.7'
 
 
 def plugin_loaded():

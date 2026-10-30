@@ -17,7 +17,8 @@ import os
 import re
 import glob
 
-from .core.cph_settings import save_tests, load_all_tests, notify_io_error
+from .core.cph_settings import (save_tests, load_all_tests, notify_io_error,
+								tests_lock)
 from .core.cph_tests_merge import merge_tests, merge_into_file
 from .core.cph_i18n import t
 
@@ -392,16 +393,20 @@ class CphImportTestsCommand(sublime_plugin.TextCommand):
         if not src_file:
             return
 
-        if append:
-            # Shared policy (input key, answers are only filled in, never
-            # overwritten) - previously imports used a different key than
-            # the Companion path, so the same input could end up twice.
-            merged, conflicts = merge_tests(load_all_tests(src_file), tests)
-            tests = merged
-            if conflicts:
-                sublime.status_message(t('answer_conflict_kept'))
+        saved = False
+        conflicts = []
+        with tests_lock():
+            if append:
+                # Shared policy (input key, answers are only filled in, never
+                # overwritten) - previously imports used a different key than
+                # the Companion path, so the same input could end up twice.
+                merged, conflicts = merge_tests(load_all_tests(src_file), tests)
+                tests = merged
+            saved = save_tests(src_file, tests)
+        if conflicts:
+            sublime.status_message(t('answer_conflict_kept'))
 
-        if save_tests(src_file, tests):
+        if saved:
             sublime.status_message(t('imported_tests', count=len(tests),
                                      source=os.path.basename(source_path)))
             # 正常 Run 流程: 复用/创建 -run 视图并从磁盘重新加载样例

@@ -22,6 +22,11 @@ class CphTestEditCommand(sublime_plugin.TextCommand):
 		self.mode = 'input'
 		self.test_id = None
 		self.source_view_id = None
+		# The answer editor shows one answer, but the test may keep several
+		# accepted answers; both travel back on save so an unchanged buffer
+		# does not silently drop the others.
+		self._all_answers = []
+		self._original_answer = ''
 		self.phantoms = PhantomSet(view, 'test-edit-phantoms')
 
 	# ---------- sibling view helpers ----------
@@ -110,10 +115,28 @@ class CphTestEditCommand(sublime_plugin.TextCommand):
 					'id': self.test_id
 				})
 			if answer is not None:
+				# Saving from the INPUT tab also pushes the sibling answer
+				# tab's content. The original answer / full set live on that
+				# sibling (and in its settings, so an input-tab save can see
+				# them) - without this, saving from the input tab looked like
+				# a fresh "set answer" and dropped every alternative.
+				answer_original = self._original_answer
+				answer_set = self._all_answers
+				if self.mode == 'input' and sibling is not None:
+					try:
+						answer_original = sibling.settings().get(
+							'cph_edit_original_answer', '') or ''
+						answer_set = sibling.settings().get(
+							'cph_edit_all_answers', []) or []
+					except Exception:
+						answer_original = ''
+						answer_set = []
 				source.run_command('cph_test_manager', {
 					'action': 'set_correct_answer',
 					'data': answer,
-					'id': self.test_id
+					'id': self.test_id,
+					'answers': answer_set,
+					'original': answer_original,
 				})
 
 			# close both edit views
@@ -163,11 +186,23 @@ class CphTestEditCommand(sublime_plugin.TextCommand):
 	# ---------- init ----------
 
 	def init(self, edit, mode='input', test='', test_id=None,
-			 source_view_id=None, correct_answer=''):
+			 source_view_id=None, correct_answer='', all_answers=None):
 		v = self.view
 		self.mode = mode if mode in ('input', 'answer') else 'input'
 		self.test_id = test_id
 		self.source_view_id = source_view_id
+		self._all_answers = [str(a) for a in (all_answers or [])]
+		self._original_answer = correct_answer or ''
+		# A save from the sibling input tab needs the answer tab's original
+		# value and full set; a TextCommand instance is not shared between
+		# the two views, so mirror them into the answer view's settings.
+		try:
+			v.settings().set('cph_edit_original_answer',
+							 self._original_answer)
+			v.settings().set('cph_edit_all_answers',
+							 list(self._all_answers))
+		except Exception:
+			pass
 
 		v.set_scratch(True)
 		suffix = ' -edit' if self.mode == 'input' else ' -answer'
@@ -210,14 +245,17 @@ class CphTestEditCommand(sublime_plugin.TextCommand):
 			view.set_read_only(False)
 
 	def run(self, edit, action=None, mode='input', test='', test_id=None,
-			source_view_id=None, data=None, region=None, text=None):
+			source_view_id=None, data=None, region=None, text=None,
+			all_answers=None):
 		v = self.view
 		v.set_read_only(False)
 
 		if action == 'init':
 			correct_answer = data if data else ''
 			self.init(edit, mode=mode, test=test, test_id=test_id,
-					  source_view_id=source_view_id, correct_answer=correct_answer)
+					  source_view_id=source_view_id,
+					  correct_answer=correct_answer,
+					  all_answers=all_answers)
 
 		elif action == 'replace':
 			v.replace(edit, Region(region[0], region[1]), text or '')

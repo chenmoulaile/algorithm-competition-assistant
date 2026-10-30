@@ -344,6 +344,69 @@ def get_verdict_by_code(rtcode, runtime, time_limit_ms, memory_limit_mb,
     return get_verdict('accepted')
 
 
+#: Which verdict wins when a test point carries more than one accepted answer.
+#: A run that matches ANY stored answer is accepted; an exact match (AC) beats
+#: a formatting-only match (PE), and a failed comparison ranks last.
+_ANSWER_VERDICT_RANK = {
+    'AC': 3,
+    'PE': 2,
+}
+
+
+def get_verdict_for_answers(rtcode, runtime, time_limit_ms, memory_limit_mb,
+                            stderr, stdout, expected_outputs,
+                            ignore_error=True, ole_size=None,
+                            regard_pe_as_ac=False, memory_used_mb=None,
+                            float_tolerance=0):
+    """Judge a run against every accepted answer of one test point.
+
+    `Test.correct_answers` is a set: the user can accept more than one
+    output for the same sample (the card's accept button adds instead of
+    replacing), and a hand-edited tests file may carry several. Judging
+    against one arbitrary set member made the verdict depend on hash order
+    and reported an explicitly accepted output as WA. This wrapper runs the
+    normal single-answer rule for each stored answer and keeps the best
+    verdict, so AC wins whenever the output matches any of them.
+    """
+    if isinstance(expected_outputs, str):
+        answers = [expected_outputs]
+    else:
+        try:
+            answers = list(expected_outputs or [])
+        except TypeError:
+            answers = [expected_outputs]
+    answers = ['' if answer is None else
+               (answer if isinstance(answer, str) else str(answer))
+               for answer in answers]
+    # A blank answer means "no answer stored" to the single-answer rule;
+    # skip blanks here only while a real one exists, so an answer-only test
+    # still gets the honest UKE instead of a fake WA.
+    real = [a for a in answers if isinstance(a, str) and a.strip()]
+    if real:
+        answers = real
+    elif not answers:
+        answers = ['']
+
+    best = None
+    for answer in answers:
+        verdict = get_verdict_by_code(
+            rtcode=rtcode, runtime=runtime, time_limit_ms=time_limit_ms,
+            memory_limit_mb=memory_limit_mb, stderr=stderr, stdout=stdout,
+            expected_output=answer, ignore_error=ignore_error,
+            ole_size=ole_size, regard_pe_as_ac=regard_pe_as_ac,
+            memory_used_mb=memory_used_mb,
+            float_tolerance=float_tolerance)
+        if best is None:
+            best = verdict
+        else:
+            if _ANSWER_VERDICT_RANK.get(verdict['name'], 0) > \
+                    _ANSWER_VERDICT_RANK.get(best['name'], 0):
+                best = verdict
+        if best['name'] == 'AC':
+            break
+    return best if best is not None else get_verdict('unknown_error')
+
+
 # ---------------------------------------------------------------------------
 # Runtime error detection
 #

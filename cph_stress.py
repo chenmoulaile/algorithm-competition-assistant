@@ -16,7 +16,7 @@ import time
 from .core.cph_settings import (get_settings, load_all_tests, save_tests,
                                 get_stress_files, set_stress_files,
                                 usable_program, last_io_error, get_problem_io,
-                                PACKAGE_NAME, settings_file)
+                                PACKAGE_NAME, settings_file, tests_lock)
 from .core.cph_stats import record_stress
 from .core.cph_tests_merge import merge_tests
 from .core.cph_state import (register_stress_view, unregister_stress_view,
@@ -955,6 +955,14 @@ def _kill_tree(proc):
         return
     if pid is None:
         return
+    # Stop can race with the round finishing. On Windows taskkill works by
+    # PID, and a reaped PID may already belong to another process; the same
+    # guard is load-bearing in ProcessManager.terminate().
+    try:
+        if proc.poll() is not None:
+            return
+    except Exception:
+        pass
     if sublime.platform() == 'windows':
         try:
             killer = subprocess.Popen(
@@ -971,15 +979,60 @@ def _kill_tree(proc):
         pass
 
 
-def _drain(stream, sink):
+def _capture_limit():
+    """Bytes one stress program's stream may buffer (0/unset -> 64 MB).
+
+    The normal run path clamps at max_output_bytes, but the stress loop used
+    to append every chunk forever: a generator or solution in a print loop
+    could exhaust the plugin host's memory inside its own time limit. The
+    cap is larger when the setting is 0 ("unlimited") because a stress run
+    still needs a bound; it is about memory safety, not judging.
+    """
+    try:
+        limit = int(get_settings().get('max_output_bytes', 8388608) or 0)
+    except (TypeError, ValueError):
+        limit = 8388608
+    if limit <= 0:
+        limit = 64 * 1024 * 1024
+    return limit
+
+
+def _drain(stream, sink, sess=None, limit=None):
+    total = 0
+    capped = False
     try:
         while True:
             chunk = stream.read(8192)
             if not chunk:
                 break
+            total += len(chunk)
+            if limit and total > limit:
+                # Keep draining the pipe (the program must not block on a full
+                # buffer), but stop growing the list. The round is abandoned
+                # before its truncated bytes are compared; see
+                # _capture_truncated().
+                capped = True
+                continue
             sink.append(chunk)
     except Exception:
         pass
+    finally:
+        if capped and sess is not None:
+            sess['capture_truncated'] = True
+
+
+def _capture_truncated(sess):
+    """Pop the per-round truncation flag and tell the user why we stopped."""
+    if sess is None:
+        return False
+    if not sess.pop('capture_truncated', False):
+        return False
+    limit = _capture_limit()
+    sublime.set_timeout(
+        lambda: _append_stress(
+            sess, '\n[Algorithm Competition Assistant] ' + t(
+                'stress_output_too_large', limit=limit) + '\n'), 0)
+    return True
 
 
 def _feed(proc, data):
@@ -995,7 +1048,7 @@ def _feed(proc, data):
             pass
 
 
-def _communicate_abortable(proc, data, timeout, abort):
+def _communicate_abortable(proc, data, timeout, abort, sess=None):
     """Read a program's output while staying able to kill it early.
 
     Popen.communicate(timeout) cannot do this: it kills the process itself as
@@ -1007,13 +1060,16 @@ def _communicate_abortable(proc, data, timeout, abort):
     out_parts = []
     err_parts = []
     threads = []
+    limit = _capture_limit()
     if proc.stdout is not None:
-        th = threading.Thread(target=_drain, args=(proc.stdout, out_parts))
+        th = threading.Thread(target=_drain,
+                              args=(proc.stdout, out_parts, sess, limit))
         th.daemon = True
         th.start()
         threads.append(th)
     if proc.stderr is not None:
-        th = threading.Thread(target=_drain, args=(proc.stderr, err_parts))
+        th = threading.Thread(target=_drain,
+                              args=(proc.stderr, err_parts, sess, limit))
         th.daemon = True
         th.start()
         threads.append(th)
@@ -1085,7 +1141,7 @@ def _popen_capture(cmd, cwd, input_text=None, shell=False, timeout=30, env=None,
         _track_proc(sess, proc)
     data = input_text.encode('utf-8', 'replace') if isinstance(input_text, str) else input_text
     try:
-        out, err = _communicate_abortable(proc, data, timeout, abort)
+        out, err = _communicate_abortable(proc, data, timeout, abort, sess=sess)
     finally:
         if sess is not None:
             sess['current_proc'] = None
@@ -1401,6 +1457,8 @@ def _run_stress_loop(sess):
                 gen_argv or gen_file, '', cwd=gen_cwd,
                 time_limit=generator_limit,
                 env={'CPH_SEED': str(seed)}, sess=sess)
+            if _capture_truncated(sess):
+                break
             if gen_tle:
                 gen_timeouts += 1
                 sublime.set_timeout(
@@ -1422,6 +1480,8 @@ def _run_stress_loop(sess):
 
             ret1, user_out, user_err, tle1 = _run_program(
                 user_argv or user_file, inp, cwd=user_cwd, time_limit=time_limit, sess=sess)
+            if _capture_truncated(sess):
+                break
             if tle1:
                 sublime.set_timeout(
                     lambda r=round_count: _append_stress(sess, 
@@ -1459,6 +1519,8 @@ def _run_stress_loop(sess):
 
             ret2, std_out, std_err, tle2 = _run_program(
                 std_argv or std_file, inp, cwd=std_cwd, time_limit=time_limit, sess=sess)
+            if _capture_truncated(sess):
+                break
             if tle2:
                 sublime.set_timeout(
                     lambda r=round_count: _append_stress(sess, 
@@ -1651,13 +1713,15 @@ def _save_counterexample(sess, inp, answer, crash=False):
             # Say why nothing was saved instead of failing silently.
             return '\n[Algorithm Competition Assistant] ' + \
                 t('stress_counterexample_too_big', size=size, limit=limit) + '\n'
-        merged, _conflicts = merge_tests(load_all_tests(user_file), [{
-            'test': inp,
-            'correct_answers': [answer] if answer else [],
-            # Keep the generator seed with the counterexample so
-            # 'Stress: replay last seed' can reproduce it exactly.
-            'seed': sess.get('current_seed')}])
-        if save_tests(user_file, merged):
+        with tests_lock():
+            merged, _conflicts = merge_tests(load_all_tests(user_file), [{
+                'test': inp,
+                'correct_answers': [answer] if answer else [],
+                # Keep the generator seed with the counterexample so
+                # 'Stress: replay last seed' can reproduce it exactly.
+                'seed': sess.get('current_seed')}])
+            saved = save_tests(user_file, merged)
+        if saved:
             if crash and not answer:
                 # A crashed program has no expected output. Storing its partial
                 # stdout would make every later run "wrong" against a

@@ -624,6 +624,15 @@ STRINGS = {
         'en': 'this problem\'s run panel is gone (it was closed); run the source '
               'again to get it back',
     },
+    'run_failed': {
+        'zh': '无法启动程序: {error}（检查 run_cmd 与编译产物；强制重编译可清掉缓存）',
+        'en': 'could not start the program: {error} (check run_cmd and the built '
+              'artifact; Force Recompile clears the cache)',
+    },
+    'parallel_cancelled': {
+        'zh': '并行评测已停止',
+        'en': 'parallel run stopped',
+    },
     'stress_running': {
         'zh': '对拍进行中...',
         'en': 'Stress testing...',
@@ -681,6 +690,13 @@ STRINGS = {
     'stress_generator_failed': {
         'zh': '生成器运行失败（第 {round} 轮，退出码 {code}）',
         'en': 'generator failed at round {round} (exit code {code})',
+    },
+    'stress_output_too_large': {
+        'zh': '程序输出超过 {limit} 字节的上限，已停止对拍；'
+              '截断后的输出不能拿来比较（会误报差异），可把 max_output_bytes 调大',
+        'en': 'output exceeded the {limit}-byte cap, stress run stopped; '
+              'comparing a truncated stream would report fake differences. '
+              'Raise max_output_bytes if this is legitimate',
     },
     'stress_cannot_run': {
         'zh': '无法运行 {program}: {reason}',
@@ -908,6 +924,13 @@ STRINGS = {
     'diff_all_match': {
         'zh': '全部 {n} 行一致',
         'en': 'all {n} lines match',
+    },
+    'diff_accepted_other': {
+        'zh': '已由 checker / 浮点容差 / 其它已接受答案判为通过，'
+              '输出与展示的这一份样例文本不同（不再按错误着色）',
+        'en': 'accepted by the checker, the float tolerance or another stored '
+              'answer; the output differs from the sample shown here (no error '
+              'colouring)',
     },
     'diff_lines_differ': {
         'zh': '{n} 处不同 (共 {total} 行)',

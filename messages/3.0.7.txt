@@ -1,0 +1,75 @@
+Algorithm Competition Assistant 3.0.7
+=====================================
+
+A correctness and reliability pass over the judging pipeline: the run panel
+now owns its parallel batches, "stop at the first failure" actually stops,
+every accepted answer is used, and the editor no longer freezes on a checker.
+
+The parallel / interactive batch is a real run
+
+* `Ctrl+Alt+Shift+P` (and an interactive problem) now marks the panel RUNNING,
+  keeps every per-case process reachable, and can be stopped with Ctrl+X or
+  by closing the panel. It used to keep running invisibly after both.
+* Pressing Run while a batch is in flight starts one run, not two: the old
+  batch is cancelled and its late results are dropped, so they can no longer
+  overwrite the new panel or raise IndexError when the test count differs.
+
+"Stop at the first failure" now means the verdict
+
+* `stop_on_first_failure` compared the process exit code, and a WA / PE / OLE
+  run exits 0 - so the default kept every remaining sample running. It now
+  stops on a failed verdict; input-only (UKE) samples still all run, and a
+  manual stop never chains into the next sample.
+
+Every accepted answer counts
+
+* The accept button adds to a set, but the judge used one arbitrary member:
+  an output the user had accepted could be reported WA, and the choice could
+  even change across restarts. The verdict now accepts a match against any
+  stored answer (the detail page picks that answer, and the answer editor
+  keeps the others when its buffer is saved unchanged).
+* A checker (SPJ) or float-tolerance AC is no longer painted as a red diff in
+  the detail page.
+
+Checker / interactor
+
+* Both are compiled ahead on the run worker; the per-test SPJ judge runs on
+  the pump thread, not in a `post_to_ui` callback. A slow checker no longer
+  freezes the editor, and a hung build is bounded at 30s.
+* A generated `<checker>.exe` / `<interactor>.exe` is rebuilt when its source
+  is newer. Previously an existing exe shadowed the mtime cache forever, so
+  fixing the checker silently kept the old verdicts.
+
+Compile cache and test data
+
+* A cache hit now also requires the named binary (or `.class`) to still exist.
+  Deleting the executable used to leave every Run on "compile skipped", with
+  the spawn failing and no verdict until a forced recompile.
+* A spawn failure is reported as a failed run instead of leaving the panel
+  stuck on RUNNING.
+* Tests files are written with a temp file + `os.replace` under one re-entrant
+  lock, and every load+merge+save path (panel, Companion, import, stress)
+  shares it. A crash or a concurrent writer can no longer leave a truncated
+  `<name>__tests` that the next load silently drops.
+
+Panel width and the detail page
+
+* The width estimator is in DIP end to end. It mixed `em_width()`/viewport
+  DIPs with `scale_factor()`-multiplied pixels, so on a 125-200% display the
+  panel could never narrow to its cards.
+* Details tabs are identified by source file, not only by the visible
+  `<basename> - test N detail` name; two run panels no longer reuse or close
+  each other's tabs.
+
+Stress testing
+
+* Captured stdout/stderr is capped (the `max_output_bytes` budget, 64 MB when
+  that is 0). A runaway generator or solution stops the round with a message
+  instead of buffering until the plugin host runs out of memory.
+* Stop no longer runs `taskkill /PID` on an already-reaped PID; the process is
+  polled first.
+* An interactive dialogue now reaps and registers its interactor, drains the
+  final testlib message before reading it, and does not leave scratch
+  directories behind on timeout.
+
+Regression suite: 1011 -> 1044 checks.

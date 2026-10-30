@@ -58,7 +58,7 @@
 			// stdin：把「输入 / 用户输出 / 标准答案」按顺序写到 stdin，
 			//   每段之间用一行 --- 分隔（方便写脚本 checker）。
 			"checker_style": "testlib",
-			// checker 的编译命令（只编译一次，之后复用；已有 .exe 则直接使用）
+			// checker 的编译命令（只编译一次，之后复用；源码比 .exe 新时会自动重编译）
 			"checker_compile_cmd": "g++ -O2 -std=c++17 -I \"{checker_dir}\" \"{checker}\" -o \"{checker}.exe\"",
 			// checker 自己的时间限制（毫秒）
 			"checker_time_limit_ms": 10000,

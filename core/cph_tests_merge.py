@@ -41,10 +41,14 @@ def merge_tests(existing, incoming):
 def merge_into_file(file_name, incoming):
 	"""Merge new tests into the stored ones and save.
 
-	Returns (saved, total, conflicts).
+	Returns (saved, total, conflicts). The load+merge+save is one critical
+	section (`cph_settings.tests_lock()`): otherwise another writer could
+	save between our read and write and its tests would be overwritten by the
+	stale snapshot.
 	"""
-	from .cph_settings import load_all_tests, save_tests
-	existing = load_all_tests(file_name) or []
-	merged, conflicts = merge_tests(existing, incoming)
-	saved = bool(save_tests(file_name, merged))
+	from .cph_settings import load_all_tests, save_tests, tests_lock
+	with tests_lock():
+		existing = load_all_tests(file_name) or []
+		merged, conflicts = merge_tests(existing, incoming)
+		saved = bool(save_tests(file_name, merged))
 	return saved, len(merged), conflicts
