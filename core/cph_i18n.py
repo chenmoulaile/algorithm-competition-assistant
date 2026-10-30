@@ -921,14 +921,6 @@ STRINGS = {
         'zh': '该组未过',
         'en': 'group not passed',
     },
-    'detail_copy_actual': {
-        'zh': '复制实际输出',
-        'en': 'copy actual output',
-    },
-    'detail_copy_expected': {
-        'zh': '复制预期输出',
-        'en': 'copy expected output',
-    },
     'detail_copied': {
         'zh': '已复制到剪贴板（{n} 字符）',
         'en': 'copied to the clipboard ({n} characters)',

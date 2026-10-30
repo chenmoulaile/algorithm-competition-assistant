@@ -1122,8 +1122,13 @@ def main():
     _in = [b for b in _m_blocks if b['id'] == 'input'][0]
     check('a multi-line body counts physical lines, not entries',
           _m_lines[_in['start']:_in['start'] + _in['count']]
-          == ['5', '1 2 3 4 5', ''],
+          == ['5', '1 2 3 4 5'],
           str(_m_lines[_in['start']:_in['start'] + _in['count']]))
+    # v3.0.5: the blank line after a body is a SPACER that folding keeps. It
+    # is outside the fold span on purpose - see the anchor check below.
+    check('the blank line after a body sits outside the fold span',
+          _m_lines[_in['start'] + _in['count']] == '',
+          repr(_m_lines[_in['start'] + _in['count']:][:2]))
     _want_rows = [r for r, k in _m_marks if k == 'want']
     _got_rows = [r for r, k in _m_marks if k == 'got']
     check('the diff marks land on the -/+ lines of a real output',
@@ -1372,6 +1377,21 @@ def main():
           _anchors == [max(0, _cc._block_point(b['idx']) - 1)
                        for b in _cc._blocks],
           'anchors %r' % _anchors)
+    # v3.0.5: a folded block keeps its spacer line, so two cards never hang
+    # from the same line. The fold span used to take the blank line after the
+    # body with it; the next block's first line then moved up onto this one's
+    # anchor, and the host draws two LAYOUT_BLOCK phantoms at one point on top
+    # of each other - the "cards land on the previous section once you fold"
+    # report. Two blocks are folded at this point (input, expected), which is
+    # exactly the state that used to collide.
+    check('the fold span stops at the last body line',
+          _in_text.endswith('\n') and not _in_text.endswith('\n\n'),
+          repr(_in_text[-8:]))
+    _folded_anchors = [max(0, _cc._block_point(b['idx']) - 1)
+                       for b in _cc._blocks]
+    check('two cards never hang from the same line after a fold',
+          len(set(_folded_anchors)) == len(_folded_anchors),
+          'anchors %r' % _folded_anchors)
     # unfold 'expected' so the refresh check below has exactly two folds left
     _cc.run(None, action='fold', block='expected')
     _cc.run(None, action='fold', block='stderr')
@@ -1647,13 +1667,39 @@ def main():
     _tle_card = tm.CphTestManagerCommand.Test({'test': '1\n'})
     _tle_card.verdict = verdict.get_verdict_by_name('TLE')
     _tle_card.memory = '4'
-    _bar = cmd.detail_header_html(0, _tle_card)
+    _keep_hdr = tm.read_resource
+    tm.read_resource = _disk_resource
+    try:
+        _bar = cmd.detail_header_html(0, _tle_card)
+    finally:
+        tm.read_resource = _keep_hdr
     check('the detail bar takes the verdict\u0027s own badge class',
           'verdict-badge verdict-TLE' in _bar and 'TLE' in _bar, _bar[:80])
     check('the detail bar shows the values, not their labels',
           'time:' not in _bar and 'mem:' not in _bar, _bar[:80])
     check('the detail bar keeps the unit on one unbreakable line',
           '4\xa0MB' in _bar and '4&nbsp;' not in _bar, _bar[:80])
+    # v3.0.5: the bar is the run card's own template, not a look-alike. The
+    # old one joined bare <span>s with &nbsp; gaps, and minihtml draws bare
+    # text in the default proportional UI font - "test 1" and the numbers came
+    # out a size larger than the chips beside them.
+    _hdr_tpl = _disk_resource('Highlight/test_detail_header.html')
+    check('the detail bar only uses classes the run card already has',
+          _class_tokens(_hdr_tpl) <= _class_tokens(_run_card_tpl),
+          str(sorted(_class_tokens(_hdr_tpl) - _class_tokens(_run_card_tpl))))
+    check('the detail bar is one .panel row of chips',
+          _bar.count('class="panel"') == 1 and _bar.count('<a class="') == 4,
+          _bar[:200])
+    check('the detail bar wraps its values in a config chip',
+          re.search(r'<a class="config">\s*<i class="runtime-info"', _bar)
+          is not None
+          and re.search(r'<a class="config" style="display: inline;">\s*'
+                        r'<i class="memory-info"', _bar) is not None,
+          _bar[:240])
+    _outside = re.sub(r'<a class="[^"]*"[^>]*>.*?</a>', '', _bar, flags=re.S)
+    check('the detail bar has no text outside its chips',
+          re.sub(r'</?div[^>]*>', '', _outside).strip() == '',
+          _outside[:200])
 
     # A leaked MemorySampler used to poll a dead pid for the whole session.
     # Use an impossible pid plus a tiny interval and a hard cap on how long a
@@ -8321,29 +8367,21 @@ def main():
           len(win_tight.calls) == 1 and win_tight.calls[0][1] < 0.68,
           'calls=%r' % (win_tight.calls,))
 
-    # --- opening a detail page widens the column to a readable width ------
-    # The panel column is sized for a row of chips; a page of sample input,
-    # answer and diff is not readable at 40 characters, so the detail open
-    # hands the column the widest share the run panel may take.
-    _detail_mgr = _fit_manager(_FitWindow([0, 0.68, 1]), [_fit_card])
-    win_detail = _FitWindow([0, 0.68, 1])
-    _detail_mgr.widen_column_for_detail(win_detail)
-    check('opening a detail page widens the column to the cap',
-          len(win_detail.calls) == 1
-          and abs((1.0 - win_detail.calls[0][1]) - 0.5) < 1e-6,
-          'calls=%r' % (win_detail.calls,))
-    win_already = _FitWindow([0, 0.5, 1])
-    _detail_mgr.widen_column_for_detail(win_already)
-    check('a column already at the cap is left alone',
-          win_already.calls == [], 'calls=%r' % (win_already.calls,))
-    win_wide_col = _FitWindow([0, 0.3, 1])
-    _detail_mgr.widen_column_for_detail(win_wide_col)
-    check('a column wider than the cap is never narrowed for a detail page',
-          win_wide_col.calls == [], 'calls=%r' % (win_wide_col.calls,))
-    win_single = _FitWindow([0, 1])
-    _detail_mgr.widen_column_for_detail(win_single)
-    check('a single-column layout is never rewritten for a detail page',
-          win_single.calls == [], 'calls=%r' % (win_single.calls,))
+    # --- opening a detail page does NOT widen the column (v3.0.5) --------
+    # v3.0.3 handed the column max_panel_width_ratio - half the window - right
+    # before showing a detail page, and the panel then looked twice as wide as
+    # the cards it holds and stayed there. That is the "panel takes half the
+    # screen instead of just fitting the -run cards" report. The column is the
+    # cards' column; the page wraps inside it.
+    _tm_src_detail = io.open(os.path.join(ROOT, 'test_manager.py'),
+                             encoding='utf-8').read()
+    check('opening a detail page no longer rewrites the column width',
+          'widen_column_for_detail' not in _tm_src_detail)
+    _open_body = _tm_src_detail[_tm_src_detail.index(
+        'def show_test_detail(self, i):'):]
+    _open_body = _open_body[:_open_body.index('\tdef ', 20)]
+    check('the detail open path never calls set_layout',
+          'set_layout' not in _open_body, _open_body[:200])
 
     # The card bar spans the column only while the view wraps: minihtml lays
     # a block phantom out at the viewport width when word_wrap is on, and at

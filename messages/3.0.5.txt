@@ -1,0 +1,46 @@
+Algorithm Competition Assistant 3.0.5
+=====================================
+
+Three things the detail page and the run panel were still getting wrong: a
+card that landed on the previous section once you folded, a badge bar that was
+not a card, and a column that widened to half the window when you opened a
+detail page.
+
+Folding no longer moves a card onto the section above it
+
+* Every section ends with a blank line. Folding erased the body AND that
+  blank line, so the next section's first line landed exactly where the
+  folded one had been - and a card hangs from the line before its section.
+  Two cards, one anchor: the host draws both LAYOUT_BLOCK phantoms at the
+  same point, on top of each other. That is the overlap in the screenshot.
+* The blank line is a SPACER now: it stays in the buffer when the section
+  folds, so every card keeps a line of its own. A folded section leaves one
+  empty line between two cards - the same gap the expanded page has.
+  (tests: the fold span stops at the last body line, and no two cards hang
+  from the same line with two sections folded.)
+
+The bar on top of the page is the run card's own row
+
+* It is built from `Highlight/test_detail_header.html`, which is the run
+  card's template with the actions this page does not need: one `.panel` row
+  of chips, the identity chip carrying the verdict badge, runtime and memory
+  inside a `.config` chip, `x` to close.
+* The old bar joined bare `<span>`s with `&nbsp;` gaps, and minihtml draws
+  bare text in the default proportional UI font - so `test 1` and the numbers
+  came out a size larger than the chips beside them, and the row read as two
+  designs glued together.
+* The two copy buttons that used to sit here are gone: every section card
+  below carries a copy chip with the same payload, and those two long labels
+  were what pushed the bar onto a second line in a panel-wide column.
+
+Opening a detail page no longer takes half the window
+
+* v3.0.3 handed the column `max_panel_width_ratio` (half the window) right
+  before showing the page. The panel then looked twice as wide as the cards
+  it holds, and it stayed there: the column is only re-fitted when the run
+  panel refreshes, so switching back did not always narrow it.
+* The column is the cards' column now, in both tabs. The detail page wraps
+  inside it. Drag the column wider if you want a wider page - a width you set
+  yourself is still never taken back.
+
+Regression suite: 1001 -> 1006 checks.

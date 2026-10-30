@@ -2366,7 +2366,20 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			lines.extend((text or '').split('\n'))
 
 		def end_block(rec):
-			rec['count'] = len(lines) - rec['start']
+			# The blank line every section appends is a SPACER, not body, and
+			# it survives folding. A block's card hangs from the line before
+			# its first body line (see _card_phantom), so a block that erased
+			# its spacer too left the NEXT block's first line exactly where
+			# its own had been: both cards anchored on the same point, and
+			# the host draws two LAYOUT_BLOCK phantoms at one point on top of
+			# each other - the "cards land on the previous section once you
+			# fold" report. Keeping the spacer gives every card its own line
+			# to hang from; a folded block leaves one empty line between two
+			# cards, which is also the gap the expanded layout has.
+			count = len(lines) - rec['start']
+			if count > 0 and lines[-1] == '':
+				count -= 1
+			rec['count'] = count
 
 		# How much of the limit this run used, and what changed since the last
 		# run of the same test point. Both numbers already existed and were
@@ -2651,14 +2664,13 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			# Long output lines now wrap; the run panel already does the same.
 			detail_view.run_command('set_setting', {'setting': 'word_wrap', 'value': True})
 			detail_view.run_command('set_setting', {'setting': 'fold_buttons', 'value': False})
-		# The run panel is sized for a row of chips; a detail page is not. It
-		# shows the sample, the answer and the diff, and at the panel's card
-		# width (~40 characters) every line of it is a scrollbar. Give the
-		# column the widest share the run panel is ever allowed to take -
-		# max_panel_width_ratio, half the window by default - before showing
-		# the page. The fit narrows it back once the run panel is the tab in
-		# front again, which is the one place a narrow column is right.
-		self.widen_column_for_detail(window)
+		# The column is NOT widened for the page. v3.0.3 handed it
+		# max_panel_width_ratio (half the window) before showing the page, and
+		# that is exactly what the panel looked like afterwards: a slab of
+		# background twice the width of every card row, and a column that
+		# stayed there. The panel is sized by its cards (auto_fit_panel_width,
+		# one row of chips) and the detail page lives in that same column; a
+		# narrow column is the honest width, and the page wraps its text.
 		# Deliberately NO custom syntax here: the detail stays plain text
 		# (default syntax). Per user feedback the syntax-based coloring was
 		# removed; the content format/layout is unchanged.
@@ -2673,40 +2685,6 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		detail_view.run_command('cph_test_detail_view',
 		                        self.detail_view_args(i, test))
 		window.focus_view(detail_view)
-
-	def widen_column_for_detail(self, window):
-		"""Give the detail page a readable column before it is shown.
-
-		Only ever widens, and only the standard two-group layout: the run
-		panel's column is sized for one row of chips, which is the wrong
-		width for a page of sample input, answer and diff. The cap is the
-		same `max_panel_width_ratio` the run panel obeys, so the detail page
-		never takes more of the window than the panel is allowed to.
-		"""
-		try:
-			layout = window.get_layout()
-		except Exception:
-			return
-		cols = layout.get('cols') or []
-		cells = layout.get('cells')
-		if len(cols) != 3 or not cells:
-			return
-		panel_frac = 1.0 - cols[1]
-		try:
-			want = float(get_settings().get('max_panel_width_ratio', 0.5))
-		except (TypeError, ValueError):
-			want = 0.5
-		want = min(max(want, 0.2), 0.9)
-		if panel_frac >= want - 1e-3:
-			return
-		try:
-			window.set_layout({
-				'cols': [cols[0], 1.0 - want, cols[2]],
-				'rows': layout.get('rows', [0, 1]),
-				'cells': cells,
-			})
-		except Exception:
-			pass
 
 	def detail_view_args(self, i, test):
 		"""Fill arguments for 'cph_test_detail_view', per detail_rich.
@@ -2734,42 +2712,55 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		return test.expected_output or ''
 
 	def detail_header_html(self, i, test):
-		"""One bar above the detail text: badge, test, runtime, memory, actions.
+		"""The run card's own row, on top of the detail page.
 
-		Built from the same classes the cards use, so it follows the panel
-		theme. It is a phantom, not text: selecting or copying the detail still
-		gives exactly the plain body, which is the property this view exists for.
+		Built from Highlight/test_detail_header.html, which is the run card's
+		template (Highlight/test_config.html) with the actions it does not
+		need: one .panel row of chips, the identity chip carrying the verdict
+		badge, runtime and memory inside a .config chip. The old bar put bare
+		<span>s between the chips, and minihtml draws bare text in the default
+		proportional UI font - so "test 1" and the numbers came out a size
+		larger than every chip around them and the row read as two designs
+		glued together.
 
-		Like the cards, the values carry no "time:" / "mem:" label - a bar with
-		labels ran off the edge of a half-width pane and the copy buttons were
-		clipped away. The badge takes the verdict's own class: per-verdict rules
-		(.verdict-TLE etc.) exist for the full set, while the hand-picked map
-		here did not (it even looked up 'TL' for TLE, so every TLE detail
-		showed a bare, unbackgrounded verdict).
+		The two copy buttons that used to sit here are gone. Every block card
+		below carries a copy chip with the same payload, and the two long
+		labels were what pushed this bar onto a second line in a panel-wide
+		column - the one thing a card row must never do. What is left is the
+		shape of a run card and fits on one row at the width the cards ask for.
+
+		It is a phantom, not text: selecting or copying the detail still gives
+		exactly the plain body, which is the property this view exists for.
 		"""
+		template = read_resource('Highlight/test_detail_header.html')
 		name = test.verdict['name'] if test.verdict else 'UKE'
+		# The card's own tint class. Read through getattr: the suite's
+		# duck-typed detail object has no Test methods, and a header that
+		# raises inside a phantom callback takes the whole page down.
+		class_of = getattr(test, 'get_test_class', None)
+		test_type = class_of() if callable(class_of) else ''
 		# a Unicode NBSP survives esc() and still stops minihtml from wrapping
-		# between the number and its unit (get_nice_memory's own comment)
+		# between the number and its unit (get_nice_memory's own comment);
+		# _label_prefixed hands back an &nbsp; entity, which esc() would have
+		# printed literally, so the entity becomes a real NBSP first.
 		runtime_str = esc(_label_prefixed(
-			test.get_nice_runtime().replace('&nbsp;', '\u00a0').strip(), 'time'))
-		# minihtml does not implement margin-left: a bar built out of margins
-		# rendered as "WA test 251ms", with the runtime glued to the test
-		# number. The gaps are explicit non-breaking spaces now.
-		gap = '&nbsp;&nbsp;'
-		parts = ['<span class="verdict-badge verdict-%s">%s</span>' % (esc(name), esc(name)),
-		         '<span>%s %d</span>' % (esc(t('test_label')), i + 1),
-		         '<span class="runtime-info">%s</span>' % runtime_str]
+			test.get_nice_runtime(), 'time').replace('&nbsp;', '\u00a0'))
+		memory_display = 'none'
+		memory_str = ''
 		if test.memory not in ('-', None):
-			parts.append('<span class="memory-info">%s</span>'
-			             % esc(_label_prefixed(
-			                 test.get_nice_memory().replace('&nbsp;', '\u00a0').strip(),
-			                 'memory')))
-		parts.append('<a class="config" href="detail-copy-expected">%s</a>'
-		             % esc(t('detail_copy_expected')))
-		parts.append('<a class="config" href="detail-copy-actual">%s</a>'
-		             % esc(t('detail_copy_actual')))
-		parts.append('<a class="config" href="detail-close" style="color: var(--redish);">&#10005;</a>')
-		return '<div class="panel">' + gap.join(parts) + '</div>'
+			memory_display = 'inline'
+			memory_str = esc(_label_prefixed(
+				test.get_nice_memory(), 'memory').replace('&nbsp;', '\u00a0'))
+		return template.format(
+			test_type=test_type,
+			verdict_class='verdict-' + name,
+			verdict_short=esc(name),
+			test_label=esc(t('test_label')),
+			test_id=i + 1,
+			runtime=runtime_str,
+			memory_display=memory_display,
+			memory=memory_str,
+		)
 
 	def show_test_detail_phantom(self, i):
 		"""Original inline minihtml detail panel (detail_style = 'phantom')."""
