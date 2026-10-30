@@ -15,6 +15,7 @@ __pycache__/
 
 # --- developer scratch, not part of the plugin ---------------------------
 .workbuddy/
+dist/
 .workbuddy-ai/
 .zcode/
 _fake_packages/

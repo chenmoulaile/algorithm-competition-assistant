@@ -18,6 +18,7 @@
 _fake_packages/ export-ignore
 .github/ export-ignore
 tests/ export-ignore
+tools/ export-ignore
 ScreenShots/ export-ignore
 PC_SUBMISSION_NOTES.md export-ignore
 RELEASE_NOTES_CN.md export-ignore
