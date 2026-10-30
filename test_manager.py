@@ -12,7 +12,7 @@ import threading
 
 from .Modules.ProcessManager import ProcessManager
 from .Modules.build_artifact import reset_announced as reset_build_announcements
-from .core.cph_settings import package_name, get_settings, get_tests_paths, load_all_tests, save_tests, save_tests_async, is_run_supported_ext, get_problem_limits, notify_io_error, get_problem_io, record_runtime, last_runtime, runtime_runs
+from .core.cph_settings import package_name, get_settings, get_tests_paths, load_all_tests, save_tests, save_tests_async, is_run_supported_ext, get_problem_limits, notify_io_error, get_problem_io, record_runtime
 from .core.cph_target import visible as context_menu_visible
 from .core.cph_jump import (diagnostics as parse_diagnostics,
 							esc, links_html, one_link, set_targets,
@@ -2321,9 +2321,9 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		text, so the detail remains selectable and copyable and a paste out of it
 		is exactly what is shown. kind is 'want' (the expected line), 'got' (the
 		program's line) or 'head' (a section title; recorded for bookkeeping but
-		deliberately not coloured - a blue slab behind every title and every
-		"vs last" fact read as noise, and the two colours that carry meaning
-		here are the green/red diff pair).
+		deliberately not coloured - a blue slab behind every title read as
+		noise, and the two colours that carry meaning here are the green/red
+		diff pair).
 		"""
 		return self.build_detail(i, test, marks)[0]
 
@@ -2333,22 +2333,21 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
         `text` and `marks` are exactly what build_detail_content documents
         (this method IS that builder). `blocks` is the card layout the detail
         view turns into phantom card heads: one record per foldable section,
-        in document order, naming the lines the block owns in `text` (its
-        bracket title line + body + trailing blank), a short card title, the
-        "N lines / M bytes" meta chip and the raw payload its copy action
-        copies. The facts block owns its fact lines only - it has no bracket
-        title in the buffer, its card carries the title. The subtask line and
-        the file-IO line stay static (always visible, no card): each is one
-        line that never needs hiding.
+        in document order, naming the lines the block owns in `text` (its body
+        + the blank spacer after it), a short card title, the "N lines / M
+        bytes" meta chip and the raw payload its copy action copies. The
+        subtask line and the file-IO line stay static (always visible, no
+        card): each is one line that never needs hiding.
 		"""
-		# The page opens with ONE empty line. It is the line the first card
-		# hangs from (a LAYOUT_BLOCK phantom is drawn BELOW the line its
-		# region points at - see _card_phantom), and it replaces the text
-		# header that used to repeat "Test 2 | WA | 51ms" directly under the
-		# badge bar. Every section title the body used to spell out
-		# ("[Input]", "[Expected Output]" ...) is on its card instead: the
-		# same words twice on one page read as a rendering bug.
-		lines = ['']
+		# The page opens with THREE empty lines, one per phantom that hangs
+		# above the text: the jump chip (line 1), the badge card (line 2), and
+		# the first section's card (line 3). A LAYOUT_BLOCK phantom is drawn
+		# below the line its region points at, so two phantoms that share a
+		# line share a row - the header and the first card used to anchor on
+		# the same newline and drew on top of each other. One line each is the
+		# only bookkeeping that keeps them apart, and it costs one blank row
+		# of page padding.
+		lines = ['', '', '']
 		blocks = []
 
 		def begin_block(bid, title, meta='', copy=None, kind=''):
@@ -2380,63 +2379,6 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			if count > 0 and lines[-1] == '':
 				count -= 1
 			rec['count'] = count
-
-		# How much of the limit this run used, and what changed since the last
-		# run of the same test point. Both numbers already existed and were
-		# thrown away: the panel had the limit it judged against, and the
-		# history file had the previous runtime. "AC 但用了 96%" and "比上次慢
-		# 3 倍" are the two things that decide what to do next.
-		facts = []
-		tester = getattr(self, 'tester', None)
-		pm = getattr(tester, 'process_manager', None) if tester else None
-		time_limit_ms = None
-		memory_limit_mb = None
-		if pm is not None:
-			try:
-				time_limit_ms = pm.get_time_limit_ms()
-			except Exception:
-				time_limit_ms = None
-			try:
-				memory_limit_mb = pm.get_memory_limit_mb()
-			except Exception:
-				memory_limit_mb = None
-		# not every object that reaches this method is a real Test (the suite's
-		# duck-typed detail object has no runtime at all), so read it softly
-		_runtime = getattr(test, 'runtime', None)
-		runtime_ms = _runtime if isinstance(_runtime, (int, float)) else None
-		if time_limit_ms and runtime_ms:
-			pct = int(round(100.0 * float(runtime_ms) / float(time_limit_ms)))
-			facts.append('%s %dms/%dms = %d%%' % (t('detail_used_limit'),
-				int(runtime_ms), int(time_limit_ms), pct))
-		mb = getattr(test, 'memory_mb', None)
-		if memory_limit_mb and mb:
-			try:
-				pct = int(round(100.0 * float(mb) / float(memory_limit_mb)))
-				facts.append('%s %.0fMB/%dMB = %d%%' % (t('detail_used_memory'),
-					float(mb), int(memory_limit_mb), pct))
-			except (TypeError, ValueError):
-				pass
-		previous = last_runtime(getattr(self, 'dbg_file', None), i + 1)
-		if previous and runtime_ms:
-			try:
-				ratio = float(runtime_ms) / float(previous) if previous else 0.0
-				facts.append('%s %dms -> %dms (%.2fx)' % (t('detail_vs_last'),
-					int(previous), int(runtime_ms), ratio))
-			except (TypeError, ValueError, ZeroDivisionError):
-				pass
-		history = runtime_runs(getattr(self, 'dbg_file', None), i + 1)
-		if len(history) >= 3:
-			facts.append('%s %dms / %dms / %dms (n=%d)' % (
-				t('detail_best_avg_worst'), min(history),
-				int(sum(history) / len(history)), max(history), len(history)))
-		if facts:
-			rec = begin_block('facts', t('detail_facts'))
-			for fact in facts:
-				lines.append(fact)
-				if marks is not None:
-					marks.append((len(lines) - 1, 'head'))
-			lines.append('')
-			end_block(rec)
 
 		# sample input, with its size: a pasted 20000-line sample and a two-
 		# number sample are different problems to read, and the panel used to
@@ -2484,6 +2426,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		# scored: with groups configured, a single WA is only half the story.
 		groups = subtask_parse(get_settings().get('subtasks'))
 		if groups:
+			tester = getattr(self, 'tester', None)
 			verdicts = []
 			for one in (tester.tests if tester else []):
 				vd = getattr(one, 'verdict', None)
@@ -4702,11 +4645,15 @@ class CphTestDetailViewCommand(sublime_plugin.TextCommand):
 		The -run panel's card (Highlight/test_config.html) is one .panel row of
 		inline chips: an identity chip (.test), the action chips (.config), then
 		the measured value inside a .config chip. This card is the same row -
-		identity, fold, copy, and the "N lines / M bytes" value in a .config
-		chip - with the same colours the run card uses: the identity chip takes
-		the section's verdict tint (expected green, actual/stderr/diff red when
-		they disagree), fold is the blue "run" action and copy the purple
-		"detail" one. No arrow: the fold state is spelled out by the chip.
+		identity, copy, and the "N lines / M bytes" value in a .config chip -
+		with the same colours the run card uses: the identity chip takes the
+		section's verdict tint (expected green, actual/stderr/diff red when
+		they disagree) and copy is the purple "detail" action.
+
+		The identity chip IS the fold control (it links to {fold_href}); there
+		is no separate fold chip. A second chip that did exactly what the title
+		already did was one chip of width per card for nothing, and on a
+		panel-wide column it was the chip that pushed the row over the edge.
 
 		The anchor is the character BEFORE the block's first line, not its
 		first character: Sublime draws a LAYOUT_BLOCK phantom BELOW the line
@@ -4715,7 +4662,6 @@ class CphTestDetailViewCommand(sublime_plugin.TextCommand):
 		previous section, which is the misalignment that was reported.
 		"""
 		v = self.view
-		folded = one['id'] in self._folded
 		template = read_resource('Highlight/test_detail_card.html')
 		# The size chip keeps its spaces unbreakable, like the run card's
 		# "4&nbsp;MB": a chip that wraps in half reads as two chips.
@@ -4725,7 +4671,6 @@ class CphTestDetailViewCommand(sublime_plugin.TextCommand):
 			test_type=one.get('kind') or '',
 			meta=meta,
 			meta_display='inline' if one['meta'] else 'none',
-			fold_label=(t('detail_unfold') if folded else t('detail_fold')),
 			fold_href='detail-fold-%s' % one['id'],
 			copy_label=t('detail_copy'),
 			copy_display='inline' if one['copy'] is not None else 'none',
@@ -4826,7 +4771,13 @@ class CphTestDetailViewCommand(sublime_plugin.TextCommand):
 		return Phantom(Region(0), content, sublime.LAYOUT_BLOCK, onclick)
 
 	def _header_phantom(self, header):
-		"""The badge bar above the detail text, or None.
+		"""The badge card above the detail text, or None.
+
+		Anchored on the SECOND line, not the first: the jump chip owns line 1
+		and a LAYOUT_BLOCK phantom is drawn below the line its region points
+		at, so a header on line 1 would share a row with the jump chip. The
+		build reserves one empty line per phantom at the top of the page (see
+		build_detail).
 
 		Header and jump chip are assembled into ONE update() call: Sublime's
 		PhantomSet has no public list of what it currently holds, so a method
@@ -4841,7 +4792,7 @@ class CphTestDetailViewCommand(sublime_plugin.TextCommand):
 		def onclick(event, cmd=self):
 			cmd.on_header_event(event)
 
-		return Phantom(Region(0), content, sublime.LAYOUT_BLOCK, onclick)
+		return Phantom(Region(1), content, sublime.LAYOUT_BLOCK, onclick)
 
 	def on_header_event(self, event):
 		v = self.view

@@ -731,7 +731,11 @@ def main():
         check('the history really is on disk, not just in memory',
               os.path.exists(_hist_settings.get_hist_file_path(_hist_file, create=True)))
 
-        # The facts line the detail now shows, built from the recorded numbers.
+        # v3.0.6: the "this run" block is gone. It repeated the runtime and the
+        # memory the card above already shows, plus two derived numbers nobody
+        # reads on the way to the diff, and it was the block whose card fought
+        # the badge card for the first line of the page. The history is still
+        # recorded (the checks above); only the page stopped printing it.
         cmd.dbg_file = _hist_file
         cmd.tester = None
         fact_test = _DetailTest()
@@ -742,10 +746,13 @@ def main():
         _hist_settings.record_runtime(_hist_file, 1, 1200)
         marks = []
         fact_text = cmd.build_detail_content(0, fact_test, marks)
-        check('the detail compares this run with the previous one',
-              '300ms' in fact_text and '1200ms' in fact_text and '4.00x' in fact_text,
+        check('the detail page no longer prints a "this run" block',
+              '300ms' not in fact_text and '4.00x' not in fact_text,
               [l for l in fact_text.split('\n')[:6]])
         _fact_text, _fact_blocks = cmd.build_detail(0, fact_test, [])
+        check('the first card is the sample input, not a facts card',
+              _fact_blocks[0]['id'] == 'input',
+              str([b['id'] for b in _fact_blocks]))
         _metas = dict((b['id'], b['meta']) for b in _fact_blocks)
         _size_meta = _metas.get('expected') or _metas.get('input') or ''
         check('the size of a section is on its card (lines and bytes)',
@@ -1081,13 +1088,16 @@ def main():
           card_text.startswith('\n')
           and '====' not in card_text.split('\n')[0],
           repr(card_text[:40]))
-    # The first card hangs from the one empty line the page opens with; the
-    # rest hang from the line before their block, because minihtml draws a
+    # The page opens with one empty line per phantom that hangs above the
+    # text: the jump chip, the badge card, and the first section's card. Each
+    # card then hangs from the line before its block, because minihtml draws a
     # block phantom BELOW the line its region points at.
     check('each card hangs from the line before its block',
-          card_blocks[0]['start'] == 1
-          and all(b['start'] >= 1 for b in card_blocks),
+          card_blocks[0]['start'] == 3
+          and all(b['start'] >= 3 for b in card_blocks),
           str([(b['id'], b['start']) for b in card_blocks]))
+    check('the page reserves one empty line per phantom above the text',
+          card_text.startswith('\n\n\n'), repr(card_text[:6]))
     _kinds = dict((b['id'], b.get('kind')) for b in card_blocks)
     check('the expected card is green and the differing actual card is red',
           _kinds.get('expected') == 'test-accept'
@@ -1281,13 +1291,20 @@ def main():
           _class_tokens(_dcard_tpl) <= _class_tokens(_run_card_tpl),
           str(sorted(_class_tokens(_dcard_tpl) - _class_tokens(_run_card_tpl))))
     # v3.0.4: the cards were flat grey. They take the run card's colours now -
-    # the identity chip carries the section's verdict tint, fold is the blue
-    # "run" action, copy the purple "detail" one - and the labels sit on their
-    # own line inside the anchor, which is what gives the run card's chips
-    # their inner spacing (minihtml collapses that whitespace to the leading
-    # and trailing space the -run chips have).
-    check('the fold chip is the run card\u0027s blue action chip',
-          'class="config config-run"' in _dcard_tpl)
+    # the identity chip carries the section's verdict tint and copy is the
+    # purple "detail" action - and the labels sit on their own line inside the
+    # anchor, which is what gives the run card's chips their inner spacing
+    # (minihtml collapses that whitespace to the leading and trailing space the
+    # -run chips have).
+    #
+    # v3.0.6: there is no separate fold chip. The identity chip already linked
+    # to the fold action, so the second chip was one chip of width per card
+    # doing what the title already did - and on a panel-wide column it was the
+    # chip that pushed the row over the edge.
+    check('the card has no separate fold chip',
+          'config-run' not in _dcard_tpl and '{fold_label}' not in _dcard_tpl)
+    check('the identity chip is the fold control',
+          'class="test {test_type}" href="{fold_href}"' in _dcard_tpl)
     check('the copy chip is the run card\u0027s purple chip',
           'class="config config-detail"' in _dcard_tpl)
     check('the identity chip carries the section tint',
@@ -1299,19 +1316,18 @@ def main():
     # came out nearly twice the height of a run card without it.
     check('every chip keeps the run card\u0027s inner spacing',
           'href="{fold_href}">\n\t\t<span>{title}</span>\n\t</a>' in _dcard_tpl
-          and 'href="{fold_href}">\n\t\t<span>{fold_label}</span>\n\t</a>' in _dcard_tpl
           and 'href="{copy_href}">\n\t\t<span>{copy_label}</span>\n\t</a>' in _dcard_tpl,
           _dcard_tpl[:200])
     check('the detail card is one .panel row of chips',
           _card_html.count('class="panel"') == 1
-          and _card_html.count('<a class="') == 4,
+          and _card_html.count('<a class="') == 3,
           _card_html[:200])
     check('the detail card wraps its value in a config chip',
           re.search(r'<a class="config"[^>]*>\s*<i class="runtime-info"',
                     _card_html) is not None,
           _card_html[:240])
-    check('the fold chip spells the state out instead of an arrow',
-          _card_i18n.t('detail_fold') in _card_html, _card_html[:200])
+    check('the card title is the only fold affordance',
+          _card_html.count('detail-fold-input') == 1, _card_html[:200])
     check('a block without a size hides the value chip',
           'display: none;' in _msg_card and 'runtime-info' in _msg_card,
           _msg_card[:240])
@@ -1326,9 +1342,8 @@ def main():
     check('folding erases exactly the block lines',
           _cv.text == card_text.replace(_bt, '', 1),
           repr(_cv.text[:60]))
-    check('a folded block says unfold, not an arrow',
-          _card_i18n.t('detail_unfold') in _render_card('input')
-          and _card_i18n.t('detail_fold') not in _render_card('input'),
+    check('a folded block keeps its card, still pointing at the fold action',
+          'detail-fold-input' in _render_card('input'),
           _render_card('input')[:200])
     _cc.run(None, action='fold', block='input')
     check('unfolding writes them back byte for byte',
@@ -1392,6 +1407,17 @@ def main():
     check('two cards never hang from the same line after a fold',
           len(set(_folded_anchors)) == len(_folded_anchors),
           'anchors %r' % _folded_anchors)
+    # v3.0.6: the badge card used to share Region(0) with the jump chip and
+    # with the first section's card - the three of them were drawn on the same
+    # row, which is the "this run and test 1 fight for the same line" report.
+    # One empty line per phantom at the top of the page is what separates them.
+    _hp = _cc._header_phantom('<div class="panel">h</div>')
+    check('the badge card hangs from the second line, not the first',
+          _hp is not None and _hp.region.a == 1, str(_hp and _hp.region.a))
+    _page_anchors = [p.region.a for p in _cc.phantoms.updates[-1]]
+    check('no two phantoms on the page hang from the same line',
+          len(set(_page_anchors)) == len(_page_anchors),
+          'anchors %r' % _page_anchors)
     # unfold 'expected' so the refresh check below has exactly two folds left
     _cc.run(None, action='fold', block='expected')
     _cc.run(None, action='fold', block='stderr')

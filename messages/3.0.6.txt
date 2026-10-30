@@ -1,0 +1,36 @@
+Algorithm Competition Assistant 3.0.6
+=====================================
+
+The detail page loses two rows nobody asked for and stops its top two cards
+from fighting over the first line.
+
+The badge card is the first thing on the page
+
+* The badge card, the jump chip and the first section's card all anchored on
+  the same line - Region(0) - and a LAYOUT_BLOCK phantom is drawn BELOW the
+  line its region points at, so all three were drawn on one row and landed on
+  top of each other. That is the "this run and test 1 fight for the same line"
+  report.
+* The page now opens with one empty line per phantom that hangs above the
+  text: the jump chip, the badge card, and the first section's card. One line
+  each is the only bookkeeping that keeps them apart, and it costs a single
+  blank row of page padding. (tests: the badge card hangs from the second
+  line, and no two phantoms on the page share a line.)
+
+The "this run" block is gone
+
+* It printed the runtime and the memory the badge card above already shows,
+  plus a limit percentage, a "vs last run" ratio and a best/avg/worst line -
+  three derived numbers nobody reads on the way to the diff. The block, its
+  card and its five strings are gone.
+* The runtime history is still recorded per test point (`<name>__tests.hist`),
+  so nothing that was measured was lost; the page just stopped printing it.
+
+One chip fewer on every card
+
+* The fold chip is gone. The section title already linked to the fold action,
+  so the second chip did exactly what clicking the title does - one chip of
+  width per card for nothing, and on a panel-wide column it was the chip that
+  pushed the row over the edge. Click the leftmost chip to fold or unfold.
+
+Regression suite: 1006 -> 1011 checks.

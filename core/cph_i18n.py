@@ -869,37 +869,9 @@ STRINGS = {
         'zh': '请先运行测试再查看详情',
         'en': 'Run the test first to see details',
     },
-    'detail_facts': {
-        'zh': '本次运行',
-        'en': 'this run',
-    },
-    'detail_fold': {
-        'zh': '折叠',
-        'en': 'fold',
-    },
-    'detail_unfold': {
-        'zh': '展开',
-        'en': 'unfold',
-    },
     'detail_copy': {
         'zh': '复制',
         'en': 'copy',
-    },
-    'detail_used_limit': {
-        'zh': '时限用量',
-        'en': 'time used',
-    },
-    'detail_used_memory': {
-        'zh': '内存用量',
-        'en': 'memory used',
-    },
-    'detail_vs_last': {
-        'zh': '与上次',
-        'en': 'vs last',
-    },
-    'detail_best_avg_worst': {
-        'zh': '历史 最快/平均/最慢',
-        'en': 'history best/avg/worst',
     },
     'detail_lines': {
         'zh': '行',
