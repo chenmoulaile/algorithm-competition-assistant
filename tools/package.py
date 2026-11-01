@@ -122,7 +122,9 @@ def main():
 
     version = plugin_version()
     out = args.out or os.path.join(ROOT, 'dist', PACKAGE_NAME + '.sublime-package')
-    os.makedirs(os.path.dirname(out), exist_ok=True)
+    out_dir = os.path.dirname(out)
+    if out_dir:  # a bare --out name lands in the cwd; dirname is '' then
+        os.makedirs(out_dir, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmp:
         raw = os.path.join(tmp, 'raw.zip')

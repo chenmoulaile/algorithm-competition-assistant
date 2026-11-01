@@ -316,7 +316,7 @@ reads/writes files`，两个文件名会按源码名预填（`add.cpp` → `add.
 默认中文，`"language": "zh"`。切英文的入口有三处：`Tools → Algorithm Competition
 Assistant → Switch language (中/EN)`、命令面板里的 `Switch to English`、右键菜单。
 状态栏、弹窗、面板文案和命令面板里的命令描述会跟着变；菜单项是静态 JSON，不跟语言，
-所以菜单一律英文。
+文案一律英文——例外是语言切换和中文说明两个入口，特意带上中文标注，方便中文用户找得到。
 
 界面切到英文后，详情页 `[信息]` 区块里插件自己写的判决附言（RE 位置、输出截断提示、
 TLE 原因）可以仍然用中文：设 `"message_language": "zh"`（默认 `"auto"`，跟随界面）。
