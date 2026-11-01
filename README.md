@@ -1,139 +1,356 @@
 # Algorithm Competition Assistant
 
-![Tests](https://img.shields.io/github/workflow/status/chenmoulaile/algorithm-competition-assistant/tests?branch=main)
-[Releases and downloads](https://github.com/chenmoulaile/algorithm-competition-assistant/releases)
+A local test runner for competitive programming in Sublime Text 4 (build 4095 or newer).
+Open a source file, press `Ctrl+Alt+B`, and it runs your configured compile and run commands
+over the test cases, then reports a verdict, a runtime and a memory figure for each one.
+The `detail` tab holds the input, the expected output, the actual output, stderr and a
+line-by-line diff.
 
-> 中文完整手册：[README_CN.md](README_CN.md)
+This is a fork of [FastOlympicCoding](https://github.com/Jatana/FastOlympicCoding). The run
+panel, the test editor and the shortcut layout come from that project. The way results are
+displayed follows VSCode's [cph-ng](https://github.com/langningchen/cph-ng), and the browser
+import follows [FastOlympicCodingHook](https://github.com/DrSchwad/FastOlympicCodingHook).
 
-A competitive-programming test runner for **Sublime Text 4** (build 4095+): run the samples of the file you are editing
-and get coloured verdict cards (AC / WA / TLE / MLE / RE / PE / CE), a detail tab with a line-by-line diff, **real** memory
-and timeout verdicts, stress testing against a generator and a reference solution, [Competitive Companion](https://github.com/jmerle/competitive-companion)
-browser import, and file input/output for the NOI / CSP-S style `freopen` problems.
+Most of the work went into judging: memory and time limits are measured from the real
+process, runtime errors are located in your source when the information exists, compiles are
+cached, and file I/O problems (NOI / CSP-S) run locally. It does not solve problems and it
+does not submit anything.
 
-**Built on**: a deep fork of [FastOlympicCoding](https://github.com/Jatana/FastOlympicCoding) (Jatana); the verdict display was rebuilt
-after VSCode's [cph-ng](https://github.com/langningchen/cph-ng), and the Competitive Companion support was inspired by [FastOlympicCodingHook](https://github.com/DrSchwad/FastOlympicCodingHook).
-
-## What it adds over FastOlympicCoding
-
-| Capability | FastOlympicCoding | This package |
-| --- | --- | --- |
-| Coloured verdict badges (AC / WA / TLE / MLE / RE / PE / CE) | ❌ plain text only | ✅ cph-ng-style badges |
-| **Real memory verdict (MLE)** | ❌ memory was a dead setting | ✅ samples the child process peak memory per platform, over the limit really is MLE |
-| **Hard kill on timeout (TLE)** | ❌ an infinite loop survives | ✅ a watchdog terminates the whole process tree at the limit |
-| **Run-time error location (RE)** | ❌ | ✅ parses `file:line` out of the output (Python traceback / Java stack / sanitizer diagnostics), replays the crash under gdb when it cannot |
-| Detail tab + **line-by-line diff** | ❌ | ✅ a real editor tab, selectable and copyable; also shows the share of the time/memory limit used, the run before this one, and the subtask the test belongs to |
-| **Compile cache** | ❌ recompiles every time | ✅ skips compilation when the sources and the command are unchanged |
-| **Automatic C++ standard tier (saves 1.4-2 s per run)** | ❌ compiles whatever you hard-coded | ✅ builds the low tier first, escalates only when the compiler asks, remembers per problem file |
-| Re-run failures only / run everything / force recompile | ❌ | ✅ three commands, three keys |
-| **Float tolerance** (`float_tolerance`) | ❌ | ✅ numeric output compared by relative/absolute error |
-| Multi-file builds (`extra_sources` / `include_dirs`) | ❌ | ✅ |
-| Environment self-check (doctor) | ❌ | ✅ one command plus a paste-ready Markdown report |
-| Keyboard-only workflow (pick a test, then act) | ❌ | ✅ `Ctrl+Alt+M` |
-| Stress-test counterexamples saved automatically | ❌ | ✅ |
-| **File input/output (NOI / CSP-S `freopen` problems)** | ❌ pipes only | ✅ per-problem file names, samples written to a temporary directory, the answer read back from the file your program writes |
-| Persistent Competitive Companion listener | ⚠️ needs the Hook | ✅ listens from startup, creates a file per problem |
-| Chinese / English UI | ❌ | ✅ |
-| Run panel auto-fit width | ❌ | ✅ follows its cards in both directions - widens when they no longer fit, narrows when they do |
-
-Engineering: Python 3.3 plugin-host compatibility, four-platform CI (Linux 3.9/3.12 + Windows + macOS), and a regression suite guarding the shipped behaviour.
+Chinese manual: [README_CN.md](README_CN.md). Version history:
+[RELEASE_NOTES_CN.md](RELEASE_NOTES_CN.md) (Chinese).
 
 ## Install
 
-**Folder install (recommended).** Clone or download `chenmoulaile/algorithm-competition-assistant`, put the repository
-folder into `Packages`, restart. Any folder name works since v2.4.11: paths come from the directory (or zip name) the
-package really lives in, `.sublime-package` suffix stripped.
+### Folder install (use this if you want to edit the code)
 
-**Package Control.** `Ctrl+Shift+P` → `Package Control: Install Package` → search `Algorithm Competition Assistant`; no restart needed, later upgrades use `Package Control: Upgrade Package`.
+1. Clone or download the repository.
+2. Put the folder into Sublime's `Packages` directory. Any folder name works.
+3. Restart Sublime.
 
-**Configuring a Package Control install.** Package Control installs a zip, so there is no package folder to browse.
-Use `Preferences → Package Settings → Algorithm Competition Assistant → Settings`: the left pane is the read-only
-defaults and the right pane is your editable `Packages/User/Algorithm Competition Assistant.sublime-settings`; saving
-there survives upgrades. The same submenu opens Key Bindings, TestSyntax settings, and both READMEs.
+Sublime does not hot reload plugins, so a `.py` change needs a restart.
 
-⚠️ **Do not use both.** Package Control installs `Installed Packages/…sublime-package` (a zip); if a folder of the same name
-also exists in `Packages/`, installing or upgrading the zip **empties that folder** — silently before v2.5.0, which is why "I
-edited the code, restarted, nothing changed" happened. Startup now prints a notice and the environment check (`Ctrl+Alt+D`)
-says whether the loaded copy is the `folder` or the `zip`.
+### Package Control
 
-## 30 seconds
+`Ctrl+Shift+P` → `Package Control: Install Package` → search
+`Algorithm Competition Assistant`. Upgrades use `Package Control: Upgrade Package`.
 
-1. Open a source file. Default `run_settings` cover C++ (`g++`, `-std=c++17 -O2`), Python, Java, C, Rust, Go, Pascal and JavaScript (Node.js); the compiler must be on `PATH`.
-2. Press `Ctrl+Alt+B` and read the verdict cards in the run panel on the right.
-3. Press **Detail** for input / expected / actual / stderr and the diff.
-4. `Ctrl+Shift+P`, type `Algorithm` — every command is in the palette and `View → Algorithm Competition Assistant` mirrors it one for one. `-O2` matters: unoptimised, a correct program only looks like TLE.
+Package Control installs a zip under `Installed Packages/`; there is no package folder to
+browse. Configure it through `Preferences → Package Settings → Algorithm Competition
+Assistant → Settings`: the left pane is the read-only default, the right pane is your
+`Packages/User/Algorithm Competition Assistant.sublime-settings`, which survives upgrades.
 
-## Key bindings
+Do not use both at once. If a folder of the same name sits in `Packages/` while the zip is
+installed, installing or upgrading the zip empties that folder, and the only symptom is
+"nothing changed after I edited the code". Startup prints a notice, and `Ctrl+Alt+D` reports
+whether the loaded copy is a folder or a zip.
 
-The bindings ship in this package's own `Default (<platform>).sublime-keymap`, so they load with the package and are given back
-when you disable or uninstall it — nothing is written into your personal keymap. `Ctrl` and `Alt` are literal everywhere:
-`Ctrl+Alt+B` is Control+Option+B on macOS too (no `super+` ships). Set `"enable_keybindings": false` to release the keys; `View → … → Key Bindings` opens the package keymap beside your override, and your side wins on a clash.
+## Quick start
 
-| Key | What it does |
+1. Open a source file. The default settings cover C++, C, Python, Java, Rust, Go, Pascal and
+   JavaScript. The compiler has to be on `PATH`.
+2. Press `Ctrl+Alt+B`. Each test gets a card in the panel on the right.
+3. Click `detail` for input, expected, actual, stderr and the diff. Click `edit` to open the
+   input and answer tabs; saving the answer rejudges the test.
+4. The command palette (`Algorithm`) and `View → Algorithm Competition Assistant` expose the
+   same commands.
+
+The shipped C++ command uses `-std=c++17 -O2`. Keep `-O2`: without it a correct program can
+look like a TLE locally.
+
+## Judging
+
+| Verdict | Meaning |
 | --- | --- |
-| `Ctrl+Alt+B` | Run the tests |
-| `Ctrl+Alt+Shift+B` | Run all tests, keep going after failures |
-| `Ctrl+Alt+R` | Re-run failed tests only |
-| `Ctrl+Alt+Shift+R` | Run with a forced recompile (ignores the compile cache) |
-| `Ctrl+Alt+Shift+P` | Run all tests in parallel (`parallel_workers`, default 4) |
-| `Ctrl+Alt+I` | Import tests from a file |
-| `Ctrl+Alt+V` | Add a test from the clipboard |
-| `Ctrl+Alt+E` | Export tests as `.in` / `.out` pairs |
-| `Ctrl+Alt+C` / `Ctrl+Alt+Shift+C` | Copy the expected / actual output of the current test |
-| `Ctrl+Alt+M` | Pick a test, then run / detail / edit / accept / decline |
-| `Ctrl+Alt+S` | Start a stress test |
-| `Ctrl+Alt+Shift+S` | Stop the stress test (stress output views only) |
-| `Ctrl+Alt+L` | Competitive Companion: one new file per problem |
-| `Ctrl+Alt+F` | Competitive Companion: fill the current file and run it |
-| `Ctrl+Alt+Shift+L` | Stop the Competitive Companion listener |
-| `Ctrl+Alt+Shift+F` | Fetch a problem from its URL (samples become tests) |
-| `Ctrl+Alt+Shift+V` | Open the problem statement as Markdown |
-| `Ctrl+Alt+Shift+K` | Benchmark the current test (N runs, min / avg / max) |
-| `Ctrl+Alt+Shift+T` | Contest timer (status-bar countdown) |
-| `Ctrl+Alt+G` | Switch Debug / Release build mode |
-| `Ctrl+Alt+D` | Check the environment (compiler, port, paths, resources) |
-| `Ctrl+Alt+J` | Jump to the first error location (palette also has "last") |
-| `Ctrl+Alt+T` | Expand a template snippet |
-| `Ctrl+Alt+P` or `Ctrl+K, Ctrl+P` | Collapse / restore the run panel |
+| `AC` | passed |
+| `WA` | output differs from the answer |
+| `TLE` | past the time limit, process terminated |
+| `MLE` | peak memory over the limit |
+| `RE` | non-zero exit, crash or failed assertion |
+| `PE` | same tokens, different whitespace |
+| `CE` | compilation failed |
+| `SK` | stopped by hand |
+| `UKE` | no verdict, for example the program never started |
 
-Inside the plugin's own test editor and detail views (`source.TestSyntax` only): `Enter` insert line, `Ctrl+Enter` new test, `Ctrl+V` paste, `Ctrl+X` kill the process, `Ctrl+D` delete, `Ctrl+Shift+Up/Down` swap tests.
+After a run each card offers `accept` and `decline`: the first stores the current output as a
+correct answer, the second marks it wrong. A test can keep several accepted answers, and a
+run that matches any of them passes.
+
+The clock starts when the process is created and stops the first time it is seen to have
+exited. Plugin work sits outside that window: `Popen`, draining the pipes, reading stderr and
+stopping the memory sampler. Feeding stdin does count, because the program is
+reading it on a judge too. Serial and parallel runs use the same rule, so one binary cannot
+be TLE in one mode and AC in the other. Limits are still compared strictly; the only slack is
+up to 50 ms that decides when the watchdog acts, not how long the program may run.
+
+Peak memory is taken per process: `GetProcessMemoryInfo` on Windows, `VmHWM` from
+`/proc/<pid>/status` on Linux, `libproc.proc_pid_rusage` on macOS. Over the limit is `MLE`.
+
+The watchdog terminates the process tree, so a loop that forks children does not survive
+it.
+
+A passing run that used 90-99% of the limit gets a status bar note. It does not change the
+verdict.
+
+When the program crashes, the output is searched for a position first: a Python traceback, a
+Java stack or a sanitizer diagnostic gives `file:line`, shown on the card and in the status
+bar, and the link jumps to the source. A bare C++ segfault carries no line, so the plugin
+replays the crash under gdb and looks for your frame in the backtrace. That needs debug
+symbols: a Release build only yields a name like `main ()`, while `Ctrl+Alt+G` (Debug)
+locates the line.
+
+Debug adds `-g -fsanitize=undefined -fsanitize-trap=undefined -D_GLIBCXX_ASSERTIONS`. The trap
+form needs no sanitizer runtime, which matters because MSYS2's mingw ships neither `libubsan`
+nor `libasan`. Signed overflow, stack array overrun and division by zero become a non-zero
+exit (`RE`); `std::vector` overruns come from the assertion macro. Heap overruns are not
+covered by default; add `-fsanitize=address` yourself if your toolchain has `libasan`.
+
+Compilation is cached: unchanged sources (including local `#include "..."`) and an unchanged
+command skip the compiler. `Ctrl+Alt+Shift+R` forces a rebuild.
+
+The default starts at `std_floor` (`c++17`) and only moves up when the compiler asks for a
+newer standard, remembering the tier in `<name>__tests.std` next to the test data. The reason
+is measurable: parsing `<bits/stdc++.h>` costs 1.29 s at c++17, 2.43 s at c++20 and 2.53 s at
+c++23 on the author's machine with `-fsyntax-only`, so a hard-coded c++23 adds a second to
+every recompile. Ordinary syntax errors are reported as they are, without a retry.
+
+Multi-file builds use `extra_sources` (glob) and `include_dirs`, referenced in the command as
+`{extra_sources}` and `{include_dirs}`.
 
 ## The detail tab
 
-`详情` / *detail* opens a real editor tab, so everything in it can be selected and
-copied. On top of the line-by-line diff it reports what the run actually cost:
+`detail` opens a real editor tab, so the text can be selected and copied. It contains:
 
-- **share of the limit** - `time used 1200ms/2000ms = 60%`, and the same for memory,
-  because an AC that used 96 % of the limit is a trap on a slower judge;
-- **the run before this one** - `vs last 300ms -> 1200ms (4.00x)`, plus
-  best/avg/worst once there are three or more, so "did my edit help" has an answer.
-  Per-test history lives in `<name>__tests.hist` next to the test data (20 runs kept);
-- **size of the sample and of the answer** in lines and bytes;
-- **which subtask group** the test belongs to and what that group scored;
-- **which channel produced the answer** - a file-IO problem names `add.in -> add.out`,
-  because the usual reason a detail is empty is a `freopen` name that disagrees
-  with the statement.
+- input, expected output, actual output, diff, notes and stderr, each in a collapsible card;
+- line and byte counts for the input and the answer;
+- the subtask a test belongs to and that group's score, when `subtasks` is configured;
+- the channel that produced the answer for file-I/O problems, for example `add.in -> add.out`.
 
-Colour is applied with **regions and a phantom badge bar, not a syntax definition**: the
-buffer is never modified, so selecting, copying and pasting give exactly what they gave
-without it. The bar carries `copy expected output`, `copy actual output` and a close
-button. Each section also gets a **card head that is the run panel's card row** - section
-name, `fold` / `unfold`, `copy`, and the `12 lines / 340 bytes` value in a chip of its own,
-with no arrow (the fold chip spells the state out). Set `"detail_rich": false` for the
-card-free, colour-free view.
+Per-test history is still written to `<name>__tests.hist` (last 20 runs); the page does not
+display those derived numbers.
+
+Click a section name to fold or unfold it. A rejudge keeps the fold state.
+
+Colour is applied with regions and card headers, not by changing the buffer. Select, copy and
+paste give exactly the text on screen. Set `"detail_rich": false` for a plain, colourless
+page; `"detail_style": "phantom"` is the old embedded panel, where the text cannot be
+selected.
+
+The detail tab shares the right column with the run panel, and that column is sized by the run
+panel cards. Drag it wider if you need to; a width you set is not taken back automatically.
 
 ## File input/output (NOI / CSP-S)
 
-Semifinal problems say "read `add.in`, write `add.out`" and expect `freopen`, which the default pipe-based runner cannot
-serve. Set it per problem from `View → Algorithm Competition Assistant` or the palette (**This problem reads/writes files**);
-both names are prefilled from the source file, and the choice lives next to the test data in `<name>__tests.io`, so it
-follows that one problem and survives a restart.
+Problems that read `add.in` and write `add.out` through `freopen` cannot use the pipe-based
+runner. Set the mode per problem from `View → Algorithm Competition Assistant → This problem
+reads/writes files`. Both names are prefilled from the source file (`add.cpp` gives `add.in` /
+`add.out`), so two Enter presses usually finish it. The choice is stored in
+`<name>__tests.io` beside the test data and follows that one problem across restarts.
 
-The sample is written as `add.in` inside the run directory so the `freopen` finds it, and the answer is read back from the
-`add.out` your program writes (stdout is drained and treated as debug output). **Your problem directory is never touched** —
-the real data there belongs to the judge. A missing `add.out` is reported as such instead of handed to you as a blank WA.
+At run time the sample is written as `add.in` inside a temporary directory, and the program
+starts in that directory, so `freopen` finds it. The answer is read back from the `add.out`
+your program writes. Your problem directory is not written to. When the program writes no
+file, the report says so instead of turning an empty read into a WA.
 
-A stress test (`Ctrl+Alt+S`) **refuses to start in file mode**, deliberately: the feeding goes through the pipes, so std,
-generator and your program all reading and writing files would see no data and "agree" every round. Convert the three
-programs to stdin/stdout to stress locally.
+Limits: stress testing refuses to start in file mode, because it feeds data through pipes and
+none of the three programs would see it; every round would "agree". Convert the programs to
+stdin/stdout for that. The gdb replay also feeds pipes, so a line number still works but file
+reads fail.
 
-Detailed change history: [RELEASE_NOTES_CN.md](RELEASE_NOTES_CN.md)
+If `run_cmd` calls the binary through a relative path (`./a.out`), file mode cannot find it,
+because the program starts in the temporary directory. The shipped settings use the absolute
+`{source_file_dir}` form.
+
+## Stress testing
+
+Three files in the same directory: your program (the open file), a reference solution
+(`std.cpp` by default) and a generator that prints random data to stdout (`gen.cpp` by
+default).
+
+Press `Ctrl+Alt+S` in the source view. Where the pair comes from is controlled by
+`stress_file_source`:
+
+- `pick_once` (default): ask the first time for this file, then remember the choice in
+  `<name>__tests.stress`;
+- `same_dir`: look in the source directory only, trying `std` / `brute` / `bf` / `sol` /
+  `暴力` for the solution and `gen` / `data` / `maker` / `rand` / `生成` for the generator,
+  with no dialog; if nothing matches it says which directory it searched;
+- `auto`: the old behaviour, directory first, then the global paths from last time, then ask.
+
+Picking the same file twice is refused: a program compared with itself agrees every round.
+
+Results scroll in a `<file> -stress` view. On a mismatch it stops and prints the input, both
+outputs and the differing lines; after the last round it reports a pass. `Ctrl+Alt+Shift+S`
+stops the session in the current view and takes effect immediately. Several files can run at
+once, each with its own view.
+
+The generator has its own limit (`stress_generator_time_limit_seconds`, 10 s by default),
+because generating data is usually slower than solving. A timeout skips the round; three in a
+row stop the run.
+
+With a `checker` configured, the checker decides, so multi-answer and floating point problems
+are not reported as mismatches. Without one, `float_tolerance` applies.
+
+## Competitive Companion
+
+With the browser extension installed, Sublime listens on port `12345` from startup
+(`companion_auto_listen`, on by default). No file needs to be open first. Add `12345` to the
+extension's port list; that part happens in the browser.
+
+Two targets:
+
+- `Ctrl+Alt+L` creates `<problem>.cpp`, stores the samples and limits, and stops there. It
+  does not compile or run anything, since the code does not exist yet.
+- `Ctrl+Alt+F` merges the samples into the current file and runs it once.
+
+`companion_target` picks the default; the context menu and the palette offer both. In
+`new_file` mode a pinned target is ignored.
+
+A problem list page is not one problem. AtCoder and Luogu send the whole set in one click
+(7 requests measured), so use `Ctrl+Alt+L` there. `Ctrl+Alt+F` would merge all seven problems
+into the file you are standing in. Repeated auto-runs of the same file are debounced into one
+(2 s), so that does not become seven compiles.
+
+New files land in the first usable place: `auto_create_dir`, then the directory of the cpp
+from which the command was invoked, then the current file's directory, then the first
+workspace folder. `auto_create_header` customises the comment header with `{problem}`,
+`{url}`, `{time}` and `{memory}`.
+
+When a click does nothing, enable `companion_debug_log` and click again; the log is
+`Data/Log/aca-companion.log`. A `refused 403 origin=…` line means the request arrived and was
+rejected; an unchanged log means the browser never sent it, usually because `12345` is not in
+the extension's port list.
+
+## Interactive problems
+
+Besides the automatic `interactor` mode, `Ctrl+Alt+Shift+X` opens a scratch view that runs the
+current program with live output. `Enter` sends a line, `Ctrl+D` sends EOF, `Ctrl+X` stops the
+program. This is for the cases where you are the interactor.
+
+`interactor` follows the testlib convention: `interactor <input> <output> <answer>`, reading
+the contestant's output from stdin and writing replies to stdout, with the exit code as the
+verdict.
+
+## Other tools
+
+- Benchmark (`Ctrl+Alt+Shift+K`) runs the current test N times and reports min, average and
+  max.
+- Calibrate machine estimates this machine's speed factor and shows the equivalent judge
+  limit in the status bar. Judging still uses the limit you set.
+- Practice statistics (`Show practice statistics`) report attempts, first AC, verdict
+  distribution and stress rounds per problem.
+- Contest timer (`Ctrl+Alt+Shift+T`) counts down in the status bar, with notes at 30, 10 and
+  5 minutes.
+- Template snippets (`Ctrl+Alt+T`) expand after a keyword: fastio, main, bf, debug, testlib.
+- Environment check (`Ctrl+Alt+D`) covers the compiler, port, paths and resources, and prints
+  a Markdown report you can paste into an issue.
+
+## Key bindings
+
+The bindings ship in the package's own keymap, so they load and unload with it and nothing is
+written into your personal keymap. `Ctrl` and `Alt` are literal: on macOS that is Control and
+Option, and no `super+` binding ships. Set `"enable_keybindings": false` to release them all.
+
+| Key | Action |
+| --- | --- |
+| `Ctrl+Alt+B` | run the tests |
+| `Ctrl+Alt+Shift+B` | run all, keep going after failures |
+| `Ctrl+Alt+R` | re-run failed tests only |
+| `Ctrl+Alt+Shift+R` | recompile and run |
+| `Ctrl+Alt+Shift+P` | run all in parallel (`parallel_workers`, default 4) |
+| `Ctrl+Alt+Shift+X` | interactive terminal |
+| `Ctrl+Alt+I` | import tests from a file |
+| `Ctrl+Alt+V` | add a test from the clipboard |
+| `Ctrl+Alt+E` | export `.in` / `.out` pairs |
+| `Ctrl+Alt+C` / `Ctrl+Alt+Shift+C` | copy expected / actual output |
+| `Ctrl+Alt+M` | pick a test, then an action |
+| `Ctrl+Alt+S` | start a stress test |
+| `Ctrl+Alt+Shift+S` | stop the current stress view |
+| `Ctrl+Alt+L` | Companion: one new file per problem |
+| `Ctrl+Alt+F` | Companion: fill the current file and run |
+| `Ctrl+Alt+Shift+L` | stop the Companion listener |
+| `Ctrl+Alt+Shift+F` | fetch a problem from its URL |
+| `Ctrl+Alt+Shift+V` | open the statement as Markdown |
+| `Ctrl+Alt+Shift+K` | benchmark the current test |
+| `Ctrl+Alt+Shift+T` | contest timer |
+| `Ctrl+Alt+G` | switch Debug / Release |
+| `Ctrl+Alt+D` | environment check |
+| `Ctrl+Alt+J` | jump to the first error |
+| `Ctrl+Alt+T` | expand a template snippet |
+| `Ctrl+Alt+P` / `Ctrl+K, Ctrl+P` | collapse / restore the run panel |
+
+Inside the plugin's own test editor and detail views (`source.TestSyntax`): `Enter` inserts a
+line, `Ctrl+Enter` adds a test, `Ctrl+V` pastes, `Ctrl+X` kills the process, `Ctrl+D` deletes
+the test, `Ctrl+Shift+Up/Down` swaps tests.
+
+## Settings
+
+Four panels edit the keys in the settings file and take effect immediately:
+
+| Entry | What it controls |
+| --- | --- |
+| `Verdict rules` | float tolerance, PE as AC, stop on first failure, ignore stderr |
+| `Stress test options` | where std / gen come from, file picker, saving counterexamples, rounds, per-round limit |
+| `Competitive Companion options` | default target, auto listen, click log |
+| `This problem reads/writes files` | stdin or file I/O for this problem, and the file names |
+
+`companion_auto_listen` is the one item that only takes effect the next time the listener
+starts; the port is read at the same moment.
+
+```json
+{
+	"language": "en",
+	"run_settings": [
+		{
+			"name": "C++",
+			"extensions": ["cpp"],
+			"compile_cmd": "g++ \"{source_file}\" {extra_sources} {include_dirs} -std=c++17 -O2 -o \"{file_name}.exe\"",
+			"run_cmd": "\"{source_file_dir}/{file_name}.exe\" {args}",
+			"time_limit_ms": 2000,
+			"memory_limit_mb": 256
+		}
+	],
+	"float_tolerance": 0,
+	"max_output_bytes": 8388608
+}
+```
+
+The remaining keys are documented in `Algorithm Competition Assistant.sublime-settings`.
+
+## Known limits
+
+- macOS memory is a sampled peak for one process, not the kernel's peak RSS, so it can read
+  lower than Activity Monitor.
+- A bare segfault in a Release build only yields a function name. Use Debug, or add `-g`.
+- `sync_output` is off by default. It refreshes the view per character and only suits
+  interactive programs.
+- stderr appears in the detail tab only, not on the card.
+- A test with no input and no answer is not saved; it is a placeholder for a paste.
+- The clock waits while the sample is still being pasted. It starts at the first typed
+  character or the first line of output.
+- A crash is judged `RE` ahead of `TLE`, even when the watchdog fired. Ordinary `cerr` output
+  is not treated as a crash.
+- `PE` requires identical tokens with different whitespace. Set `regard_pe_as_ac` if your
+  judge counts PE as accepted.
+- Output over `max_output_bytes` (8 MB by default) is truncated with a notice.
+- Fetching has a size and time cap (`max_fetch_bytes` 8 MB, `fetch_timeout_seconds` 25 s).
+  Pages rendered by scripts parse as empty, and the report says you may need to log in.
+- On Windows, non-ASCII output names written through the ANSI code page may not match the name
+  on disk. The plugin checks the artifact and runs the real name, with a console note.
+- Stress testing is unavailable in file mode, and the gdb replay cannot read input files.
+- The package does not hot reload: restart Sublime after editing a `.py`.
+
+## Development
+
+- The plugin host is Python 3.3. No f-strings, no `subprocess.run`, no
+  `Popen(encoding=...)`; `tests/check_py33.py` enforces this.
+- Tests: `python tests/run_tests.py`, currently 1044 checks, 0 failures, using a fake
+  `sublime` module and no third-party packages.
+- CI runs Linux (3.9 and 3.12), Windows and macOS.
+- Bump `VERSION` in `plugin_init.py` and add `messages/<version>.txt` plus the
+  `messages.json` entry; `tests/check_messages.py` checks the three agree.
+
+## Credits
+
+Built on FastOlympicCoding by Jatana. The verdict display follows cph-ng by langningchen, and
+the Companion integration follows FastOlympicCodingHook by DrSchwad. MIT licensed, see
+`LICENSE`.
