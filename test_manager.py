@@ -2586,6 +2586,9 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		v.sel().add(Region(v.size()))
 		self.set_compile_bar(t('parallel_done', total=len(tests)))
 		self.update_configs()
+		# The serial chain persists its cards at the end of on_stop; a parallel
+		# batch has the same duty here, or a restart drops every verdict.
+		self.memorize_tests(force=True)
 		if final:
 			self.record_stats()
 			sublime.status_message('[Algorithm Competition Assistant] '
@@ -5360,16 +5363,24 @@ class CloseListener(sublime_plugin.EventListener):
 			if other is view:
 				continue
 			if (other.name() or '') == target:
-				try:
-					other.close()
-				except Exception:
-					pass
+				# ST4215: calling close() on another view directly from
+				# inside on_pre_close SIGSEGVs the host when the layout has
+				# two groups and the panel view sits in group 1. Defer the
+				# close out of the host's view-teardown frame.
+				def close_panel(other=other):
+					try:
+						other.close()
+					except Exception:
+						pass
+				sublime.set_timeout(close_panel, 0)
 				continue
 			if other.settings().get('cph_edit_source') == view_id:
-				try:
-					other.close()
-				except Exception:
-					pass
+				def close_edit(other=other):
+					try:
+						other.close()
+					except Exception:
+						pass
+				sublime.set_timeout(close_edit, 0)
 
 
 class CphViewTesterCommand(sublime_plugin.TextCommand):
@@ -5410,8 +5421,14 @@ class CphViewTesterCommand(sublime_plugin.TextCommand):
 		window = v.window()
 
 		if self.have_tied_dbg:
-			prop = (window.get_view_index(self.tied_dbg))
-			if prop == (-1, -1):
+			# A panel view that was just closed can answer (0, -1) instead of
+			# (-1, -1) on 4215, so the index slot - not the whole tuple - tells
+			# alive from dead; window() is None covers the other teardowns.
+			try:
+				prop = window.get_view_index(self.tied_dbg)
+			except Exception:
+				prop = (-1, -1)
+			if prop[1] == -1 or self.tied_dbg.window() is None:
 				need_new = True
 			else:
 				need_new = False

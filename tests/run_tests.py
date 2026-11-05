@@ -88,12 +88,13 @@ def _install_fake_sublime():
             self._settings = Settings(settings)
             self._size = size
             self._status = {}
+            self._closed = False
 
         def file_name(self):
             return self._file_name
 
         def name(self):
-            return ''
+            return getattr(self, '_name', '')
 
         def settings(self):
             return self._settings
@@ -107,13 +108,15 @@ def _install_fake_sublime():
             return id(self)
 
         def is_valid(self):
-            return True
+            return not self._closed
 
         def is_dirty(self):
             return False
 
         def close(self):
-            pass
+            # A closed view keeps behaving like a dying one: window() answers
+            # None, which is the "run view has no window" state.
+            self._closed = True
 
         def get_status(self, key):
             return self._status.get(key)
@@ -138,7 +141,10 @@ def _install_fake_sublime():
 
         def window(self):
             # A view belongs to the window it was opened in; every test that
-            # cares drives that through sublime.active_window().
+            # cares drives that through sublime.active_window(). A closed
+            # view has no window any more.
+            if self._closed:
+                return None
             return sublime.active_window()
 
     class Window(object):
@@ -151,6 +157,30 @@ def _install_fake_sublime():
             view = View()
             self._views.append(view)
             return view
+
+        def views(self):
+            # Closed views leave the listing, like the real window does.
+            return [v for v in self._views if not getattr(v, '_closed', False)]
+
+        def get_layout(self):
+            # The two-column layout make_opd() installs; the 3-col answer
+            # keeps create_opd() from re-issuing set_layout().
+            return {'cols': [0, 0.68, 1], 'rows': [0, 1],
+                    'cells': [[0, 0, 1, 1], [1, 0, 2, 1]]}
+
+        def get_view_index(self, view):
+            # ST 4215 answers (0, -1) - not (-1, -1) - for a view that was
+            # just closed; that quirk is what let a second Run reuse the
+            # dying panel view. The "same view, two Runs" case below pins
+            # this semantics down.
+            if getattr(view, '_closed', False):
+                return (0, -1)
+            if view in self._views:
+                return (0, self._views.index(view))
+            return (-1, -1)
+
+        def set_view_index(self, view, group, index):
+            pass
 
         def focus_view(self, view):
             pass
@@ -1565,6 +1595,75 @@ def main():
     params = inspect.signature(tm.CphViewTesterCommand.run).parameters
     missing = [k for k in ('run_all', 'run_failed', 'force_compile') if k not in params]
     check('cph_view_tester.run accepts the run-mode flags', not missing, str(missing))
+
+    # The second Run on the same file: close_opds() closes the old panel and
+    # create_opd() must see that it died. ST 4215 answers (0, -1) - not
+    # (-1, -1) - for a just-closed view, so the old whole-tuple compare kept
+    # reusing the dead panel and every later make_opd was dropped with
+    # "the run view has no window any more": no compile, no judging.
+    _run_sub = sys.modules['sublime']
+    _tset = importlib.import_module(pkg + '.core.cph_settings')
+    _saved_tset = _tset.settings
+    _saved_run_window = _run_sub.active_window
+
+    class _RunPanelView(_run_sub.View):
+        # Records every dispatch together with whether the view still had a
+        # window *at that moment* - a make_opd landing on a closed view is
+        # exactly the silent failure this case pins down.
+        def __init__(self, file_name=None):
+            _run_sub.View.__init__(self, file_name=file_name)
+            self.commands = []
+
+        def scope_name(self, pos):
+            return 'source.c++ '
+
+        def set_syntax_file(self, value):
+            self._syntax = value
+
+        def run_command(self, cmd, args=None):
+            self.commands.append((self, cmd, args, self.window() is not None))
+
+    class _RunPanelWindow(_run_sub.Window):
+        def new_file(self):
+            view = _RunPanelView()
+            self._views.append(view)
+            return view
+
+    _run_win = _RunPanelWindow()
+    try:
+        _run_sub.active_window = lambda: _run_win
+        _tset.init_settings({'sync_output': False, 'close_sidebar': False,
+                             'run_settings': [{'name': 'C++', 'extensions': ['cpp']}]})
+        _src = _RunPanelView(file_name=os.path.join('tmp', 'X.cpp'))
+        _tester_cmd = tm.CphViewTesterCommand(_src)
+        _tester_cmd.run(None, action='make_opd')
+        check('the first Run opens exactly one run panel',
+              len(_run_win._views) == 1, str(len(_run_win._views)))
+        check('the run panel is named after its source file',
+              _run_win._views and _run_win._views[0].name() == 'X.cpp -run',
+              repr(_run_win._views[0].name() if _run_win._views else None))
+        _dead_panel = _run_win._views[0]
+        _tester_cmd.run(None, action='make_opd')
+        check('the second Run abandons the closed panel',
+              _dead_panel._closed
+              and _tester_cmd.tied_dbg is not None
+              and _tester_cmd.tied_dbg is not _dead_panel
+              and _tester_cmd.tied_dbg.window() is not None,
+              'closed=%s reused=%s' % (_dead_panel._closed,
+                                       _tester_cmd.tied_dbg is _dead_panel))
+        check('the second Run opened a fresh live panel',
+              len(_run_win._views) == 2 and _run_win._views[1] is _tester_cmd.tied_dbg,
+              'views=%d' % len(_run_win._views))
+        _dispatches = [rec for v in _run_win._views for rec in v.commands
+                       if rec[1] == 'cph_test_manager'
+                       and (rec[2] or {}).get('action') == 'make_opd']
+        check('every make_opd dispatch lands on a view with a window',
+              len(_dispatches) == 2 and all(rec[3] for rec in _dispatches),
+              'dispatches=%d dead=%d' % (
+                  len(_dispatches), sum(1 for rec in _dispatches if not rec[3])))
+    finally:
+        _run_sub.active_window = _saved_run_window
+        _tset.init_settings(_saved_tset)
 
     print('== cph_settings: test file path resolution ==')
     settings = importlib.import_module(pkg + '.core.cph_settings')
@@ -8610,6 +8709,52 @@ def main():
     check('the current batch results are applied',
           _applied == [([], True)] and not _current_batch.batch_active,
           repr(_applied))
+
+    # A parallel batch must persist its cards the way the serial chain does:
+    # apply_parallel_results() rewrote the panel but never memorized, so the
+    # __tests file kept no verdict and a restart dropped every parallel
+    # result (only the .hist entries survived, which hid the gap).
+    class _PersistSel(object):
+        def __init__(self):
+            self.items = []
+
+        def clear(self):
+            self.items = []
+
+        def add(self, region):
+            self.items.append(region)
+
+    _persist_saved_window = sys.modules['sublime'].active_window
+    try:
+        # The early-exit guard needs a window; without one the batch would
+        # count as "not applied" and memorize would never be reached.
+        sys.modules['sublime'].active_window = \
+            lambda: sys.modules['sublime'].Window()
+        _persist_cmd = tm.CphTestManagerCommand.__new__(tm.CphTestManagerCommand)
+        _persist_cmd.view = sys.modules['sublime'].View()
+        _persist_sel = _PersistSel()
+        _persist_cmd.view.sel = lambda: _persist_sel
+        _persist_cmd.view.add_regions = lambda *a, **k: None
+        _persist_cmd.tester = make_tester([])
+        _persist_cmd.set_compile_bar = lambda *a, **k: None
+        _persist_cmd.update_configs = lambda *a, **k: None
+        _persist_cmd.record_stats = lambda *a, **k: None
+        _memorized = []
+        _persist_cmd.memorize_tests = lambda force=False: _memorized.append(force)
+        _one_result = [{'verdict': {'name': 'AC'}, 'stdout': '1', 'runtime': 5}]
+        _persist_cmd.apply_parallel_results(_one_result, final=True)
+        check('a finished parallel batch persists its cards',
+              _memorized == [True], repr(_memorized))
+        _memorized = []
+        _persist_cmd.apply_parallel_results([], final=True)
+        check('an empty parallel batch writes nothing', _memorized == [],
+              repr(_memorized))
+        _persist_cmd.apply_parallel_results(_one_result, final=False)
+        check('a stopped parallel batch still persists what landed',
+              _memorized == [True], repr(_memorized))
+    finally:
+        sys.modules['sublime'].active_window = _persist_saved_window
+
     check('the pool is wired into the panel run state',
           'tester.begin_batch(cancel)' in _tm_src_all
           and 'on_manager=tester.add_batch_manager' in _tm_src_all
