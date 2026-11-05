@@ -305,6 +305,7 @@ def html_to_markdown(html):
 # --------------------------------------------------------------------------
 
 _PRE_BLOCK_RE = re.compile(r'(?is)<pre\b[^>]*>(.*?)</pre\s*>')
+_BR_IN_PRE_RE = re.compile(r'(?is)<br\b[^>]*>|</br\s*>')
 _CLASS_RE = re.compile(
 	r'(?is)<[a-zA-Z][^>]*\bclass\s*=\s*["\']([^"\']*)["\'][^>]*>')
 
@@ -361,7 +362,7 @@ def extract_samples(html):
 			region = html[prev_end:start]
 			if len(region) > _REGION_LEN:
 				region = region[-_REGION_LEN:]
-			inner = _trim_one_newline(unescape(match.group(1)))
+			inner = _trim_one_newline(unescape(_BR_IN_PRE_RE.sub('\n', match.group(1))))
 			blocks.append({
 				'kind': _classify(region),
 				'text': inner,
