@@ -145,13 +145,13 @@ class _Session(object):
 	def _after_compile(self, result):
 		if self.closed:
 			return
-		self.compiling = False
 		if result is None:
 			# 解释类语言：没有编译命令，直接跑。
 			self._launch()
 			return
 		rc, note = result
 		if rc != 0:
+			self.compiling = False
 			self.post_append(_clean_newlines(note or '') + '\n')
 			sublime.status_message('[Algorithm Competition Assistant] %s'
 								   % t('compile_failed_status'))
@@ -165,11 +165,35 @@ class _Session(object):
 
 	def _launch(self):
 		if self.closed:
+			self.compiling = False
 			return
-		try:
-			self.pm.run_file()
-		except Exception as e:
-			self.post_append('[Algorithm Competition Assistant] run failed: %s\n' % e)
+		thread = threading.Thread(target=self._launch_worker)
+		thread.daemon = True
+		thread.start()
+
+	def _launch_worker(self):
+		# Popen（POSIX 下 fork+setsid）不再占用主线程：判题主链（test_manager
+		# / cph_parallel）的 spawn 一律在私有线程上，这里是最后一处例外。
+		ok = False
+		if not self.closed:
+			try:
+				self.pm.run_file()
+				ok = True
+			except Exception as e:
+				self.post_append('[Algorithm Competition Assistant] run failed: %s\n' % e)
+		sublime.set_timeout(lambda: self._spawn_done(ok), 0)
+
+	def _spawn_done(self, ok):
+		self.compiling = False
+		if self.closed:
+			# spawn 期间用户已按 Ctrl+X / 关掉视图：停止意图先于 spawn 落地，
+			# 把刚起来的进程立刻收掉，不裸奔。
+			if self.pm.is_stopped() is None:
+				self.pm.terminate_async()
+			return
+		if not ok:
+			# spawn 失败：进程没起来，错误已由 _launch_worker 上屏；与旧的
+			# 主线程实现一致，不启动泵、不发退出消息。
 			return
 		self.running = True
 		pump = threading.Thread(target=self._pump)
@@ -284,7 +308,7 @@ class CphManualOpenCommand(sublime_plugin.WindowCommand):
 		term = window.new_file()
 		term.set_scratch(True)
 		term.set_name('%s -term' % os.path.basename(file))
-		term.set_syntax_file('Packages/Text/Plain Text.tmLanguage')
+		term.set_syntax_file('Packages/Text/Plain text.tmLanguage')
 		term.settings().set(_TERMINAL_FLAG, True)
 		term.settings().set(_TERMINAL_FILE, file)
 		term.settings().set('word_wrap', True)
