@@ -170,11 +170,12 @@ reads/writes files`，两个文件名会按源码名预填（`add.cpp` → `add.
 
 在源码视图按 `Ctrl+Alt+S`。正解和生成器从哪来由 `stress_file_source` 决定：
 
-- `pick_once`（默认）：这个文件第一次对拍时问你，选完记在 `<名>__tests.stress`，
-  以后直接开跑；
+- `pick_once`（默认）：同目录正好有一对就先用它，不问；没有才第一次问你，选完记在
+  `<名>__tests.stress`，以后直接开跑；
 - `same_dir`：只在同目录按名字找，`std` / `brute` / `bf` / `sol` / `暴力` 配 `gen` /
   `data` / `maker` / `rand` / `生成`，不弹窗；找不到会告诉你查了哪个目录；
-- `auto`：同目录找不到就退回上次用的全局路径，还不确定才问。
+- `auto`：同目录找不到就用设置里手填的 `stress_std_file` / `stress_generator_file`
+  （这两个键插件不自动写入），仍不确定才问。
 
 选到同一个文件会被拒绝：程序跟自己比，每轮必然一致。
 

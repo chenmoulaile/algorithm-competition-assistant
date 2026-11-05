@@ -1135,6 +1135,13 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 						% (type(e).__name__, e))
 			if not cfg:
 				return None
+			if getattr(self, 'tle_killed', False) or getattr(
+					self.process_manager, 'terminated', False):
+				# The checker judges complete output. A run the watchdog
+				# killed (TLE) or the user stopped (SK) has none, and a real
+				# judge never reaches the checker for such a solution either -
+				# so do not compile and run it just to judge partial bytes.
+				return (None, '')
 			try:
 				exe, error = checker_executable(cfg)
 				if error:
@@ -3904,8 +3911,19 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		else:
 			checker_verdict, checker_message = checker
 		if checker_verdict is not None:
-			self.tester.tests[test_id].set_verdict(checker_verdict)
-		if checker_message:
+			# A checker verdict judges the program's output. TLE/RE/SK are
+			# not output verdicts: a real judge never reaches the checker for
+			# them (the solution was killed or crashed), so the checker's
+			# call on partial bytes must not rewrite them.
+			if verdict['name'] in ('AC', 'WA', 'PE'):
+				self.tester.tests[test_id].set_verdict(checker_verdict)
+				if checker_message:
+					existing = self.tester.tests[test_id].message
+					self.tester.tests[test_id].message = \
+						(existing + '\n' if existing else '') + checker_message
+		elif checker_message:
+			# The checker itself failed to compile or run: that diagnostic
+			# matters whatever the verdict turned out to be.
 			existing = self.tester.tests[test_id].message
 			self.tester.tests[test_id].message = \
 				(existing + '\n' if existing else '') + checker_message

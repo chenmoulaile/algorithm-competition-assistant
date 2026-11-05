@@ -178,10 +178,15 @@ def executable(cfg):
 	try:
 		startupinfo = None
 		startupinfo = hidden_startupinfo()
-		proc = subprocess.Popen(cmd, shell=True, stdin=None,
-								stdout=subprocess.PIPE,
-								stderr=subprocess.STDOUT,
-								cwd=cfg['dir'], startupinfo=startupinfo)
+		compile_kwargs = dict(stdin=None, stdout=subprocess.PIPE,
+							  stderr=subprocess.STDOUT,
+							  cwd=cfg['dir'], startupinfo=startupinfo)
+		if os.name != 'nt':
+			# Own session, so a timed-out compile can be taken down together
+			# with the g++ the shell started (see _reap) instead of orphaning
+			# it - the same rule the runner's compile path applies.
+			compile_kwargs['preexec_fn'] = os.setsid
+		proc = subprocess.Popen(cmd, shell=True, **compile_kwargs)
 		out = proc.communicate(timeout=_COMPILE_TIMEOUT)[0]
 	except subprocess.TimeoutExpired:
 		_reap(proc)
@@ -228,13 +233,25 @@ def hidden_startupinfo():
 
 
 def decode_output(data):
-	"""bytes -> str (utf-8, replace); str passes through."""
+	"""bytes -> str; str passes through.
+
+	utf-8 first, then the console code page - g++ on a Chinese Windows writes
+	its diagnostics in the ANSI code page, and forcing utf-8 turned every
+	non-ASCII note into replacement garbage. The run path's _decode_output
+	makes the same two attempts.
+	"""
 	if isinstance(data, str):
 		return data
 	try:
-		return data.decode('utf-8', 'replace')
+		return data.decode('utf-8')
 	except Exception:
-		return ''
+		pass
+	try:
+		import locale
+		preferred = locale.getpreferredencoding(False) or 'utf-8'
+		return data.decode(preferred, 'replace')
+	except Exception:
+		return data.decode('utf-8', 'replace')
 
 
 def _write(path, text):
@@ -249,9 +266,33 @@ def _reap(proc):
 	kill here, every judged test of a runaway SPJ leaked a process, and the
 	following _cleanup() then failed to remove the files it still had open -
 	quietly, because _cleanup swallows everything.
+
+	The compile goes through a shell, so `proc` is sh / cmd.exe itself: a plain
+	kill() reaped only the shell and left the real g++ alive, holding the
+	output .exe so the next compile failed with "Permission denied". Take the
+	whole tree down, the way the runner's _kill_tree does.
 	"""
 	if proc is None:
 		return
+	pid = getattr(proc, 'pid', None)
+	if os.name == 'nt':
+		if pid:
+			try:
+				subprocess.Popen(
+					['taskkill', '/F', '/T', '/PID', str(pid)],
+					stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+					startupinfo=hidden_startupinfo()).wait(timeout=3)
+			except Exception:
+				pass
+	else:
+		# The compile led its own session (preexec_fn=os.setsid above), so a
+		# group kill reaches the shell and the compiler without touching the
+		# plugin host's own group.
+		try:
+			import signal
+			os.killpg(os.getpgid(pid), signal.SIGKILL)
+		except Exception:
+			pass
 	try:
 		proc.kill()
 	except Exception:

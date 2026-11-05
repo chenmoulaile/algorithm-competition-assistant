@@ -613,11 +613,19 @@ def _start_flow(view, choose=False):
         if not gen_file or not os.path.exists(gen_file):
             sublime.error_message(t('file_not_found') + ': ' + str(gen_file))
             return
+        # Comparing a program with itself passes every round, which reads like
+        # a clean result and means nothing - and "itself" includes the file
+        # under test, which the manual pickers were happy to hand back.
+        clash = None
         if _same_program(std_file, gen_file):
-            # Comparing a program with itself passes every round, which reads
-            # like a clean result and means nothing.
+            clash = std_file
+        elif _same_program(std_file, user_file):
+            clash = std_file
+        elif _same_program(gen_file, user_file):
+            clash = gen_file
+        if clash:
             sublime.error_message(t('stress_same_file',
-                                    file=os.path.basename(std_file)))
+                                    file=os.path.basename(clash)))
             _start_flow(view, True)
             return
         # Stress feeds every round through a pipe. A problem that is judged from
@@ -642,6 +650,12 @@ def _start_flow(view, choose=False):
         try:
             time_limit = float(get_settings().get('stress_time_limit_seconds', 2) or 2)
         except (TypeError, ValueError):
+            time_limit = 2.0
+        if time_limit <= 0:
+            # 0 (or a negative value, or the string "0", which the `or 2`
+            # above cannot see through) reached the run loop as "no deadline":
+            # one looping round then hung the whole session with nothing on
+            # screen to say why. Clamp like the generator limit does.
             time_limit = 2.0
         try:
             max_rounds = int(get_settings().get('stress_max_rounds', 1000) or 1000)
@@ -693,8 +707,11 @@ def _start_flow(view, choose=False):
         return
 
     # Look next to the file under test first: that is where the std and the
-    # generator of *this* problem live. Only then fall back to what was used
-    # last time, which may belong to a completely different problem.
+    # generator of *this* problem live. Only then fall back to a pair the user
+    # pinned by hand in stress_std_file / stress_generator_file - the plugin
+    # itself stopped writing those keys on purpose (a fresh problem then ran
+    # against the previous problem's files), so they are usually empty and the
+    # flow ends up asking.
     std_hits = _candidate_files(src_dir, 'std', exclude=[user_file])
     if not std_hits:
         std_hits = _remembered_file(settings, 'stress_std_file')

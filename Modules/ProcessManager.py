@@ -1146,8 +1146,8 @@ class ProcessManager(object):
 		terminate() waits for the child to actually die (taskkill, then the
 		SIGTERM -> SIGKILL escalation), up to about 3 s. Called from a UI
 		handler - closing the panel tab, or re-running over a live process -
-		that wait froze the editor for the same length of time. The markers are
-		set here and the kill continues on a private thread.
+		that wait froze the editor for the same length of time. The running
+		marker is cleared here and the kill continues on a private thread.
 		"""
 		proc = getattr(self, 'process', None)
 		if proc is None:
@@ -1162,8 +1162,12 @@ class ProcessManager(object):
 				return
 		except Exception:
 			pass
-		self.terminated = True
 		self.is_run = False
+		# `terminated` is deliberately NOT set here. Between this poll and the
+		# kill thread's own poll the program can still exit on its own, and
+		# terminate() only sets the flag once it has confirmed a real kill is
+		# under way - that guard is what keeps a stop clicked a moment after a
+		# normal finish from rewriting the verdict to SKIPPED.
 		thread = threading.Thread(target=lambda: self.terminate(proc))
 		thread.daemon = True
 		thread.start()
