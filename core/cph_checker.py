@@ -176,17 +176,16 @@ def executable(cfg):
 	cmd = _expand(cfg['compile_cmd'], cfg)
 	proc = None
 	try:
-		startupinfo = None
 		startupinfo = hidden_startupinfo()
 		compile_kwargs = dict(stdin=None, stdout=subprocess.PIPE,
-							  stderr=subprocess.STDOUT,
-							  cwd=cfg['dir'], startupinfo=startupinfo)
+							  stderr=subprocess.STDOUT, cwd=cfg['dir'])
 		if os.name != 'nt':
 			# Own session, so a timed-out compile can be taken down together
 			# with the g++ the shell started (see _reap) instead of orphaning
 			# it - the same rule the runner's compile path applies.
 			compile_kwargs['preexec_fn'] = os.setsid
-		proc = subprocess.Popen(cmd, shell=True, **compile_kwargs)
+		proc = subprocess.Popen(cmd, shell=True, startupinfo=startupinfo,
+								**compile_kwargs)
 		out = proc.communicate(timeout=_COMPILE_TIMEOUT)[0]
 	except subprocess.TimeoutExpired:
 		_reap(proc)
