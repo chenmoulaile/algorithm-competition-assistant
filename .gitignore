@@ -29,6 +29,7 @@ tmp_*/
 .omo
 .agent-teams/
 .codegraph/
+.v2c/
 
 # --- editor / OS ---------------------------------------------------------
 .vscode/

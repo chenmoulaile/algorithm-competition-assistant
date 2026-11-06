@@ -300,10 +300,13 @@ def _run_one(make_manager, input_text, expected, time_limit_ms, memory_limit_mb,
                 float_tolerance=float_tolerance,
             )
 
-        if judge is not None and not cancelled:
+        if judge is not None and not cancelled \
+                and result['verdict']['name'] in ('AC', 'WA', 'PE'):
             # Optional custom judging (a configured SPJ checker). It may
             # replace the verdict and add a message; failures inside it must
-            # never lose the result we already have.
+            # never lose the result we already have. TLE/RE/SK are not output
+            # verdicts - a real judge never reaches the checker for them - so
+            # the checker does not get to judge their partial bytes either.
             try:
                 replacement = judge(input_text, stdout, expected_primary,
                                     result['verdict'])

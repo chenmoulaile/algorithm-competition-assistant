@@ -1,0 +1,26 @@
+Algorithm Competition Assistant 3.0.8
+=====================================
+
+A display fix for the detail page's Actual Output card: an output of 14 lines
+used to be labelled "16 lines / 44 bytes" and copied with two trailing blank
+lines.
+
+The run panel lays out an unfolded test as input + output + two trailing
+newlines. on_stop() used one string for both that buffer text and the value it
+stored on the test, so the padding became part of the stored output. The detail
+page measured its size chip from the stored value but drew the body from a
+trimmed copy - two phantom lines and two phantom bytes above the real output.
+
+* The buffer keeps its two layout newlines; the stored program output does not.
+* The Actual Output card's "N lines / M bytes" chip, its body and its copy
+  button now all describe the same trimmed string.
+* The header copy button and the copyable card payload no longer carry the
+  padding, and parallel-run results store a trimmed output too.
+* Sessions persisted by an older build (whose __tests files already contain the
+  padding) are normalized on load and on display, so the corrected count also
+  applies without re-running the samples.
+* Verdicts were never affected: judging compares whitespace-separated tokens
+  and ignores trailing empty lines. No verdict, chain or checker behaviour
+  changed.
+
+Regression suite: 1052 -> 1062 checks, 0 failures.

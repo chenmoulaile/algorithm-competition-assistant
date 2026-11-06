@@ -711,7 +711,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			if type(prop) == dict:
 				self.runtime = prop.get('runtime', '-')
 				self.memory = prop.get('memory', '-')
-				self.stdout = _clean_newlines(prop.get('stdout', ''))
+				self.stdout = _clean_newlines(prop.get('stdout', '')).rstrip('\n')
 				self.stderr = _clean_newlines(prop.get('stderr', ''))
 				self.expected_output = _clean_newlines(prop.get('expected_output', ''))
 				restored = get_verdict_by_name(prop.get('verdict'))
@@ -800,7 +800,10 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			self.memory = memory
 
 		def set_stdout(self, stdout):
-			self.stdout = stdout
+			# The run panel's unfolded block needs two trailing newlines, but they
+			# are buffer layout, not program output. Store only the program's own
+			# bytes, or the detail card counts phantom lines that the body hides.
+			self.stdout = stdout.rstrip('\n') if isinstance(stdout, str) else stdout
 
 		def set_stderr(self, stderr):
 			self.stderr = stderr
@@ -2752,6 +2755,20 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			return ''
 		return s.replace('\r\n', '\n').replace('\r', '')
 
+	@staticmethod
+	def _display_stdout(test):
+		"""The exact bytes the actual card shows, counts and copies.
+
+		An older build stored the run panel's trailing '\\n\\n' block padding
+		in test.stdout, and __tests files persisted it. A session restored
+		from such a file would still show 'N+2 lines' above N lines after an
+		upgrade, so normalize here too: meta, body and copy payload must all
+		describe the same string, whatever the on-disk value looks like.
+		"""
+		s = CphTestManagerCommand._clean_output(
+			getattr(test, 'stdout', '') or '')
+		return s.rstrip('\n')
+
 	def build_detail_content(self, i, test, marks=None):
 		"""The detail text for one test.
 
@@ -2833,7 +2850,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		lines.append('')
 		end_block(rec)
 
-		stdout = self._clean_output(getattr(test, 'stdout', '') or '')
+		stdout = self._display_stdout(test)
 		float_tolerance = get_settings().get('float_tolerance', 0) or 0
 		# Display the answer the output actually matches when there are
 		# several accepted ones; otherwise the stable primary. This keeps a
@@ -2865,11 +2882,11 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 		out_meta = '%d %s / %d %s' % (
 			stdout.count('\n') + 1 if stdout else 0, t('detail_lines'),
-			len((test.stdout or '').encode('utf-8')), t('detail_bytes'))
+			len(stdout.encode('utf-8')), t('detail_bytes'))
 		rec = begin_block('actual', t('actual_output'), out_meta,
-			getattr(test, 'stdout', '') or '',
+			stdout,
 			kind=('test-accept' if same else 'test-decline'))
-		add_body(stdout.rstrip('\n') if stdout.strip() else t('detail_empty'))
+		add_body(stdout if stdout.strip() else t('detail_empty'))
 		lines.append('')
 		end_block(rec)
 
@@ -3097,7 +3114,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		marks = [] if rich else None
 		text, blocks = self.build_detail(i, test, marks)
 		args = {'text': text, 'jump': self.jump_for(test),
-		        'copy_actual': getattr(test, 'stdout', '') or '',
+		        'copy_actual': self._display_stdout(test),
 		        'copy_expected': self.detail_expected(test)}
 		if rich:
 			args['marks'] = marks
@@ -3742,10 +3759,14 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		# again here: the panel also lands on this path for parallel results.
 		self.tester.fold_outputs()
 		_outp = self.tester.prog_out[test_id]
-		_outp = _outp.rstrip()
-
-		if tester.running_new:
-			_outp += '\n' + '\n'
+		_outp = _outp.rstrip('\n')
+		# The unfolded run-panel block is _inp + '\n' + output + '\n\n'. Those
+		# two trailing newlines are BUFFER LAYOUT (get_tie_pos() adds 2 for
+		# them), not program output. Keep them in a local used only for the
+		# replace below: mixing them into _outp made test.stdout (and every
+		# copy/persist/display built from it) two lines and two bytes larger
+		# than what the detail body showed - "16 lines" above 14 lines.
+		_buf_outp = _outp + '\n' + '\n' if tester.running_new else _outp
 
 		self.tester.tests[test_id].set_cur_runtime(runtime)
 		self.tester.tests[test_id].set_cur_rtcode(rtcode)
@@ -3965,7 +3986,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			v.run_command('cph_test_manager', {
 				'action': 'replace',
 				'region': (self.input_start, input_end),
-				'text': _inp + '\n' + _outp
+				'text': _inp + '\n' + _buf_outp
 			})
 
 			self.tester.tests[test_id].fold = False

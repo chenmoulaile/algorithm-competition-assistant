@@ -4,16 +4,25 @@ Sublime Text 4（build 4095 及以上）的算法竞赛本地测评插件。在�
 它按你配置的编译命令和运行命令跑测试点，给出判定、用时和内存；点 `详情` 能看到输入、
 期望输出、实际输出、标准错误输出，以及逐行差异。
 
+**适合谁**：在 Sublime Text 里刷题、想不离开编辑器完成"编译 → 跑样例 → 看差异"的人。
+改动的重点在本地判题：内存和超时按真实进程测量，运行错误尽量定位到源码行，编译有缓存，
+另外补了文件输入输出（NOI / CSP-S）、抓题、对拍、练习统计这些本地调试会用到的功能。
+它不解题，也不联网判题。
+
+**五分钟上手**：打开源码文件 → 按 `Ctrl+Alt+B` 运行 → 点 `详情` 看差异。完整步骤见下文
+「上手」一节。
+
 这个插件是 [FastOlympicCoding](https://github.com/Jatana/FastOlympicCoding) 的 fork。
 运行面板、测试点编辑、对拍和 Competitive Companion 监听的骨架来自原项目，快捷键也沿用
 原来的布局。判题结果的显示方式参考了 VSCode 的
 [cph-ng](https://github.com/langningchen/cph-ng)，浏览器导入的思路参考了
 [FastOlympicCodingHook](https://github.com/DrSchwad/FastOlympicCodingHook)。
 
-改动的重点在本地判题：内存和超时按真实进程测量，运行错误尽量定位到源码行，编译有缓存，
-另外补了文件输入输出、抓题、练习统计这些本地调试会用到的功能。它不解题，也不联网判题。
-
-英文简介见 [README.md](README.md)，逐版本改动见 [RELEASE_NOTES_CN.md](RELEASE_NOTES_CN.md)。
+英文简介见 [README.md](README.md)，逐版本改动见
+[RELEASE_NOTES_CN.md](https://github.com/chenmoulaile/algorithm-competition-assistant/blob/main/RELEASE_NOTES_CN.md)。
+注意：GitHub 自动生成的源码压缩包（zip / tar.gz）按 `.gitattributes` 的 export-ignore
+规则裁掉了 `RELEASE_NOTES_CN.md` 和 `tests/`，直接下载压缩包的用户请到上面这个在线地址
+阅读。
 
 ## 安装
 
@@ -35,9 +44,9 @@ Package Control 装的是 `Installed Packages/…sublime-package`，`Packages/` 
 Settings`：左边是只读的默认值，右边是可编辑的
 `Packages/User/Algorithm Competition Assistant.sublime-settings`，保存后升级不丢。
 
-两种方式不要同时用。`Packages/` 下同时有同名文件夹和 zip 时，Package Control 升级 zip
-会把那个文件夹清空，现象是"改了代码、重启、什么都没变"。启动时会在控制台和状态栏提示
-检测到两份安装，`Ctrl+Alt+D` 会写明当前加载的是文件夹还是 zip。
+**两种方式不要同时用。** `Packages/` 下同时有同名文件夹和 zip 时，Package Control 升级
+zip 会把那个文件夹清空，现象是"改了代码、重启、什么都没变"。启动时会在控制台和状态栏
+提示检测到两份安装，`Ctrl+Alt+D` 会写明当前加载的是文件夹还是 zip。
 
 ## 上手
 
@@ -49,7 +58,7 @@ Settings`：左边是只读的默认值，右边是可编辑的
 4. 命令面板搜 `Algorithm` 能看到全部命令，`View → Algorithm Competition Assistant`
    里有同样的一套。
 
-默认 C++ 编译命令是 `g++ … -std=c++17 -O2`。`-O2` 不要省：没优化时，一个正确的程序
+默认 C++ 编译命令是 `g++ … -std=c++17 -O2`。**`-O2` 不要省**：没优化时，一个正确的程序
 也可能跑到超时。
 
 ## 判题
@@ -67,6 +76,9 @@ Settings`：左边是只读的默认值，右边是可编辑的
 | `CE` | 编译失败 |
 | `SK` | 被手动停止 |
 | `UKE` | 没有得出结论，例如程序没启动起来 |
+
+`CE` 和其它判定不一样：**编译失败是面板级状态**。它只显示在运行面板的编译条上，不写入
+`<名>__tests`，重启后不会还原；其余判定都随测试点保存，重开文件还能看到。
 
 运行结束后卡片下面有 `accept` / `decline`：前者把当前输出记成正确答案，后者记成错误
 答案。同一题可以有多个被接受的答案，判题时匹配其中任意一个都算通过。
@@ -97,10 +109,10 @@ C++ 的裸段错误本身不带行号。这种情况插件会用 gdb 回放崩�
 `Ctrl+Alt+G` 切到 Debug 再跑，同一个段错误能定位到行。
 
 Debug 模式加的是
-`-g -fsanitize=undefined -fsanitize-trap=undefined -D_GLIBCXX_ASSERTIONS`。用 trap 形式
-是因为它不需要运行库：MSYS2 的 mingw 没带 `libubsan`，普通的 `-fsanitize=undefined`
-会链接失败。有符号溢出、栈数组越界、除零会变成非零退出码判 `RE`，`std::vector` 越界由
-断言宏报出来。
+`-g -fsanitize=undefined -fsanitize-trap=undefined -fno-omit-frame-pointer -D_GLIBCXX_ASSERTIONS`。
+用 trap 形式是因为它不需要运行库：MSYS2 的 mingw 没带 `libubsan`，普通的
+`-fsanitize=undefined` 会链接失败。有符号溢出、栈数组越界、除零会变成非零退出码判
+`RE`，`std::vector` 越界由断言宏报出来。
 
 堆越界不在默认覆盖范围内。需要的话自己往 `compile_cmd` 里加 `-fsanitize=address`，
 前提是工具链有 `libasan`。
@@ -110,10 +122,17 @@ Debug 模式加的是
 编译有缓存：源文件（含本地 `#include "..."`）和编译命令都没变时跳过编译，
 `Ctrl+Alt+Shift+R` 强制重编。
 
-默认从 `std_floor`（`c++17`）开始编，只有编译器说需要更高标准时才升档，编得过的档位
-记在测试数据旁边的 `<名>__tests.std` 里。这样做有具体原因：解析 `<bits/stdc++.h>` 的
-耗时随标准上升，开发机上 `-fsyntax-only` 实测 c++17 1.29 s、c++20 2.43 s、c++23 2.53 s，
-写死 c++23 等于每次重新编译多等一秒多。普通的语法错误不会触发重试，报错原样给你。
+**`-std` 自动升档，默认不动。** 升档逻辑由 `auto_std_switch`（默认开）和 `std_floor`
+（默认 `c++17`）控制，但它的起跳条件是 `compile_cmd` 里写了一个比 `std_floor` 高的
+`-std`。默认配置下两者都是 `c++17`，阶梯为空，**开箱不会自动升档**，也不会去试
+C++20 / 23——编译命令写什么标准，就用什么标准编。
+
+把 `compile_cmd` 里的 `-std` 写高的用户（例如 `-std=c++23`）才会用到这套机制：插件先从
+`std_floor` 那一档编起，只有编译器自己说"这个要 C++NN 才有"（或源码里出现只有新标准才
+有的头文件）时才升档，最高升到你写的那一档，编得过的档位记在测试数据旁边的
+`<名>__tests.std` 里。这样做有具体原因：解析 `<bits/stdc++.h>` 的耗时随标准上升，
+开发机上 `-fsyntax-only` 实测 c++17 1.29 s、c++20 2.43 s、c++23 2.53 s，写死 c++23
+等于每次重新编译多等一秒多。普通的语法错误不会触发重试，报错原样给你。
 
 多文件编译用 `extra_sources`（glob）和 `include_dirs`，在编译命令里用
 `{extra_sources}` / `{include_dirs}` 占位。
@@ -143,9 +162,9 @@ Debug 模式加的是
 ## 文件输入输出（NOI / CSP-S）
 
 有些题要求 `freopen("add.in", "r", stdin)`、结果写到 `add.out`，用管道喂样例跑不起来。
-这类题按题设置一次即可：`View → Algorithm Competition Assistant → This problem
-reads/writes files`，两个文件名会按源码名预填（`add.cpp` → `add.in` / `add.out`），
-通常连按两次回车。
+这类题按题设置一次即可：`View → Algorithm Competition Assistant → Problem → This
+problem reads/writes files`，两个文件名会按源码名预填（`add.cpp` → `add.in` /
+`add.out`），通常连按两次回车。
 
 设置存在测试数据旁边的 `<名>__tests.io` 里，只对这一题生效，重启不丢。
 
@@ -172,8 +191,10 @@ reads/writes files`，两个文件名会按源码名预填（`add.cpp` → `add.
 
 - `pick_once`（默认）：同目录正好有一对就先用它，不问；没有才第一次问你，选完记在
   `<名>__tests.stress`，以后直接开跑；
-- `same_dir`：只在同目录按名字找，`std` / `brute` / `bf` / `sol` / `暴力` 配 `gen` /
-  `data` / `maker` / `rand` / `生成`，不弹窗；找不到会告诉你查了哪个目录；
+- `same_dir`：只在同目录按文件名主干找，不弹窗。正解匹配文件名含 `std` / `brute` /
+  `bf` / `baoli` / `sol` / `standard` / `correct` / `right` / `暴力` 之一的，生成器匹配
+  含 `gen` / `data` / `maker` / `make` / `rand` / `random` / `generator` / `shuju` /
+  `生成` / `数据` 之一的；找不到会告诉你查了哪个目录；
 - `auto`：同目录找不到就用设置里手填的 `stress_std_file` / `stress_generator_file`
   （这两个键插件不自动写入），仍不确定才问。
 
@@ -227,16 +248,14 @@ reads/writes files`，两个文件名会按源码名预填（`add.cpp` → `add.
 
 ## 其他工具
 
-- Benchmark（`Ctrl+Alt+Shift+K`）：当前测试点跑 N 次，报最快、平均、最慢。
-- 机器校准（命令面板 `Calibrate this machine's speed`）：算出本机相对参考评测机的速度
-  系数，状态栏显示等效时限。判题仍按你设的原始时限。
-- 练习统计（`Show practice statistics`）：每题的尝试次数、首次 AC、判题分布、对拍轮数。
-  数据在本插件自己的文件里。
-- 比赛计时器（`Ctrl+Alt+Shift+T`）：状态栏倒计时，30 / 10 / 5 分钟各提醒一次。
-- 模板片段（`Ctrl+Alt+T`）：光标停在关键字后展开，内置 fastio / main / bf / debug /
-  testlib。
-- 环境自检（`Ctrl+Alt+D`）：编译器、端口、路径、资源，另附一段可以粘进 issue 的
-  Markdown 报告。
+| 工具 | 入口 | 干什么 |
+| --- | --- | --- |
+| Benchmark | `Ctrl+Alt+Shift+K` | 当前测试点跑 N 次（`benchmark_runs`，默认 5），报最快、平均、最慢。 |
+| 机器校准 | 命令面板 `Calibrate this machine's speed` | 算出本机相对参考评测机的速度系数，状态栏显示等效时限。判题仍按你设的原始时限。 |
+| 练习统计 | 命令面板 `Show practice statistics` | 每题的尝试次数、首次 AC、判题分布、对拍轮数。数据在本插件自己的文件里。 |
+| 比赛计时器 | `Ctrl+Alt+Shift+T` | 状态栏倒计时，剩 30 / 10 / 5 分钟各提醒一次。默认时长 `contest_duration_minutes`（120 分钟），0 表示每次手输。 |
+| 模板片段 | `Ctrl+Alt+T` | 光标停在关键字后展开。查找顺序：`algorithms_base` 目录 → `templates` 字典 → 内置片段（fastio / main / bf / debug / testlib）。 |
+| 环境自检 | `Ctrl+Alt+D` | 编译器、端口、路径、资源，另附一段可以粘进 issue 的 Markdown 报告。 |
 
 ## 快捷键
 
@@ -278,9 +297,10 @@ reads/writes files`，两个文件名会按源码名预填（`add.cpp` → `add.
 
 ## 设置
 
-四个面板改的就是设置文件里那几个键，改完立刻生效：
+四个设置面板在 `View → Algorithm Competition Assistant` 菜单里（前三个在 `Settings`
+子菜单，最后一个在 `Problem` 子菜单），改的就是设置文件里那几个键，改完立刻生效：
 
-| 入口 | 管什么 |
+| 面板 | 管什么 |
 | --- | --- |
 | `Verdict rules` | 浮点容差、PE 是否算 AC、第一个失败是否停、判题时是否忽略 stderr |
 | `Stress test options` | std / gen 从哪来、挑文件方式、反例是否存成测试点、轮数、每轮时限 |
@@ -314,10 +334,11 @@ reads/writes files`，两个文件名会按源码名预填（`add.cpp` → `add.
 
 ## 界面语言
 
-默认中文，`"language": "zh"`。切英文的入口有三处：`Tools → Algorithm Competition
-Assistant → Switch language (中/EN)`、命令面板里的 `Switch to English`、右键菜单。
-状态栏、弹窗、面板文案和命令面板里的命令描述会跟着变；菜单项是静态 JSON，不跟语言，
-文案一律英文——例外是语言切换和中文说明两个入口，特意带上中文标注，方便中文用户找得到。
+默认中文，`"language": "zh"`。切英文的入口：`View → Algorithm Competition Assistant →
+Settings → Switch language (中/EN)`（旁边就是 `Switch to English`），或命令面板里的
+`Algorithm Competition Assistant: Switch to English`。状态栏、弹窗、面板文案和命令面板
+里的命令描述会跟着变；菜单项是静态 JSON，不跟语言，文案一律英文——例外是语言切换和
+中文说明两个入口，特意带上中文标注，方便中文用户找得到。
 
 界面切到英文后，详情页 `[信息]` 区块里插件自己写的判决附言（RE 位置、输出截断提示、
 TLE 原因）可以仍然用中文：设 `"message_language": "zh"`（默认 `"auto"`，跟随界面）。
@@ -346,13 +367,16 @@ TLE 原因）可以仍然用中文：设 `"message_language": "zh"`（默认 `"a
 
 ## 开发
 
-- 插件宿主是 Python 3.3，代码不能用 f-string、`subprocess.run`、
-  `Popen(encoding=…)` 这些新版本的东西，`tests/check_py33.py` 会拦。
-- 回归测试：`python tests/run_tests.py`，当前 1044 项，0 失败。测试用假的 `sublime`
+- **插件宿主**：Sublime Text build 4213 起，默认插件宿主是 Python 3.14，旧的 3.3 宿主
+  默认禁用；本插件实测在 3.14 宿主上加载运行正常。代码本身仍以 **Python 3.3 为兼容性
+  下限**，不能用 f-string、`subprocess.run`、`Popen(encoding=…)` 这些新版本的东西，
+  `tests/check_py33.py` 会拦。
+- 回归测试：`python tests/run_tests.py`，当前 1062 项，0 失败。测试用假的 `sublime`
   模块，不需要装 Sublime。
 - CI 跑 Linux（3.9 / 3.12）、Windows、macOS。
-- 版本号在 `plugin_init.py`，发版要同步 `messages.json` 和 `messages/<版本>.txt`，
-  `tests/check_messages.py` 会检查。
+- 版本号在 `plugin_init.py`。发版要往 `messages.json` 加对应键、放
+  `messages/<版本>.txt`，并在 `RELEASE_NOTES_CN.md` 里加 `# vX.Y.Z` 小节；
+  `tests/check_messages.py` 会交叉核对版本小节与键。
 
 ## 致谢
 

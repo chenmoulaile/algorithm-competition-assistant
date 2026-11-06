@@ -1194,6 +1194,128 @@ def main():
               ROOT, 'Highlight', 'test_detail_card.html'),
               encoding='utf-8').read())
 
+    # ---- v3.0.8: "16 lines / 44 bytes" for a 14-line actual output -------
+    # on_stop() appended '\n\n' (the run panel's unfolded-block padding) to
+    # the string it stored in test.stdout. The detail page measured the card
+    # from that stored string but drew its body from an rstripped copy, so a
+    # 14-line answer showed "16 lines / 44 bytes" above 14 lines of text.
+    # Sessions persisted by an older build still carry the padding, so the
+    # display has to normalize it too - fixing only the write site would leave
+    # the reported bug visible after an upgrade.
+    _polluted = ('YES\nNO\nYES\nYES\nNO\nYES\nNO\nYES\nYES\nYES\n'
+                 'NO\nYES\nYES\nNO\n\n')
+    _clean_payload = _polluted.rstrip('\n')       # the 14 lines the body shows
+    _poll_cmd = tm.CphTestManagerCommand.__new__(tm.CphTestManagerCommand)
+    _poll_cmd.view = sys.modules['sublime'].View()
+    _poll_cmd.dbg_file = None
+    _poll_cmd.detail_header_html = lambda i, test: '<div></div>'
+    _polluted_test = _DetailTest()
+    _polluted_test.test_string = '1 2'
+    _polluted_test.expected_output = 'YES'
+    _polluted_test.stdout = _polluted
+    _poll_text, _poll_blocks = _poll_cmd.build_detail(0, _polluted_test, [])
+    _poll_actual = [b for b in _poll_blocks if b['id'] == 'actual'][0]
+    _poll_meta = _poll_actual['meta']
+    check('the actual card counts the 14 shown lines, not the 16 stored',
+          _poll_meta.split()[0] == str(_clean_payload.count('\n') + 1),
+          _poll_meta)
+    check('the actual card counts the shown bytes, not the padding bytes',
+          _poll_meta.split('/')[1].split()[0]
+          == str(len(_clean_payload.encode('utf-8'))),
+          _poll_meta)
+    check('the actual card copies the shown output, not the padding',
+          _poll_actual['copy'] == _clean_payload,
+          repr(_poll_actual['copy']))
+    _poll_args = _poll_cmd.detail_view_args(0, _polluted_test)
+    check('the header copy button hands over the shown output',
+          _poll_args.get('copy_actual') == _clean_payload,
+          repr(_poll_args.get('copy_actual')))
+    # The write sites must not keep re-polluting what they store or persist.
+    _set_card = tm.CphTestManagerCommand.Test({'test': '1\n'})
+    _set_card.set_stdout('42\n\n')
+    check('set_stdout drops the buffer padding before storing',
+          _set_card.stdout == '42', repr(_set_card.stdout))
+    check('memorize() writes the clean output to the tests file',
+          _set_card.memorize().get('stdout') == '42',
+          repr(_set_card.memorize().get('stdout')))
+    _restored_card = tm.CphTestManagerCommand.Test(
+        {'test': '1\n', 'stdout': '42\n\n'})
+    check('a session restored from an old build drops the padding',
+          _restored_card.stdout == '42', repr(_restored_card.stdout))
+    _par_tester = make_tester([tm.CphTestManagerCommand.Test('a')])
+    _par_cmd = tm.CphTestManagerCommand.__new__(tm.CphTestManagerCommand)
+    _par_cmd.tester = _par_tester
+    _par_cmd.dbg_file = None
+    _par_cmd.store_parallel_result(0, {
+        'verdict': {'name': 'AC'}, 'stdout': '42\n',
+        'stderr': '', 'runtime': 5, 'rtcode': 0})
+    check('a parallel result stores no trailing newline either',
+          _par_tester.tests[0].stdout == '42',
+          repr(_par_tester.tests[0].stdout))
+    # Why this was a P3 display bug, not a judging bug: the padded and clean
+    # strings produce the same verdict, so the fix must not touch judging.
+    check('trailing newlines never were part of the verdict',
+          verdict.outputs_equal('42\n\n', '42', 0)
+          and verdict.outputs_equal('42', '42\n\n', 0))
+
+    # The same '\n\n' is REQUIRED by the unfolded run panel's block layout
+    # (get_tie_pos() adds 2 for it). Drive a whole on_stop() and make sure the
+    # fix moved the padding out of test.stdout and into the buffer text only -
+    # fixing the card must not misalign every card below it.
+    class _StopView(object):
+        def __init__(self):
+            self.commands = []
+
+        def erase_regions(self, *a, **k):
+            pass
+
+        def line(self, pt):
+            return sys.modules['sublime'].Region(0, 0)
+
+        def run_command(self, cmd, args=None):
+            self.commands.append((cmd, args))
+
+        def show(self, *a, **k):
+            pass
+
+        def add_regions(self, *a, **k):
+            pass
+
+        def window(self):
+            return None
+
+        def size(self):
+            return 0
+
+        def sel(self):
+            return [sys.modules['sublime'].Region(0)]
+
+    _stop_view = _StopView()
+    _stop_tester = make_tester([tm.CphTestManagerCommand.Test('1 2')])
+    _stop_tester.running_test = 0
+    _stop_tester.running_new = True
+    _stop_tester.prog_out[0] = 'YES\n'
+    _stop_cmd = tm.CphTestManagerCommand.__new__(tm.CphTestManagerCommand)
+    _stop_cmd.view = _stop_view
+    _stop_cmd.tester = _stop_tester
+    _stop_cmd.tester_epoch = 1
+    _stop_cmd.dbg_file = None
+    _stop_cmd.input_start = 0
+    _stop_cmd.delta_input = 0
+    _stop_cmd.checker_for = lambda: None
+    _stop_cmd.next_runnable_index = lambda: None
+    _stop_cmd.update_configs = lambda *a, **k: None
+    _stop_cmd.update_summary_bar = lambda *a, **k: None
+    _stop_cmd.memorize_tests = lambda force=False: None
+    _stop_cmd.record_stats = lambda *a, **k: None
+    _stop_cmd.on_stop(0, 5, epoch=1)
+    _stop_replace = [a['text'] for c, a in _stop_view.commands
+                     if a and a.get('action') == 'replace']
+    check('on_stop keeps the padding in the buffer but out of the stored output',
+          _stop_tester.tests[0].stdout == 'YES'
+          and _stop_replace == ['1 2\nYES\n\n'],
+          'stdout=%r buffer=%r' % (_stop_tester.tests[0].stdout, _stop_replace))
+
     class _CardView(object):
         """A detail-view stand-in that tracks buffer edits the way a real
         view does, so folding is exercised as the erase/insert it is."""

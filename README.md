@@ -6,18 +6,25 @@ over the test cases, then reports a verdict, a runtime and a memory figure for e
 The `detail` tab holds the input, the expected output, the actual output, stderr and a
 line-by-line diff.
 
+**Who it is for**: competitive programmers who work in Sublime Text and want the whole
+compile → run → diff loop without leaving the editor. Most of the work went into judging:
+memory and time limits are measured from the real process, runtime errors are located in
+your source when the information exists, compiles are cached, and file I/O problems
+(NOI / CSP-S) run locally. It does not solve problems and it does not submit anything.
+
+**Five-minute start**: open a source file → press `Ctrl+Alt+B` → click `detail`. The full
+walkthrough is in Quick start below.
+
 This is a fork of [FastOlympicCoding](https://github.com/Jatana/FastOlympicCoding). The run
 panel, the test editor and the shortcut layout come from that project. The way results are
 displayed follows VSCode's [cph-ng](https://github.com/langningchen/cph-ng), and the browser
 import follows [FastOlympicCodingHook](https://github.com/DrSchwad/FastOlympicCodingHook).
 
-Most of the work went into judging: memory and time limits are measured from the real
-process, runtime errors are located in your source when the information exists, compiles are
-cached, and file I/O problems (NOI / CSP-S) run locally. It does not solve problems and it
-does not submit anything.
-
 Chinese manual: [README_CN.md](README_CN.md). Version history:
-[RELEASE_NOTES_CN.md](RELEASE_NOTES_CN.md) (Chinese).
+[RELEASE_NOTES_CN.md](https://github.com/chenmoulaile/algorithm-competition-assistant/blob/main/RELEASE_NOTES_CN.md)
+(Chinese). Note that GitHub's auto-generated source archives (zip / tar.gz) drop
+`RELEASE_NOTES_CN.md` and `tests/` through the export-ignore rules in `.gitattributes`; if
+you downloaded an archive, read the notes at that online address.
 
 ## Install
 
@@ -39,10 +46,10 @@ browse. Configure it through `Preferences → Package Settings → Algorithm Com
 Assistant → Settings`: the left pane is the read-only default, the right pane is your
 `Packages/User/Algorithm Competition Assistant.sublime-settings`, which survives upgrades.
 
-Do not use both at once. If a folder of the same name sits in `Packages/` while the zip is
-installed, installing or upgrading the zip empties that folder, and the only symptom is
-"nothing changed after I edited the code". Startup prints a notice, and `Ctrl+Alt+D` reports
-whether the loaded copy is a folder or a zip.
+**Do not use both at once.** If a folder of the same name sits in `Packages/` while the zip
+is installed, installing or upgrading the zip empties that folder, and the only symptom is
+"nothing changed after I edited the code". Startup prints a notice, and `Ctrl+Alt+D`
+reports whether the loaded copy is a folder or a zip.
 
 ## Quick start
 
@@ -54,10 +61,12 @@ whether the loaded copy is a folder or a zip.
 4. The command palette (`Algorithm`) and `View → Algorithm Competition Assistant` expose the
    same commands.
 
-The shipped C++ command uses `-std=c++17 -O2`. Keep `-O2`: without it a correct program can
-look like a TLE locally.
+The shipped C++ command uses `-std=c++17 -O2`. **Keep `-O2`**: without it a correct program
+can look like a TLE locally.
 
 ## Judging
+
+### Verdicts
 
 | Verdict | Meaning |
 | --- | --- |
@@ -71,9 +80,15 @@ look like a TLE locally.
 | `SK` | stopped by hand |
 | `UKE` | no verdict, for example the program never started |
 
+`CE` behaves differently from the rest: **a compile failure is panel-level state**. It shows
+on the compile bar of the run panel and is never written into `<name>__tests`, so it does
+not survive a restart; every other verdict is saved with the test and restored.
+
 After a run each card offers `accept` and `decline`: the first stores the current output as a
 correct answer, the second marks it wrong. A test can keep several accepted answers, and a
 run that matches any of them passes.
+
+### Time and memory
 
 The clock starts when the process is created and stops the first time it is seen to have
 exited. Plugin work sits outside that window: `Popen`, draining the pipes, reading stderr and
@@ -91,6 +106,8 @@ it.
 A passing run that used 90-99% of the limit gets a status bar note. It does not change the
 verdict.
 
+### Runtime errors
+
 When the program crashes, the output is searched for a position first: a Python traceback, a
 Java stack or a sanitizer diagnostic gives `file:line`, shown on the card and in the status
 bar, and the link jumps to the source. A bare C++ segfault carries no line, so the plugin
@@ -98,20 +115,32 @@ replays the crash under gdb and looks for your frame in the backtrace. That need
 symbols: a Release build only yields a name like `main ()`, while `Ctrl+Alt+G` (Debug)
 locates the line.
 
-Debug adds `-g -fsanitize=undefined -fsanitize-trap=undefined -D_GLIBCXX_ASSERTIONS`. The trap
-form needs no sanitizer runtime, which matters because MSYS2's mingw ships neither `libubsan`
-nor `libasan`. Signed overflow, stack array overrun and division by zero become a non-zero
-exit (`RE`); `std::vector` overruns come from the assertion macro. Heap overruns are not
-covered by default; add `-fsanitize=address` yourself if your toolchain has `libasan`.
+Debug adds
+`-g -fsanitize=undefined -fsanitize-trap=undefined -fno-omit-frame-pointer -D_GLIBCXX_ASSERTIONS`.
+The trap form needs no sanitizer runtime, which matters because MSYS2's mingw ships neither
+`libubsan` nor `libasan`. Signed overflow, stack array overrun and division by zero become a
+non-zero exit (`RE`); `std::vector` overruns come from the assertion macro. Heap overruns are
+not covered by default; add `-fsanitize=address` yourself if your toolchain has `libasan`.
+
+### Compilation
 
 Compilation is cached: unchanged sources (including local `#include "..."`) and an unchanged
 command skip the compiler. `Ctrl+Alt+Shift+R` forces a rebuild.
 
-The default starts at `std_floor` (`c++17`) and only moves up when the compiler asks for a
-newer standard, remembering the tier in `<name>__tests.std` next to the test data. The reason
-is measurable: parsing `<bits/stdc++.h>` costs 1.29 s at c++17, 2.43 s at c++20 and 2.53 s at
-c++23 on the author's machine with `-fsyntax-only`, so a hard-coded c++23 adds a second to
-every recompile. Ordinary syntax errors are reported as they are, without a retry.
+**The `-std` ladder is idle by default.** It is controlled by `auto_std_switch` (on by
+default) and `std_floor` (`c++17`), but it only engages when your `compile_cmd` asks for a
+higher standard than `std_floor`. In the default settings both are `c++17`, the ladder is
+empty, and **nothing is upgraded out of the box** — the code compiles at the standard your
+command names, and the plugin never tries C++20/23 on its own.
+
+The ladder serves users who wrote a high `-std` into `compile_cmd` (say `-std=c++23`):
+compilation starts at `std_floor` and only moves up when the compiler itself says a feature
+needs C++NN (or the source includes a header only a newer standard provides), never past the
+standard the command asked for, remembering the tier in `<name>__tests.std` next to the test
+data. The reason is measurable: parsing `<bits/stdc++.h>` costs 1.29 s at c++17, 2.43 s at
+c++20 and 2.53 s at c++23 on the author's machine with `-fsyntax-only`, so a hard-coded
+c++23 adds a second to every recompile. Ordinary syntax errors are reported as they are,
+without a retry.
 
 Multi-file builds use `extra_sources` (glob) and `include_dirs`, referenced in the command as
 `{extra_sources}` and `{include_dirs}`.
@@ -135,15 +164,17 @@ paste give exactly the text on screen. Set `"detail_rich": false` for a plain, c
 page; `"detail_style": "phantom"` is the old embedded panel, where the text cannot be
 selected.
 
-The detail tab shares the right column with the run panel, and that column is sized by the run
-panel cards. Drag it wider if you need to; a width you set is not taken back automatically.
+The detail tab shares the right column with the run panel, and that column is sized by the
+run panel cards. Those follow their content between a floor of 8% of the window and
+`max_panel_width_ratio` (half the window by default). Drag it wider if you need to; a width
+you set is not taken back automatically.
 
 ## File input/output (NOI / CSP-S)
 
 Problems that read `add.in` and write `add.out` through `freopen` cannot use the pipe-based
-runner. Set the mode per problem from `View → Algorithm Competition Assistant → This problem
-reads/writes files`. Both names are prefilled from the source file (`add.cpp` gives `add.in` /
-`add.out`), so two Enter presses usually finish it. The choice is stored in
+runner. Set the mode per problem from `View → Algorithm Competition Assistant → Problem →
+This problem reads/writes files`. Both names are prefilled from the source file (`add.cpp`
+gives `add.in` / `add.out`), so two Enter presses usually finish it. The choice is stored in
 `<name>__tests.io` beside the test data and follows that one problem across restarts.
 
 At run time the sample is written as `add.in` inside a temporary directory, and the program
@@ -171,9 +202,11 @@ Press `Ctrl+Alt+S` in the source view. Where the pair comes from is controlled b
 
 - `pick_once` (default): ask the first time for this file, then remember the choice in
   `<name>__tests.stress`;
-- `same_dir`: look in the source directory only, trying `std` / `brute` / `bf` / `sol` /
-  `暴力` for the solution and `gen` / `data` / `maker` / `rand` / `生成` for the generator,
-  with no dialog; if nothing matches it says which directory it searched;
+- `same_dir`: look in the source directory only, matching file name stems, with no dialog:
+  the reference matches a stem containing `std` / `brute` / `bf` / `baoli` / `sol` /
+  `standard` / `correct` / `right` / `暴力`, the generator one containing `gen` / `data` /
+  `maker` / `make` / `rand` / `random` / `generator` / `shuju` / `生成` / `数据`; if nothing
+  matches it says which directory it searched;
 - `auto`: the old behaviour, directory first, then the global paths from last time, then ask.
 
 Picking the same file twice is refused: a program compared with itself agrees every round.
@@ -232,17 +265,14 @@ verdict.
 
 ## Other tools
 
-- Benchmark (`Ctrl+Alt+Shift+K`) runs the current test N times and reports min, average and
-  max.
-- Calibrate machine estimates this machine's speed factor and shows the equivalent judge
-  limit in the status bar. Judging still uses the limit you set.
-- Practice statistics (`Show practice statistics`) report attempts, first AC, verdict
-  distribution and stress rounds per problem.
-- Contest timer (`Ctrl+Alt+Shift+T`) counts down in the status bar, with notes at 30, 10 and
-  5 minutes.
-- Template snippets (`Ctrl+Alt+T`) expand after a keyword: fastio, main, bf, debug, testlib.
-- Environment check (`Ctrl+Alt+D`) covers the compiler, port, paths and resources, and prints
-  a Markdown report you can paste into an issue.
+| Tool | Entry | What it does |
+| --- | --- | --- |
+| Benchmark | `Ctrl+Alt+Shift+K` | runs the current test N times (`benchmark_runs`, 5 by default) and reports min, average and max. |
+| Calibrate machine | palette: `Calibrate this machine's speed` | estimates this machine's speed factor and shows the equivalent judge limit in the status bar. Judging still uses the limit you set. |
+| Practice statistics | palette: `Show practice statistics` | attempts, first AC, verdict distribution and stress rounds per problem. The data lives in the plugin's own files. |
+| Contest timer | `Ctrl+Alt+Shift+T` | counts down in the status bar, with notes at 30, 10 and 5 minutes left. Default length `contest_duration_minutes` (120 minutes); 0 asks every time. |
+| Template snippets | `Ctrl+Alt+T` | expand after a keyword. Lookup order: the `algorithms_base` directory → the `templates` dict → built-ins (fastio / main / bf / debug / testlib). |
+| Environment check | `Ctrl+Alt+D` | compiler, port, paths and resources, plus a Markdown report you can paste into an issue. |
 
 ## Key bindings
 
@@ -284,9 +314,11 @@ the test, `Ctrl+Shift+Up/Down` swaps tests.
 
 ## Settings
 
-Four panels edit the keys in the settings file and take effect immediately:
+Four panels edit the keys in the settings file and take effect immediately; they live in
+`View → Algorithm Competition Assistant` (the first three under `Settings`, the last one
+under `Problem`):
 
-| Entry | What it controls |
+| Panel | What it controls |
 | --- | --- |
 | `Verdict rules` | float tolerance, PE as AC, stop on first failure, ignore stderr |
 | `Stress test options` | where std / gen come from, file picker, saving counterexamples, rounds, per-round limit |
@@ -316,6 +348,22 @@ starts; the port is read at the same moment.
 
 The remaining keys are documented in `Algorithm Competition Assistant.sublime-settings`.
 
+## Interface language
+
+Chinese is the default (`"language": "zh"`). To switch to English, use
+`View → Algorithm Competition Assistant → Settings → Switch language (中/EN)` (with
+`Switch to English` right next to it) or the palette's
+`Algorithm Competition Assistant: Switch to English`. The status bar, dialogs, panel text and
+palette descriptions follow; menu items are static JSON and stay English — with two
+deliberate exceptions carrying Chinese labels (the language switch and the Chinese manual
+entry) so Chinese users can find them.
+
+Once the interface is English, the verdict notes the plugin writes into the detail tab's
+`[Message]` section (the RE location, the truncation notice, the TLE explanation) can stay in
+Chinese: set `"message_language": "zh"` (default `"auto"`, follows the interface). Those
+lines tell you what to look at next, and misreading them costs more than reading them slowly.
+Text printed by a checker itself is never touched.
+
 ## Known limits
 
 - macOS memory is a sampled peak for one process, not the kernel's peak RSS, so it can read
@@ -341,13 +389,17 @@ The remaining keys are documented in `Algorithm Competition Assistant.sublime-se
 
 ## Development
 
-- The plugin host is Python 3.3. No f-strings, no `subprocess.run`, no
-  `Popen(encoding=...)`; `tests/check_py33.py` enforces this.
-- Tests: `python tests/run_tests.py`, currently 1044 checks, 0 failures, using a fake
+- **Plugin host**: from Sublime Text build 4213 the default plugin host is Python 3.14 and
+  the legacy 3.3 host is disabled by default; the plugin loads and runs on the 3.14 host
+  (tested). The code itself still keeps **Python 3.3 as its compatibility floor**: no
+  f-strings, no `subprocess.run`, no `Popen(encoding=...)` — `tests/check_py33.py` enforces
+  this.
+- Tests: `python tests/run_tests.py`, currently 1062 checks, 0 failures, using a fake
   `sublime` module and no third-party packages.
 - CI runs Linux (3.9 and 3.12), Windows and macOS.
-- Bump `VERSION` in `plugin_init.py` and add `messages/<version>.txt` plus the
-  `messages.json` entry; `tests/check_messages.py` checks the three agree.
+- Bump `VERSION` in `plugin_init.py`. A release adds a `messages/<version>.txt` file, the
+  matching `messages.json` key and a `# vX.Y.Z` heading in `RELEASE_NOTES_CN.md`;
+  `tests/check_messages.py` cross-checks the notes against `messages.json`.
 
 ## Credits
 
