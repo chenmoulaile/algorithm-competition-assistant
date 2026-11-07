@@ -1229,7 +1229,10 @@ def _run_program(program, input_data, cwd=None, time_limit=2.0, env=None,
     if not argv:
         return (-1, '', 'no run command configured', False)
     if cwd is None:
-        cwd = os.path.dirname(program if isinstance(program, str) else argv[0])
+        # A bare launcher name ("python" out of a run_cmd) has an empty
+        # dirname, and Popen(cwd='') raises WinError 123 on Windows; None
+        # lets the child inherit the host directory instead.
+        cwd = os.path.dirname(program if isinstance(program, str) else argv[0]) or None
     try:
         rc, out, err = _popen_capture(argv, cwd, input_text=input_data,
                                      timeout=time_limit, env=env,
@@ -1900,7 +1903,8 @@ class CphStressReplayCommand(sublime_plugin.TextCommand):
 					say('[Algorithm Competition Assistant] generator: %s\n' % (why or 'failed'))
 					return
 				rc, inp, err, tle = _run_program(
-					gen_exe, '', time_limit=float(
+					gen_exe, '', cwd=os.path.dirname(gen_file) or None,
+					time_limit=float(
 						get_settings().get('stress_generator_time_limit_seconds', 10) or 10),
 					env={'CPH_SEED': str(seed)}, sess=sess)
 				if rc != 0 or tle:
@@ -1921,8 +1925,14 @@ class CphStressReplayCommand(sublime_plugin.TextCommand):
 				# every replay.
 				user_argv = _program_command(user_exe, user_file) or _program_argv(user_file)
 				std_argv = _program_command(std_exe, std_file) or _program_argv(std_file)
-				_rc1, user_out, _e1, tle1 = _run_program(user_argv or user_exe, inp, time_limit=limit, sess=sess)
-				_rc2, std_out, _e2, _tle2 = _run_program(std_argv or std_exe, inp, time_limit=limit, sess=sess)
+				# cwd, like the main loop hands one over (see _run_program's
+				# fallback for what an empty dirname used to do here).
+				_rc1, user_out, _e1, tle1 = _run_program(
+					user_argv or user_exe, inp, cwd=os.path.dirname(user_file) or None,
+					time_limit=limit, sess=sess)
+				_rc2, std_out, _e2, _tle2 = _run_program(
+					std_argv or std_exe, inp, cwd=os.path.dirname(std_file) or None,
+					time_limit=limit, sess=sess)
 				if tle1:
 					say('[Algorithm Competition Assistant] ' + t('stress_replay_tle') + '\n')
 					return
