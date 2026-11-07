@@ -241,6 +241,10 @@ class CphIoModeCommand(sublime_plugin.TextCommand):
 		return PREFIX + t('opt_io_mode')
 
 	def run(self, edit):
+		# A TextCommand is handed only self.view; the window hangs off the view
+		# (like CphFetchProblemCommand), and without one there is nothing to ask.
+		if self.view.window() is None:
+			return
 		file_name = self.view.file_name()
 		if not file_name:
 			sublime.status_message('[Algorithm Competition Assistant] '
@@ -264,8 +268,8 @@ class CphIoModeCommand(sublime_plugin.TextCommand):
 				if files:
 					set_problem_io(file_name, 'stdin')
 					self.view.erase_status('cph_io')
-					self.window.status_message('[Algorithm Competition Assistant] '
-											   + t('opt_io_stdin'))
+					self.view.window().status_message('[Algorithm Competition Assistant] '
+													  + t('opt_io_stdin'))
 				else:
 					self._ask_names(file_name, inp, outp)
 				return
@@ -276,19 +280,19 @@ class CphIoModeCommand(sublime_plugin.TextCommand):
 			self._ask_names(file_name, spec.get('input') or inp,
 							spec.get('output') or outp)
 
-		self.window.show_quick_panel(items, choose)
+		self.view.window().show_quick_panel(items, choose)
 
 	def _ask_names(self, file_name, inp, outp):
 		"""两次输入，都预填好：题面里就写着这两个名字，通常一次回车就完事。"""
 		def ask_output(input_name):
-			self.window.show_input_panel(
+			self.view.window().show_input_panel(
 				t('opt_io_output_prompt'),
 				os.path.splitext(input_name)[0] + '.out',
 				lambda text: self._store(file_name, input_name,
 										 (text or '').strip()),
 				None, None)
 
-		self.window.show_input_panel(
+		self.view.window().show_input_panel(
 			t('opt_io_input_prompt'), inp,
 			lambda text: ask_output((text or '').strip() or inp), None, None)
 
@@ -301,8 +305,8 @@ class CphIoModeCommand(sublime_plugin.TextCommand):
 		# back to stdin after a restart" is exactly the kind of thing nobody
 		# suspects. Say which file refused and why (same reporter the tests use).
 		notify_io_error(file_name)
-		self.window.status_message('[Algorithm Competition Assistant] %s: %s -> %s'
-								   % (t('opt_io_files'), spec['input'], spec['output']))
+		self.view.window().status_message('[Algorithm Competition Assistant] %s: %s -> %s'
+										  % (t('opt_io_files'), spec['input'], spec['output']))
 		# 把当前模式挂在状态栏上：比赛里一旦走错通道（题面要求文件、却在按管道
 		# 评测），当场就能看出来，而不是拿到一堆看不懂的 WA。
 		self.view.set_status('cph_io', '%s: %s -> %s'

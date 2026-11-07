@@ -6050,7 +6050,7 @@ def main():
           and verdict.get_verdict_by_code(124, 10, 2000, 256, '', '', 'x\n')['name'] == 'TLE'
           and verdict.get_verdict_by_code(1, 10, 2000, 256, '', '', 'x\n')['name'] == 'RE')
 
-    # --- two more findings from the channel reviewer ---
+    # --- more findings from the channel reviewer ---
     # 5. messages.json keys must be "install" or a full semantic version;
     #    "2.0" (two components) was rejected as an invalid version.
     messages_json = json.loads(open(os.path.join(ROOT, 'messages.json'),
@@ -6090,6 +6090,38 @@ def main():
                         os.path.relpath(path, ROOT), node.lineno))
     check('every subprocess.Popen hides the console window',
           not missing_si, str(missing_si))
+    # 7. A TextCommand is handed a view, not a window: a self.window in one
+    #    raises AttributeError the first time it opens the quick panel.
+    bad_windows = []
+    for dirpath, dirnames, filenames in os.walk(ROOT):
+        dirnames[:] = [d for d in dirnames
+                       if d not in ('.git', '__pycache__', '.workbuddy', 'tests')]
+        for name in filenames:
+            if not name.endswith('.py'):
+                continue
+            path = os.path.join(dirpath, name)
+            try:
+                tree = ast.parse(open(path, encoding='utf-8').read())
+            except Exception:
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ClassDef):
+                    continue
+                if not any(isinstance(base, ast.Attribute)
+                           and base.attr == 'TextCommand'
+                           and isinstance(base.value, ast.Name)
+                           and base.value.id == 'sublime_plugin'
+                           for base in node.bases):
+                    continue
+                for sub in ast.walk(node):
+                    if (isinstance(sub, ast.Attribute)
+                            and isinstance(sub.value, ast.Name)
+                            and sub.value.id == 'self'
+                            and sub.attr == 'window'):
+                        bad_windows.append('%s:%d' % (
+                            os.path.relpath(path, ROOT), sub.lineno))
+    check('no TextCommand subclass reaches for self.window',
+          not bad_windows, str(bad_windows))
 
     print('== round 9: stress testing follows the judging rules ==')
     # Comparing the two outputs line by line made stress testing useless for
