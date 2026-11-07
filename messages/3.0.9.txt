@@ -1,0 +1,24 @@
+Algorithm Competition Assistant 3.0.9
+=====================================
+
+Two fixes for paths that failed silently, both found by the 2026-11 code
+review: a stress-test replay that reported "outputs match" without ever
+running the program, and an IO-mode quick panel that could not open at all.
+
+* Counterexample replay: when run_cmd is a bare command name (such as
+  "python"), the replay now passes the source file's directory as the working
+  directory. It used to hand Popen an empty cwd, which raises WinError 123 on
+  Windows, and the replay swallowed that failure into two empty outputs and a
+  false "outputs match" - a counterexample thrown away because the launcher
+  had failed, not because the program was right. _run_program's argv[0]
+  fallback now yields None instead of '' for the same reason.
+* The "This problem reads/writes files" panel: CphIoModeCommand is a
+  TextCommand but reached for self.window, an attribute TextCommands do not
+  have, so every open raised AttributeError and the quick panel never
+  appeared. It now goes through self.view.window(), and the entry point steps
+  aside when the view has no window.
+* New AST guard: a sublime_plugin.TextCommand subclass may not reference
+  self.window, so the same mistake fails the regression suite instead of
+  shipping.
+
+Regression suite: 1063 checks, 0 failures.
