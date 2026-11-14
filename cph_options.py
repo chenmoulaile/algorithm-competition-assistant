@@ -315,4 +315,10 @@ class CphIoModeCommand(sublime_plugin.TextCommand):
 	def is_visible(self):
 		from .core.cph_settings import is_run_supported_ext
 		name = self.view.file_name()
-		return bool(name) and is_run_supported_ext(name)
+		if not name:
+			return False
+		# is_run_supported_ext() matches a bare extension ('cpp'), not a
+		# full path. Passing the whole path made this menu item invisible
+		# for every file since the command shipped.
+		ext = os.path.splitext(name)[1][1:].lower()
+		return is_run_supported_ext(ext)

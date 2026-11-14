@@ -9092,6 +9092,148 @@ def main():
           and "if self.mode == 'input' and sibling is not None:"
           in _edit_src)
 
+    # ------------------------------------------------------------------
+    # v3.0.10 review fixes: six gaps the two read-only audits pinned down.
+    # RED first - every one of these fails on the shipped code.
+    # ------------------------------------------------------------------
+    _tm_src_fix = open(os.path.join(ROOT, 'test_manager.py'),
+                       encoding='utf-8').read()
+    _runmodes_fix = importlib.import_module(pkg + '.cph_run_modes')
+    _opts_fix = importlib.import_module(pkg + '.cph_options')
+    _settings_fix = importlib.import_module(pkg + '.core.cph_settings')
+
+    class _FixView(_sub_mod.View):
+        def __init__(self, *a, **k):
+            _sub_mod.View.__init__(self, *a, **k)
+            self.commands = []
+            self._win = None
+
+        def run_command(self, cmd, args=None):
+            self.commands.append((cmd, args))
+
+        def window(self):
+            if self._win is not None:
+                return self._win
+            return _sub_mod.View.window(self)
+
+    class _FixWindow(_sub_mod.Window):
+        def __init__(self):
+            _sub_mod.Window.__init__(self)
+            self.cols = [0, 0.68, 1]
+
+        def get_layout(self):
+            return {'cols': list(self.cols), 'rows': [0, 1],
+                    'cells': [[0, 0, 1, 1], [1, 0, 2, 1]]}
+
+        def set_layout(self, layout):
+            self.cols = list(layout['cols'])
+
+    # 1. auto-fit: an external column change must never be suppressed by the
+    #    remembered last target (the stutter guard compared target-to-target).
+    win_stale = _FitWindow([0, 0.4, 1])
+    mgr_stale = _fit_manager(win_stale, [_fit_card])
+    mgr_stale.auto_fit_panel_width()
+    _fit_first = len(win_stale.calls)
+    win_stale.cols[1] = 0.4            # user drags the divider back
+    mgr_stale.auto_fit_panel_width()
+    check('a refit after an external column change is not suppressed',
+          _fit_first == 1 and len(win_stale.calls) == 2,
+          'calls=%r' % (win_stale.calls,))
+
+    # 2. auto-fit: switching back to a run tab re-triggers the fit.
+    check('the layout listener re-fits a run tab when it is activated',
+          'def on_activated(' in _tm_src_fix and 'refit_panel' in _tm_src_fix)
+    check('the refit action is dispatched to the panel',
+          "action == 'refit_panel'" in _tm_src_fix)
+
+    # 3. a clean-tests run command exists with the right flag.
+    check('a clean-tests run command ships',
+          hasattr(_runmodes_fix, 'CphRunCleanTestsCommand')
+          and _runmodes_fix.CphRunCleanTestsCommand.flags == {'clr_tests': True})
+
+    # 4. the -run panel re-dispatch forwards clr_tests instead of dropping it.
+    _syntax_fix = 'Packages/%s/TestSyntax.sublime-syntax' % tm.package_name
+    _panel_view = _FixView(settings={'syntax': _syntax_fix})
+    tm.CphViewTesterCommand(_panel_view).run(None, action='make_opd',
+                                             clr_tests=True)
+    _dispatched = [a for (c, a) in _panel_view.commands
+                   if c == 'cph_test_manager']
+    check('a clean run on a -run panel forwards clr_tests',
+          bool(_dispatched) and _dispatched[0].get('clr_tests') is True,
+          'commands=%r' % (_panel_view.commands,))
+
+    # 5. a clean run is not silently overwritten by the restored session.
+    check('a clean run is not overwritten by the saved session',
+          "clr_tests = self.session['clr_tests']" not in _tm_src_fix)
+
+    # 6. every rerun force-kills the previous run, including a compile in
+    #    flight and a parallel batch (not only a plain RUNNING process).
+    _guard = _tm_src_fix[_tm_src_fix.index('def make_opd'):
+                         _tm_src_fix.index('def make_opd') + 3000]
+    check('a rerun also force-kills a compiling or batched previous run',
+          "in ('RUNNING', 'COMPILING')" in _guard
+          and 'batch_active' in _guard)
+
+    # 7. folding the panel column trims stale -run tabs down to two, without
+    #    killing a tab that is still running.
+    _lw = _FixWindow()
+    _fold_view = _FixView()
+    _fold_view._win = _lw
+    _run_views = []
+    for _i in range(4):
+        _rv = _FixView()
+        _rv.settings().set('cph_run_view', True)
+        _rv.set_name('p%d -run' % _i)
+        _lw._views.append(_rv)
+        _run_views.append(_rv)
+    _saved_timeout = _sub_mod.set_timeout
+    _sub_mod.set_timeout = lambda fn, delay=0: fn()
+    try:
+        tm.CphViewTesterCommand(_fold_view).run(None, action='sync_opdebugs')
+    finally:
+        _sub_mod.set_timeout = _saved_timeout
+    _alive = [v for v in _run_views if not v._closed]
+    check('folding the panel keeps at most two -run tabs',
+          len(_alive) <= 2,
+          'alive=%d' % len(_alive))
+
+    # 8. IO mode is visible for a supported extension (it used to pass the
+    #    whole path to a function that only recognises bare extensions).
+    _prev_settings = _settings_fix.get_settings()
+    _settings_fix.init_settings({'run_settings': [{'extensions': ['cpp']}]})
+    try:
+        _cpp_view = _FixView(file_name='C:/work/a.cpp')
+        _txt_view = _FixView(file_name='C:/work/a.txt')
+        _none_view = _FixView()
+        check('io mode is visible for a supported file',
+              _opts_fix.CphIoModeCommand(_cpp_view).is_visible() is True)
+        check('io mode stays hidden for an unsupported file',
+              _opts_fix.CphIoModeCommand(_txt_view).is_visible() is False)
+        check('io mode stays hidden without a file',
+              _opts_fix.CphIoModeCommand(_none_view).is_visible() is False)
+    finally:
+        _settings_fix.init_settings(_prev_settings)
+
+    # 9. the clean-tests shortcut ships on all three platforms and does not
+    #    collide with an existing chord.
+    for _kb_name in ('Default (Windows).sublime-keymap',
+                     'Default (Linux).sublime-keymap',
+                     'Default (OSX).sublime-keymap'):
+        with open(os.path.join(ROOT, _kb_name), encoding='utf-8') as _kf:
+            _kb = json.load(_kf)
+        _clean = [e for e in _kb if e.get('command') == 'cph_run_clean_tests']
+        _chords = [tuple(e.get('keys') or []) for e in _kb]
+        check('clean-tests shortcut ships on %s' % _kb_name,
+              len(_clean) == 1
+              and _clean[0].get('keys') == ['ctrl+alt+shift+n']
+              and _chords.count(('ctrl+alt+shift+n',)) == 1,
+              'entries=%r' % (_clean,))
+    with open(os.path.join(ROOT, 'Default.sublime-commands'),
+              encoding='utf-8') as _cf:
+        _cmds_fix = _cf.read()
+    check('the clean run is reachable from the command palette',
+          'cph_run_clean_tests' in _cmds_fix)
+
     print('')
     print('%d checks, %d failures' % (CHECKS[0], len(FAILURES)))
     if FAILURES:

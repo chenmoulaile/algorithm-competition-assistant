@@ -371,7 +371,7 @@ TLE 原因）可以仍然用中文：设 `"message_language": "zh"`（默认 `"a
   默认禁用；本插件实测在 3.14 宿主上加载运行正常。代码本身仍以 **Python 3.3 为兼容性
   下限**，不能用 f-string、`subprocess.run`、`Popen(encoding=…)` 这些新版本的东西，
   `tests/check_py33.py` 会拦。
-- 回归测试：`python tests/run_tests.py`，当前 1062 项，0 失败。测试用假的 `sublime`
+- 回归测试：`python tests/run_tests.py`，当前 1078 项，0 失败。测试用假的 `sublime`
   模块，不需要装 Sublime。
 - CI 跑 Linux（3.9 / 3.12）、Windows、macOS。
 - 版本号在 `plugin_init.py`。发版要往 `messages.json` 加对应键、放

@@ -214,5 +214,9 @@
 	{
 		"caption": "Algorithm Competition Assistant: Run in interactive terminal (Ctrl+Alt+Shift+X)",
 		"command": "cph_manual_open"
+	},
+	{
+		"caption": "Algorithm Competition Assistant: Run with clean tests (Ctrl+Alt+Shift+N)",
+		"command": "cph_run_clean_tests"
 	}
 ]

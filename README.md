@@ -394,7 +394,7 @@ Text printed by a checker itself is never touched.
   (tested). The code itself still keeps **Python 3.3 as its compatibility floor**: no
   f-strings, no `subprocess.run`, no `Popen(encoding=...)` — `tests/check_py33.py` enforces
   this.
-- Tests: `python tests/run_tests.py`, currently 1062 checks, 0 failures, using a fake
+- Tests: `python tests/run_tests.py`, currently 1078 checks, 0 failures, using a fake
   `sublime` module and no third-party packages.
 - CI runs Linux (3.9 and 3.12), Windows and macOS.
 - Bump `VERSION` in `plugin_init.py`. A release adds a `messages/<version>.txt` file, the

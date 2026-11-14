@@ -1,0 +1,36 @@
+Algorithm Competition Assistant 3.0.10
+======================================
+
+Five fixes around the run panel's layout and lifecycle, all reported after
+3.0.9: the panel stopped re-fitting its columns, a clean-tests run had no
+shortcut, a rerun could not replace a run that was still compiling, and
+closing the panel left stale run tabs behind.
+
+* Panel width: the auto-fit pass remembered its last target column and then
+  suppressed every later attempt that computed the same target. Once you
+  dragged the divider or folded the panel, the remembered value no longer
+  matched the real layout and the panel never widened or narrowed again. The
+  suppression now also checks the column the window actually has, so a
+  relayout that was thrown away by an exception no longer poisons the next
+  attempt.
+* Panel width: the fit only ran when the run panel refreshed its contents, so
+  switching back to a run tab did not re-fit it. A layout listener now
+  re-fits the panel when a run tab is activated.
+* "Run with clean tests" is now its own command (Ctrl+Alt+Shift+N, also in the
+  Command Palette and the Run menu). It deletes the saved samples for the
+  current file and then runs. Previously the only way to reach it was a
+  command-palette entry that reused the view-tester command, and on an
+  existing run panel that command dropped the clean-tests flag, so the old
+  samples were silently kept.
+* Rerunning now force-kills the previous run even when it is still compiling
+  or running a parallel batch. It used to drop the request outright for the
+  first 30 seconds of a compile, and a batch kept running alongside the new
+  one.
+* Folding the panel with the shortcut now keeps at most two run tabs per
+  window; it used to leave every tab open. Tabs whose run is still going are
+  never closed.
+* IO mode: "This problem reads/writes files" was hidden for every file, because
+  the visibility check handed the full path to a helper that expects a bare
+  extension. It now passes the extension.
+
+Regression suite: 1078 checks, 0 failures.

@@ -706,5 +706,24 @@
 				"operand": true
 			}
 		]
+	},
+	{
+		"keys": [
+			"ctrl+alt+shift+n"
+		],
+		"command": "cph_run_clean_tests",
+		"context": [
+			{
+				"key": "selector",
+				"operator": "equal",
+				"match_all": false,
+				"operand": "source.c++, source.c, source.python, source.java, source.rust, source.go, source.pascal, source.js, source.TestSyntax"
+			},
+			{
+				"key": "cph_keybindings_enabled",
+				"operator": "equal",
+				"operand": true
+			}
+		]
 	}
 ]

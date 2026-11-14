@@ -3627,7 +3627,12 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		# is what produced the visible stutter. Only a real change counts.
 		last = getattr(self, '_fit_last_cols1', None)
 		if last is not None and abs(target_col1 - last) < 0.01:
-			return
+			# Only suppress an unchanged re-measurement: if the user dragged
+			# the divider (or a fold rewrote cols[1]) away from the remembered
+			# target, re-applying that same target is exactly what restores
+			# the panel, so the stutter guard must not suppress it.
+			if abs(cols[1] - last) < 0.01:
+				return
 		try:
 			w.set_layout({
 				'cols': [cols[0], target_col1, cols[2]],
@@ -4259,26 +4264,25 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			print('[Algorithm Competition Assistant] the run view has no window any more, ignoring')
 			return
 
-		# Re-entry guard: only block while a compile is genuinely in flight.
-		# A stale 'COMPILING' status left behind by an older crashed compile
-		# is auto-cleared after 30s so the user is never stuck forever.
-		compiling_since = getattr(self, 'compiling_since', None)
-		if compiling_since is not None and (time() - compiling_since) < 30:
-			sublime.status_message('[Algorithm Competition Assistant] ' + t('compile_reentry_warn'))
-			return
-
-		if v.get_status('process_status') == 'RUNNING' or \
-				(self.tester is not None and self.tester.proc_run):
+		# Every Run force-kills whatever the previous run left unfinished -
+		# a live process, a parallel batch, or a compile still in flight.
+		# A second press is never dropped just because the first is busy.
+		_tester = self.tester
+		_status = v.get_status('process_status')
+		_batch = _tester is not None and getattr(_tester, 'batch_active', False)
+		if _status in ('RUNNING', 'COMPILING') or \
+				(_tester is not None and _tester.proc_run) or _batch or \
+				getattr(self, 'compiling_since', None) is not None:
+			# Invalidate the old tester's callbacks BEFORE killing so a
+			# stale __on_stop (or a late after_compile from a cancelled
+			# compile) is dropped on the way to the rerun.
+			self.tester_epoch = getattr(self, 'tester_epoch', 0) + 1
+			self.compiling_since = None
 			# Re-run: kill the still-running process, then wait for it to
 			# really die *off the UI thread* (see wait_then_rerun below).
 			tester = self.tester
 			pm = None
 			if tester is not None:
-				# Invalidate the old tester's callbacks BEFORE killing so
-				# the stale __on_stop fired by the dying process is dropped
-				# (it would otherwise re-render regions / schedule a
-				# spurious new_test between here and the rerun).
-				self.tester_epoch = getattr(self, 'tester_epoch', 0) + 1
 				try:
 					tester.terminate_async()
 				except Exception:
@@ -4292,6 +4296,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				except Exception:
 					pass
 				tester.proc_run = False
+				tester.batch_active = False
 
 			kwargs = {
 				'run_file': run_file,
@@ -4377,7 +4382,10 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			else:
 				run_file = self.session['run_file']
 				build_sys = self.session['build_sys']
-				clr_tests = self.session['clr_tests']
+				# A clean run requested from the -run panel must not be
+				# silently undone by the restored session: clr_tests wins
+				# whenever the request asks for it.
+				clr_tests = clr_tests or self.session.get('clr_tests', False)
 				sync_out = self.session['sync_out']
 				code_view_id = self.session['code_view_id']
 				time_limit_ms = self.session.get('time_limit_ms')
@@ -4905,6 +4913,12 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 		elif action == 'apply_edit_changes':
 			self.apply_edit_changes()
+
+		elif action == 'refit_panel':
+			# Re-fit after an external layout change (tab switch, fold).
+			# A freshly restored panel may not have a tester yet.
+			if self.tester is not None:
+				self.schedule_auto_fit_panel_width()
 
 		elif action == 'make_opd':
 			self.make_opd(edit, run_file=run_file, build_sys=build_sys, clr_tests=clr_tests, \
@@ -5562,6 +5576,7 @@ class CphViewTesterCommand(sublime_plugin.TextCommand):
 				v.run_command('cph_test_manager', {
 					'action': 'make_opd',
 					'load_session': True,
+					'clr_tests': clr_tests,
 					'run_all': run_all,
 					'run_failed': run_failed,
 					'force_compile': force_compile,
@@ -5584,12 +5599,53 @@ class CphViewTesterCommand(sublime_plugin.TextCommand):
 					self.ruler_opd_panel = min(layout['cols'][1], 0.93)
 					layout['cols'][1] = 1
 					w.set_layout(layout)
+					_trim_run_views(w, protect=v)
 				else:
 					layout['cols'][1] = self.ruler_opd_panel
 					w.set_layout(layout)
 
 
+def _trim_run_views(window, keep=2, protect=None):
+	"""Keep at most `keep` -run tabs once the panel column is folded away.
+
+	Closing a -run view dispatches cph_test_manager 'close', which terminates
+	that tab's process, so never trim a tab whose process is still alive, nor
+	the tab the user is looking at. ST 4215 can segfault when a view in the
+	second group is closed synchronously inside a window command, so defer
+	each close through set_timeout - CloseListener uses the same trick.
+	"""
+	if window is None:
+		return
+	try:
+		all_run = [rv for rv in window.views()
+			   if rv.settings().get('cph_run_view')]
+		trimmable = [rv for rv in all_run
+			     if rv is not protect
+			     and rv.get_status('process_status')
+			     not in ('RUNNING', 'COMPILING')]
+	except Exception:
+		return
+	excess = len(all_run) - keep
+	if excess <= 0:
+		return
+	for rv in trimmable[:excess]:
+		try:
+			sublime.set_timeout(lambda rv=rv: rv.close(), 0)
+		except Exception:
+			pass
+
+
 class LayoutListener(sublime_plugin.EventListener):
 	def __init__(self):
 		super(LayoutListener, self).__init__()
+
+	def on_activated(self, view):
+		# Switching back to a run tab has to re-fit the panel: auto-fit is
+		# otherwise only triggered by update_configs (a panel refresh), which
+		# never fires on a plain tab switch or an external column drag.
+		try:
+			if view.settings().get('cph_run_view'):
+				view.run_command('cph_test_manager', {'action': 'refit_panel'})
+		except Exception:
+			pass
 

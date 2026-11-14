@@ -614,11 +614,6 @@ STRINGS = {
               'the extension will do nothing; change companion_port or free the '
               'port and restart',
     },
-    'compile_reentry_warn': {
-        'zh': '正在编译，请等它结束；若确实卡住了，30 秒后可以再按一次',
-        'en': 'a compile is in progress, wait for it; if it really hung you can '
-              'press again after 30s',
-    },
     'run_view_gone': {
         'zh': '这道题的运行面板已经不在了（被关掉了），先把源码再跑一次',
         'en': 'this problem\'s run panel is gone (it was closed); run the source '

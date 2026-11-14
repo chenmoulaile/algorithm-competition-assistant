@@ -92,6 +92,14 @@ class CphRunParallelCommand(_RunModeMixin, sublime_plugin.TextCommand):
 	flags = {'parallel': True}
 
 
+class CphRunCleanTestsCommand(_RunModeMixin, sublime_plugin.TextCommand):
+	"""Wipe every saved sample, then run. Bound to its own shortcut so a
+	clean run also works from a -run panel: clr_tests is forwarded through
+	the re-dispatch and no longer overwritten by the restored session."""
+
+	flags = {'clr_tests': True}
+
+
 class CphToggleBuildModeCommand(sublime_plugin.TextCommand):
 	"""Switch the compile command between release (-O2) and debug.
 

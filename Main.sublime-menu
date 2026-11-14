@@ -16,12 +16,8 @@
 								}
 							},
 							{
-								"caption": "Run with clean tests",
-								"command": "cph_view_tester",
-								"args": {
-									"action": "make_opd",
-									"clr_tests": true
-								}
+								"caption": "Run with clean tests (Ctrl+Alt+Shift+N)",
+								"command": "cph_run_clean_tests"
 							},
 							{
 								"caption": "Run all tests (keep going after failures) (Ctrl+Alt+Shift+B)",
