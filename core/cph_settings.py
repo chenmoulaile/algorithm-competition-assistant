@@ -94,16 +94,6 @@ def is_run_supported_ext(ext):
 	return False
 
 
-def get_supported_exts(lang):
-	_run_settings = get_settings().get('run_settings', None)
-	if _run_settings is not None:
-		for option in _run_settings:
-			if option['name'] == lang:
-				return option['extensions']
-		return []
-	return []
-
-
 def try_load_settings():
 	_settings = sublime.load_settings(settings_file)
 	if _settings is None:

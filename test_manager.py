@@ -11,11 +11,11 @@ from time import monotonic, sleep, time
 import threading
 
 from .Modules.ProcessManager import ProcessManager
-from .Modules.build_artifact import reset_announced as reset_build_announcements
 from .core.cph_settings import package_name, get_settings, get_tests_paths, load_all_tests, save_tests, save_tests_async, is_run_supported_ext, get_problem_limits, notify_io_error, get_problem_io, record_runtime
 from .core.cph_target import visible as context_menu_visible
 from .core.cph_jump import (diagnostics as parse_diagnostics,
 							esc, links_html, one_link, set_targets,
+							jump_to_location,
 							handle_event as handle_jump_event)
 from .core.cph_build_mode import label as build_mode_label
 from .core.cph_std_ladder import reset as std_ladder_reset
@@ -429,18 +429,16 @@ _squash_memo_bytes = [0]
 
 
 def _squash_ws(s):
-	"""Drop every whitespace character, like the judge's answer comparison.
+	"""Drop every whitespace character (kept as a small text utility).
 
-	`get_verdict_by_code` compares outputs with all whitespace removed, so
-	the "is this answer already accepted?" check must not be stricter than
-	the verdict: byte comparison made an AC sample keep offering 'accept'
-	and refuse to collapse.
+	NOTE: the judge no longer compares by stripping all whitespace - it uses
+	the token sequence in `outputs_equal`, so "1 23" and "12 3" are correctly
+	different. `is_correct_answer` uses that same function now. This helper
+	stays only for the tests and for callers that genuinely want a whitespace-
+	free key; do not use it to decide a verdict.
 
-	Memoised because a panel refresh asks every card the same question again,
-	so a run of N samples squashed the whole output of every earlier card N
-	times over - the quadratic term of the chain. CPython caches a string's
-	hash per object, which is what makes the repeat lookup free; the byte cap
-	keeps it from growing with the program's output.
+	Memoised because a caller may ask about the same output many times; the
+	byte cap keeps the cache from growing with the program's output.
 	"""
 	if not s:
 		return ''
@@ -741,23 +739,19 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				return True
 			if answer in self.uncorrect_answers:
 				return False
-			# Floating point problems: 0.1 + 0.2 will never string-match 0.3
-			if float_tolerance and float_tolerance > 0:
-				for correct in self.correct_answers:
-					if outputs_equal(answer, correct, float_tolerance):
-						return True
-			# Whitespace-only differences are AC for the judge, so they must
-			# count as correct here too. Otherwise a sample that was judged
-			# AC still showed an 'accept' button and never collapsed (the
-			# user had to click accept on an answer they had just set).
-			squashed = _squash_ws(answer)
-			if squashed:
-				for correct in self.correct_answers:
-					if _squash_ws(correct) == squashed:
-						return True
-				for wrong in self.uncorrect_answers:
-					if _squash_ws(wrong) == squashed:
-						return False
+			# Use the SAME comparison the judge used to decide the verdict,
+			# not a whitespace-stripped blob. _squash_ws treated "1 23" and
+			# "12 3" as the same answer, so an output the judge had called WA
+			# was mistaken for an already-accepted answer here and the card's
+			# output got silently cleared on Stop. outputs_equal compares the
+			# token sequence (whitespace-only differences still match), and
+			# takes the float tolerance for the numeric problems that need it.
+			for correct in self.correct_answers:
+				if outputs_equal(answer, correct, float_tolerance):
+					return True
+			for wrong in self.uncorrect_answers:
+				if outputs_equal(answer, wrong, float_tolerance):
+					return False
 			return None
 
 		def append_string(self, s):
@@ -875,6 +869,22 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					memory_display = 'inline'
 					memory_str = _label_prefixed(self.get_nice_memory(), 'memory')
 
+				# RE line right on the card: a clickable chip with the file:line
+				# the gdb replay / diagnostic located, so the user sees WHERE
+				# the program died without opening the detail tab first. Empty
+				# for every other verdict and when no source line was found.
+				rejump_display = 'none'
+				rejump_label = ''
+				rejump_title = ''
+				if verdict_short == 'RE':
+					_crash_path = getattr(self, 'crash_path', '') or ''
+					_crash_lineno = getattr(self, 'crash_lineno', 0) or 0
+					if _crash_path and _crash_lineno:
+						rejump_display = 'inline'
+						rejump_label = esc('↗ %s:%d' % (
+							os.path.basename(_crash_path), _crash_lineno))
+						rejump_title = esc(_crash_path)
+
 				# stderr is deliberately NOT shown on the card any more: the
 				# chip made every card with debug output too wide / too tall.
 				# It stays in the detail view ('Error output' section).
@@ -886,6 +896,9 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					test_type=test_type,
 					memory_display=memory_display,
 					memory=memory_str,
+					rejump_display=rejump_display,
+					rejump_label=rejump_label,
+					rejump_title=rejump_title,
 					edit_label=t('edit'),
 					run_label=t('run'),
 					detail_label=t('detail'),
@@ -2677,6 +2690,12 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			return
 		if event == 'test-click':
 			self.toggle_fold(i)
+		elif event == 'test-jump':
+			# RE chip on the run card: jump straight to the source line the
+			# gdb replay / diagnostic located, without storing targets first.
+			jump = self.jump_for(tester.tests[i])
+			if jump and not jump_to_location(v, jump[0], jump[1]):
+				sublime.status_message('[Algorithm Competition Assistant] ' + t('jump_no_target'))
 		elif event == 'test-detail':
 			# opens/refreshes the detail view of this test
 			self.show_test_detail(i)
@@ -4609,9 +4628,6 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				# to: the key means start over, and it is the way back down when
 				# the code no longer uses anything newer than the floor.
 				std_ladder_reset(process_manager.file)
-				# ...and the binary-name mismatches reported once per pair: a
-				# fresh build deserves to be heard again (see build_artifact).
-				reset_build_announcements()
 			if get_settings().get('compile_cache_enabled', True):
 				try:
 					fingerprint = _source_fingerprint(process_manager)

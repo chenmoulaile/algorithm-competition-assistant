@@ -307,6 +307,10 @@ STRINGS = {
         'zh': '重放时用户程序超时',
         'en': 'the user program timed out during the replay',
     },
+    'stress_replay_failed': {
+        'zh': '重放未能比较：选手程序退出码 {user}，标准程序退出码 {std}',
+        'en': 'replay could not compare: exit code {user} for the solution, {std} for the reference',
+    },
     'interactor_missing': {
         'zh': '找不到 interactor 文件：{path}（{error}）',
         'en': 'interactor file not found: {path} ({error})',
@@ -1384,15 +1388,6 @@ def set_lang(lang):
 
 def get_lang():
     return _current_lang
-
-
-def add_strings(new_strings):
-    for key, trans in new_strings.items():
-        if key in STRINGS:
-            for lang, val in trans.items():
-                STRINGS[key][lang] = val
-        else:
-            STRINGS[key] = trans
 
 
 def t(key, **kwargs):

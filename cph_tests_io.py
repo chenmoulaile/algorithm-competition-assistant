@@ -170,6 +170,12 @@ class CphCopyTestActualCommand(_CopyTestPartCommand):
 	def part(self, test):
 		return test.get('stdout', '')
 
+	def is_enabled(self):
+		# Unlike input/expected, 'stdout' is only in the in-memory run-panel
+		# tests, never in the ones loaded from disk for a source view. Showing
+		# an enabled command there just produced 'nothing_to_copy'.
+		return _is_run_view(self.view)
+
 
 class CphExportTestsCommand(sublime_plugin.TextCommand):
 	"""Export all tests as 1.in / 1.out file pairs."""
@@ -187,6 +193,8 @@ class CphExportTestsCommand(sublime_plugin.TextCommand):
 			return
 
 		window = view.window()
+		if window is None:
+			return
 		default_dir = os.path.join(os.path.dirname(file_name), 'tests_export')
 		window.show_input_panel(
 			t('export_to_dir') + ':', default_dir, self._export, None, None)

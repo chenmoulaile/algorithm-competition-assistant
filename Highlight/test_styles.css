@@ -63,6 +63,12 @@ a {
 	background-color: color(var(--purplish) alpha(0.3));
 }
 
+/* RE location chip on the run card: red tint to read as "crash here",
+   click to jump straight to the source line the gdb replay found. */
+.config-jump {
+	background-color: color(var(--redish) alpha(0.3));
+}
+
 .test-compiling {
 	background-color: color(var(--bluish) alpha(0.3));
 	/* compile chip: restore the inner side padding the original template's

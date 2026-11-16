@@ -256,6 +256,13 @@
 	//      时顺带出现。
 	"build_mode": "release",
 
+	// 编译前结束仍在运行的旧 exe。上一次 Run 的程序还在跑（死循环、等输入、
+	// 或插件重载前留下的孤儿）时，它占着 .exe，Windows 上链接器会报
+	// "Permission denied"、POSIX 上报 "Text file busy"，新的编译直接失败。
+	// 打开后：编译前把本插件为同一个 exe 启动、且还没结束的进程结束掉，再编译。
+	// 只动本插件登记过的进程（按 exe 路径匹配），不按进程名瞎杀别的程序。
+	"kill_running_exe_before_compile": true,
+
 	// ================= 编译标准自动档 =================
 	// 实测（g++ 15.2 + <bits/stdc++.h>，解析头文件的代价随标准涨）：
 	//   -fsyntax-only  c++17 1.29s   c++20 2.43s   c++23 2.53s

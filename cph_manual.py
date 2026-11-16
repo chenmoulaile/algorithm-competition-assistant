@@ -118,14 +118,6 @@ class _Session(object):
 			return
 		self.view.run_command('cph_manual_append', {'text': text})
 
-	# -- 输入 ------------------------------------------------------------
-	def pending_input(self):
-		"""从输入锚点到视图末尾的文本（含上次输出后用户敲的内容）。"""
-		r = self.view.get_regions(_MARKER_KEY)
-		start = r[0].a if r else self.view.size()
-		start = min(start, self.view.size())
-		return _clean_newlines(self.view.substr(sublime.Region(start, self.view.size())))
-
 	# -- 编译 + 运行（worker 线程） --------------------------------------
 	def start(self):
 		self.compiling = True
@@ -356,13 +348,6 @@ class CphManualAppendCommand(sublime_plugin.TextCommand):
 							  [sublime.Region(self.view.size(), self.view.size())],
 							  flags=sublime.HIDDEN)
 		self.view.show(self.view.size(), False)
-
-
-class CphManualAnchorCommand(sublime_plugin.TextCommand):
-	"""把输入锚点钉到视图末尾（开新会话时）。"""
-
-	def run(self, edit):
-		_anchor(self.view)
 
 
 def _commit_send(view, edit, line):

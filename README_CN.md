@@ -102,11 +102,13 @@ zip 会把那个文件夹清空，现象是"改了代码、重启、什么都没
 ### 运行错误定位
 
 程序崩溃时，插件先在输出里找位置：Python 回溯、Java 栈、`-fsanitize` 的诊断都能解析出
-`文件:行`，卡片和状态栏都会显示，点一下跳到源码。
+`文件:行`，卡片和状态栏都会显示，点一下跳到源码。定位到行时，运行面板对应的卡片上会
+直接出现一个红色的 `↗ 文件:行` 小标签，点它就能跳到那一行，不用先打开详情。
 
 C++ 的裸段错误本身不带行号。这种情况插件会用 gdb 回放崩溃现场，从调用栈里找属于你自己
-的那一帧。回放需要调试符号，所以 Release 构建只给得出 `main ()` 这样的函数名；
-`Ctrl+Alt+G` 切到 Debug 再跑，同一个段错误能定位到行。
+的那一帧。默认的 Release 构建现在也带 `-g` 调试符号（只在二进制里加符号表，**不影响
+运行速度**），所以裸段错误在默认模式就能定位到行。只有想让有符号溢出、数组越界这类
+原本不崩的未定义行为也变成 RE 时，才需要 `Ctrl+Alt+G` 切到 Debug。
 
 Debug 模式加的是
 `-g -fsanitize=undefined -fsanitize-trap=undefined -fno-omit-frame-pointer -D_GLIBCXX_ASSERTIONS`。
@@ -371,7 +373,7 @@ TLE 原因）可以仍然用中文：设 `"message_language": "zh"`（默认 `"a
   默认禁用；本插件实测在 3.14 宿主上加载运行正常。代码本身仍以 **Python 3.3 为兼容性
   下限**，不能用 f-string、`subprocess.run`、`Popen(encoding=…)` 这些新版本的东西，
   `tests/check_py33.py` 会拦。
-- 回归测试：`python tests/run_tests.py`，当前 1078 项，0 失败。测试用假的 `sublime`
+- 回归测试：`python tests/run_tests.py`，当前 1104 项，0 失败。测试用假的 `sublime`
   模块，不需要装 Sublime。
 - CI 跑 Linux（3.9 / 3.12）、Windows、macOS。
 - 版本号在 `plugin_init.py`。发版要往 `messages.json` 加对应键、放

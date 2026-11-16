@@ -595,7 +595,6 @@ def _start_flow(view, choose=False):
     if window is None:
         return
     settings = sublime.load_settings(settings_file)
-    src_dir = os.path.dirname(user_file)
 
     # Where std and the generator come from. `pick_once` asks the first time
     # for this file and remembers the answer beside its test data; `same_dir`
@@ -661,6 +660,11 @@ def _start_flow(view, choose=False):
             max_rounds = int(get_settings().get('stress_max_rounds', 1000) or 1000)
         except (TypeError, ValueError):
             max_rounds = 1000
+        # A negative/zero max (the `or 1000` above cannot catch -1) made the
+        # loop run zero times and report a bogus "all timeout"; an enormous
+        # value with no wall-clock cap ran forever. Clamp once, here, so both
+        # the choose and the direct path get the same bound.
+        max_rounds = _clamp_rounds(max_rounds)
 
         if choose:
             ask_limits(window, user_file, std_file, gen_file, time_limit,
@@ -733,18 +737,38 @@ def _to_number(text, kind, default):
         return default
 
 
+#: An unbounded round count turned one bad setting ("-1", or a huge value)
+#: into either an instant "all timeout" report or an endless run: with no
+#: wall-clock cap configured, range(1, max_rounds + 1) really ran forever.
+_MAX_ROUNDS_CAP = 1000000
+
+
+def _clamp_rounds(rounds):
+    """Round count actually used by a run: always a positive, bounded int."""
+    try:
+        n = int(rounds)
+    except (TypeError, ValueError):
+        n = 1000
+    return max(1, min(n, _MAX_ROUNDS_CAP))
+
+
 def ask_limits(window, user_file, std_file, gen_file, time_limit, max_rounds,
                view):
-    def on_rounds(value):
-        rounds = _to_number((value or '').strip(), int, max_rounds)
-        _launch(view, user_file, std_file, gen_file, time_limit, rounds)
+    def make_on_rounds(limit):
+        def on_rounds(value):
+            rounds = _to_number((value or '').strip(), int, max_rounds)
+            rounds = _clamp_rounds(rounds)
+            _launch(view, user_file, std_file, gen_file, limit, rounds)
+        return on_rounds
 
     def on_limit(value):
         limit = _to_number((value or '').strip(), float, time_limit)
         if limit <= 0:
             limit = time_limit
+        # Close over the time limit the user just typed: passing the ORIGINAL
+        # time_limit here made the "custom time limit" input a no-op.
         window.show_input_panel(t('stress_max_rounds') + ':', str(max_rounds),
-                                on_rounds, None, None)
+                                make_on_rounds(limit), None, None)
 
     window.show_input_panel(t('stress_time_limit') + ' (seconds):',
                             str(time_limit), on_limit, None, None)
@@ -1162,9 +1186,13 @@ def _popen_capture(cmd, cwd, input_text=None, shell=False, timeout=30, env=None,
     finally:
         if sess is not None:
             sess['current_proc'] = None
+    # Use the same utf-8 -> console-codepage fallback as the run and checker
+    # paths: a Chinese Windows generator printing GBK used to become
+    # replacement chars here, and the bytes saved as the "correct" sample
+    # then never matched a later run decoded differently.
     return (proc.returncode,
-            (out or b'').decode('utf-8', 'replace'),
-            (err or b'').decode('utf-8', 'replace'))
+            cph_checker.decode_output(out or b''),
+            cph_checker.decode_output(err or b''))
 
 
 def _program_argv(file):
@@ -1897,23 +1925,41 @@ class CphStressReplayCommand(sublime_plugin.TextCommand):
 			sublime.set_timeout(lambda m=msg: _append_stress(sess, m), 0)
 
 		def worker():
+			# The stress loop already finished by the time Replay is clicked:
+			# _finish_stress cleared its build_root and live_keys. Compiling
+			# against that dead session wrote the .exe next to the user's
+			# source (clobbering a binary they were using) and left live
+			# registrations behind. Give the replay its OWN scratch session,
+			# released in the finally below.
+			work = _new_session(user_file, std_file, gen_file, 2, 1)
 			try:
-				ok, gen_exe, why = _compile_program(gen_file, sess=sess)
+				try:
+					work['build_root'] = tempfile.mkdtemp(prefix='cph-stress-')
+					register_temp_dir(work['build_root'])
+				except Exception:
+					work['build_root'] = None
+				ok, gen_exe, why = _compile_program(gen_file, sess=work)
 				if not ok:
 					say('[Algorithm Competition Assistant] generator: %s\n' % (why or 'failed'))
 					return
+				# A compiled generator returns the .exe path. _run_program
+				# looks up run_settings by EXTENSION, and "exe" is in none of
+				# them, so passing the raw string failed with "no run command
+				# configured" for every compiled language. Wrap it into argv
+				# exactly like the main loop's _program_command does.
+				gen_argv = _program_command(gen_exe, gen_file) or gen_exe
 				rc, inp, err, tle = _run_program(
-					gen_exe, '', cwd=os.path.dirname(gen_file) or None,
+					gen_argv, '', cwd=os.path.dirname(gen_file) or None,
 					time_limit=float(
 						get_settings().get('stress_generator_time_limit_seconds', 10) or 10),
-					env={'CPH_SEED': str(seed)}, sess=sess)
-				if rc != 0 or tle:
+					env={'CPH_SEED': str(seed)}, sess=work)
+				if rc != 0 or tle or _never_started(err):
 					say('[Algorithm Competition Assistant] generator failed: rc=%s %s\n'
 						% (rc, err[:200]))
 					return
 				say('[Algorithm Competition Assistant] regenerated %d bytes\n' % len(inp))
-				ok1, user_exe, why1 = _compile_program(user_file, sess=sess)
-				ok2, std_exe, why2 = _compile_program(std_file, sess=sess)
+				ok1, user_exe, why1 = _compile_program(user_file, sess=work)
+				ok2, std_exe, why2 = _compile_program(std_file, sess=work)
 				if not (ok1 and ok2):
 					say('[Algorithm Competition Assistant] compile failed: %s%s\n'
 						% (why1 or '', why2 or ''))
@@ -1927,14 +1973,21 @@ class CphStressReplayCommand(sublime_plugin.TextCommand):
 				std_argv = _program_command(std_exe, std_file) or _program_argv(std_file)
 				# cwd, like the main loop hands one over (see _run_program's
 				# fallback for what an empty dirname used to do here).
-				_rc1, user_out, _e1, tle1 = _run_program(
+				rc1, user_out, e1, tle1 = _run_program(
 					user_argv or user_exe, inp, cwd=os.path.dirname(user_file) or None,
-					time_limit=limit, sess=sess)
-				_rc2, std_out, _e2, _tle2 = _run_program(
+					time_limit=limit, sess=work)
+				rc2, std_out, e2, tle2 = _run_program(
 					std_argv or std_exe, inp, cwd=os.path.dirname(std_file) or None,
-					time_limit=limit, sess=sess)
-				if tle1:
+					time_limit=limit, sess=work)
+				if tle1 or tle2:
 					say('[Algorithm Competition Assistant] ' + t('stress_replay_tle') + '\n')
+					return
+				# A nonzero exit or a launcher that never started used to be
+				# ignored: two empty outputs were reported as "outputs match".
+				# Only compare when BOTH programs actually ran cleanly.
+				if rc1 != 0 or rc2 != 0 or _never_started(e1) or _never_started(e2):
+					say('[Algorithm Competition Assistant] '
+						+ t('stress_replay_failed', user=rc1, std=rc2) + '\n')
 					return
 				if normalize_lines(user_out) == normalize_lines(std_out):
 					say('[Algorithm Competition Assistant] ' + t('stress_replay_same') + '\n')
@@ -1946,6 +1999,8 @@ class CphStressReplayCommand(sublime_plugin.TextCommand):
 												  user_out, std_out, sess=sess), 0)
 			except Exception as e:
 				say('[Algorithm Competition Assistant] replay error: %s\n' % e)
+			finally:
+				_finish_stress(work)
 
 		thread = threading.Thread(target=worker)
 		thread.daemon = True

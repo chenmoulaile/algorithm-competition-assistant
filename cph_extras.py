@@ -95,8 +95,11 @@ class CphFetchProblemCommand(sublime_plugin.TextCommand):
 			if looks_like_url(clipboard):
 				self.fetch_and_add(clipboard.strip(), open_statement)
 				return
-			self.view.window().show_input_panel(
-				t('fetch_enter_url'), '', 
+			window = self.view.window()
+			if window is None:
+				return
+			window.show_input_panel(
+				t('fetch_enter_url'), '',
 				lambda text: self.fetch_and_add(text, open_statement), None, None)
 			return
 		self.fetch_and_add(url, open_statement)
@@ -155,7 +158,10 @@ class CphViewStatementCommand(sublime_plugin.TextCommand):
 			if looks_like_url(clipboard):
 				url = clipboard.strip()
 			else:
-				self.view.window().show_input_panel(
+				window = self.view.window()
+				if window is None:
+					return
+				window.show_input_panel(
 					t('fetch_enter_url'), '',
 					lambda text: self.run(edit, url=text), None, None)
 				return
@@ -267,7 +273,10 @@ class CphContestTimerCommand(sublime_plugin.TextCommand):
 			return
 		if minutes is None:
 			default = _contest_default_minutes()
-			self.view.window().show_input_panel(
+			window = self.view.window()
+			if window is None:
+				return
+			window.show_input_panel(
 				t('contest_enter_minutes'), default,
 				lambda text: self.start(text), None, None)
 			return

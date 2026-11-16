@@ -509,6 +509,8 @@ class CphDoctorCommand(sublime_plugin.TextCommand):
 
 		report = '\n'.join(lines)
 		window = self.view.window()
+		if window is None:
+			return
 		view = window.new_file()
 		view.set_name('%s - doctor' % PACKAGE_NAME)
 		view.set_scratch(True)

@@ -91,47 +91,72 @@ def save_factor(factor, score=None):
 
 
 def measure(workdir=None, compile_cmd=DEFAULT_COMPILE_CMD, compiler='g++'):
-	"""Compile and run the benchmark. Returns (factor, score, seconds, error)."""
+	"""Compile and run the benchmark. Returns (factor, score, seconds, error).
+
+	Every exit path cleans up the scratch directory, and a timed-out or
+	failed benchmark process is killed first - a runaway bench left behind
+	otherwise spun forever and its mkdtemp dir leaked for the whole session.
+	"""
 	workdir = workdir or tempfile.mkdtemp(prefix='cph-calibrate-')
 	src = os.path.join(workdir, 'bench.cpp')
 	exe = os.path.join(workdir, 'bench.exe')
+	run = None
 	try:
-		with open(src, 'w', encoding='utf-8') as f:
-			f.write(BENCH_SOURCE)
-	except Exception as e:
-		return None, None, None, t('calibrate_write_failed', error=str(e))
+		try:
+			with open(src, 'w', encoding='utf-8') as f:
+				f.write(BENCH_SOURCE)
+		except Exception as e:
+			return None, None, None, t('calibrate_write_failed', error=str(e))
 
-	cmd = compile_cmd.replace('{src}', src).replace('{exe}', exe)
-	try:
-		proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE,
-								stderr=subprocess.STDOUT,
-								startupinfo=hidden_startupinfo())
-		out = proc.communicate()[0]
-	except Exception as e:
-		return None, None, None, t('calibrate_compile_failed',
-								   compiler=compiler, error=str(e))
-	if proc.returncode != 0:
-		text = out.decode('utf-8', 'replace') if out else ''
-		return None, None, None, t('calibrate_compile_failed',
-								   compiler=compiler, error=text[-400:])
+		cmd = compile_cmd.replace('{src}', src).replace('{exe}', exe)
+		try:
+			proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE,
+									stderr=subprocess.STDOUT,
+									startupinfo=hidden_startupinfo())
+			out = proc.communicate()[0]
+		except Exception as e:
+			return None, None, None, t('calibrate_compile_failed',
+									   compiler=compiler, error=str(e))
+		if proc.returncode != 0:
+			text = out.decode('utf-8', 'replace') if out else ''
+			return None, None, None, t('calibrate_compile_failed',
+									   compiler=compiler, error=text[-400:])
 
-	started = time.time()
-	try:
-		run = subprocess.Popen([exe], stdout=subprocess.DEVNULL,
-							   stderr=subprocess.DEVNULL,
-							   startupinfo=hidden_startupinfo())
-		run.communicate(timeout=60)
-	except Exception as e:
-		return None, None, None, t('calibrate_run_failed', error=str(e))
-	seconds = time.time() - started
-	if seconds <= 0:
-		return None, None, None, t('calibrate_run_failed', error='no time measured')
+		# monotonic(), not time.time(): an NTP step during the ~seconds-long
+		# benchmark could turn the interval negative and fail the sample.
+		started = time.monotonic()
+		try:
+			run = subprocess.Popen([exe], stdout=subprocess.DEVNULL,
+								   stderr=subprocess.DEVNULL,
+								   startupinfo=hidden_startupinfo())
+			run.communicate(timeout=60)
+		except subprocess.TimeoutExpired:
+			# Kill the benchmark before returning: communicate() only stopped
+			# waiting, the process was still running the loop.
+			try:
+				run.kill()
+				run.wait(timeout=2)
+			except Exception:
+				pass
+			return None, None, None, t('calibrate_run_failed', error='timed out after 60s')
+		except Exception as e:
+			return None, None, None, t('calibrate_run_failed', error=str(e))
+		seconds = time.monotonic() - started
+		if seconds <= 0:
+			return None, None, None, t('calibrate_run_failed', error='no time measured')
 
-	score = float(BENCH_ITERATIONS) / seconds
-	factor = score / REFERENCE_SCORE
-	save_factor(factor, score)
-	_cleanup(workdir)
-	return factor, score, seconds, ''
+		score = float(BENCH_ITERATIONS) / seconds
+		factor = score / REFERENCE_SCORE
+		save_factor(factor, score)
+		return factor, score, seconds, ''
+	finally:
+		if run is not None and run.poll() is None:
+			try:
+				run.kill()
+				run.wait(timeout=2)
+			except Exception:
+				pass
+		_cleanup(workdir)
 
 
 def _cleanup(workdir):

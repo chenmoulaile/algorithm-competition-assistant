@@ -159,21 +159,6 @@ def _exists(path, src_dir):
     return False
 
 
-_ANNOUNCED = set()
-
-
-def reset_announced():
-    """Forget which binary-name mismatches were already reported.
-
-    The set only ever grew, for the whole session: one entry per (actual,
-    wanted) pair is small, but every stale name a retargeted build system
-    ever produced stayed alive until the editor closed. The force-recompile
-    hook clears it alongside the std-ladder reset - a fresh compile is also
-    a fresh chance to hear the mismatch again.
-    """
-    _ANNOUNCED.clear()
-
-
 def print_safe(text):
     """print() that survives a narrow console.
 
@@ -191,22 +176,6 @@ def print_safe(text):
             pass
     except Exception:
         pass
-
-
-def _announce(actual, wanted):
-    """Say it once per binary: a run happens once per test otherwise.
-
-    Retired from retarget_path/retarget_command (the only callers): what it
-    announced there was always the codepage twin of the wanted name - a file
-    that runs fine - so the line was noise on every run of a non-ASCII -o
-    name. Kept for print_safe's message format and for reset_announced().
-    """
-    key = (actual, wanted)
-    if key in _ANNOUNCED:
-        return
-    _ANNOUNCED.add(key)
-    print_safe('[Algorithm Competition Assistant] the binary is %r on disk, not %r'
-               % (os.path.basename(actual), os.path.basename(wanted)))
 
 
 def _looks_like_path(token):

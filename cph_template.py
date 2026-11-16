@@ -1,5 +1,5 @@
 """
-Algorithm Competition Assistant - 模板片段插入 (Ctrl+Alt+T / Cmd+Alt+T)
+Algorithm Competition Assistant - 模板片段插入 (Ctrl+Alt+T)
 
 背景：四个 keymap 一直把 `tab` 绑到 `olympic_funcs` —— 那是从
 FastOlympicCoding 抄来时留下的绑定，本插件从未定义该命令，所以 README

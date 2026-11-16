@@ -323,6 +323,19 @@ def _kill_tree(proc):
             return
         except Exception:
             pass
+    # replay() launches gdb with start_new_session (own process group), so the
+    # debuggee gdb spawned shares that group. Killing only gdb left a looping
+    # program running in the background forever; take the whole group down.
+    # The pgid==pid guard keeps this safe if a caller ever reuses _kill_tree
+    # on a process that did NOT get its own session (killpg would hit the host).
+    try:
+        import signal
+        pgid = os.getpgid(proc.pid)
+        if pgid == proc.pid:
+            os.killpg(pgid, signal.SIGKILL)
+            return
+    except Exception:
+        pass
     try:
         proc.kill()
     except Exception:
@@ -362,9 +375,15 @@ def replay(gdb, program, log_path, stdin_bytes=None, timeout=5.0, cwd=None):
     if isinstance(stdin_bytes, str):
         payload = stdin_bytes.encode('utf-8', 'replace')
     try:
+        # Own process group on POSIX so the timeout path's _kill_tree() can
+        # take down gdb AND the debuggee it launched together (the program may
+        # be in an infinite loop). Windows _kill_tree uses taskkill /T.
+        spawn_kwargs = {}
+        if os.name != 'nt':
+            spawn_kwargs['start_new_session'] = True
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                cwd=cwd, startupinfo=_hidden())
+                                cwd=cwd, startupinfo=_hidden(), **spawn_kwargs)
     except Exception:
         return '', ''
     try:

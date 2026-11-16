@@ -117,6 +117,33 @@ def one_link(path, line, label=None):
     return html, targets
 
 
+def jump_to_location(view, path, line):
+    """Open (or reuse) `path` at `line`. True when a jump was made.
+
+    The direct form used by the run panel's RE chip, which already knows the
+    file and line and should not have to stash them in a view setting first.
+    """
+    window = view.window()
+    if window is None or not path:
+        return False
+    try:
+        line = int(line or 1)
+    except (TypeError, ValueError):
+        line = 1
+
+    # Reuse an already-open tab so the user's layout and unsaved changes
+    # survive the jump; only fall back to open_file when it is not open.
+    wanted = os.path.normcase(path)
+    for candidate in window.views():
+        name = candidate.file_name()
+        if name and os.path.normcase(os.path.normpath(name)) == wanted:
+            window.focus_view(candidate)
+            goto_line(candidate, line)
+            return True
+    window.open_file('%s:%d' % (path, line), sublime.ENCODED_POSITION)
+    return True
+
+
 def jump_to(view, target):
     """Handle a `jump:N` event for this view. Returns True when it jumped.
 
@@ -137,22 +164,7 @@ def jump_to(view, target):
         line = int(targets[index][1] or 1)
     except (TypeError, ValueError):
         line = 1
-
-    window = view.window()
-    if window is None or not path:
-        return False
-
-    # Reuse an already-open tab so the user's layout and unsaved changes
-    # survive the jump; only fall back to open_file when it is not open.
-    wanted = os.path.normcase(path)
-    for candidate in window.views():
-        name = candidate.file_name()
-        if name and os.path.normcase(os.path.normpath(name)) == wanted:
-            window.focus_view(candidate)
-            goto_line(candidate, line)
-            return True
-    window.open_file('%s:%d' % (path, line), sublime.ENCODED_POSITION)
-    return True
+    return jump_to_location(view, path, line)
 
 
 def goto_line(view, line):

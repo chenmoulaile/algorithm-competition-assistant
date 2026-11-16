@@ -38,6 +38,7 @@ history 只保留最新 _HISTORY_LIMIT 条（见该常量）；problems 里的�
 是永久账本，从不丢弃。
 """
 
+import copy
 import json
 import os
 import sys
@@ -154,14 +155,22 @@ def flush():
 		_cache_timer = None
 		if not _cache_dirty or _cached_unlocked() is None:
 			return
-		data = _cache
+		# Snapshot the cache under the lock. Handing save() the live object
+		# let record_run() mutate it (history.append, problems=...) while
+		# json.dump iterated it -> "dictionary changed size during
+		# iteration" swallowed by save(), and the stats were lost.
+		data = copy.deepcopy(_cache)
 		_cache_dirty = False
 	if save(data):
 		return
 	# 写失败：标记重新变脏，下一次 record 或 flush 重试（save 的失败原因
-	# 已由 take_save_error 通道报告）。
+	# 已由 take_save_error 通道报告）。The timer was cleared at the top of
+	# this call, so re-schedule it here: otherwise, with no further run to
+	# call _mark_dirty(), this batch of stats was never retried and vanished
+	# when the editor closed.
 	with _cache_lock:
 		_cache_dirty = True
+		_schedule_flush_unlocked()
 
 
 def stats_path():
@@ -662,11 +671,6 @@ def summary_data(days=7, now=None):
 		'stress_rounds': stress_rounds,
 		'span': span,
 	}
-
-
-def _fmt_duration_public(seconds):
-	"""``_fmt_duration`` with a name callers outside this module may use."""
-	return _fmt_duration(seconds)
 
 
 def render_summary(info, translate=None):

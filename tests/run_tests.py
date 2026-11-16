@@ -4125,7 +4125,6 @@ def main():
         # here was the codepage twin of the very name the -o asked for - a
         # binary that runs fine - so every run of a non-ASCII -o name
         # printed a scary console line (v3.0.1).
-        artifacts.reset_announced()
         twin_console = io.StringIO()
         with contextlib.redirect_stdout(twin_console):
             artifacts.retarget_command('"%s" -x' % wanted, tmp)
@@ -9233,6 +9232,120 @@ def main():
         _cmds_fix = _cf.read()
     check('the clean run is reachable from the command palette',
           'cph_run_clean_tests' in _cmds_fix)
+
+    # 10. review-fix regression block -------------------------------------
+    _chk_src = lambda rel: open(os.path.join(ROOT, rel), encoding='utf-8').read()
+    _checker_src = _chk_src(os.path.join('core', 'cph_checker.py'))
+    _inter_src = _chk_src(os.path.join('core', 'cph_interactive.py'))
+    _gdb_src = _chk_src(os.path.join('core', 'cph_gdb_trace.py'))
+    _stress_src = _chk_src('cph_stress.py')
+    _stats_src = _chk_src(os.path.join('core', 'cph_stats.py'))
+    _cal_src = _chk_src(os.path.join('core', 'cph_calibrate.py'))
+    _state_src = _chk_src(os.path.join('core', 'cph_state.py'))
+    _pm_src_fix2 = _chk_src(os.path.join('Modules', 'ProcessManager.py'))
+
+    # C-1: _reap must never killpg the plugin host's own group.
+    check('_reap guards killpg with a group-leader check',
+          'pgid == pid' in _checker_src
+          and 'os.killpg(pgid, signal.SIGKILL)' in _checker_src
+          and 'start_new_session' in _checker_src,
+          'a timeout on a checker spawned without its own session killed Sublime')
+    check('interactor spawns get their own session',
+          _inter_src.count('start_new_session') >= 2,
+          'the interactor compile and process must not share the host group')
+    check('gdb replay kills the debuggee tree',
+          'start_new_session' in _gdb_src and 'pgid == proc.pid' in _gdb_src,
+          'a looping debuggee survived a gdb timeout')
+
+    # C-2 / M-1: stress replay wraps the exe into argv and honours exit codes.
+    check('replay generator is wrapped into argv',
+          '_program_command(gen_exe, gen_file)' in _stress_src,
+          'a compiled generator failed with "no run command configured"')
+    check('replay checks both return codes before comparing',
+          'rc1 != 0 or rc2 != 0' in _stress_src
+          and 'tle1 or tle2' in _stress_src,
+          'two empty outputs were reported as "outputs match"')
+    check('replay uses its own scratch session and cleans it',
+          '_finish_stress(work)' in _stress_src,
+          'replay wrote the .exe into the user source dir')
+    check('the custom time-limit input reaches the run',
+          'make_on_rounds(limit)' in _stress_src)
+    check('round count is clamped',
+          'def _clamp_rounds' in _stress_src
+          and 'max_rounds = _clamp_rounds(max_rounds)' in _stress_src)
+    check('stress output decodes with the codepage fallback',
+          'cph_checker.decode_output' in _stress_src)
+
+    # is_correct_answer uses the judge's token comparison, not squash.
+    _sample = tm.CphTestManagerCommand.Test({'test': '', 'correct_answers': ['12 3']})
+    check('a token-reordered output is NOT an accepted answer',
+          _sample.is_correct_answer('1 23') is None,
+          'a WA card was silently cleared as if already accepted')
+    check('a whitespace-only difference IS accepted',
+          _sample.is_correct_answer('12   3') is True)
+
+    # stats flush snapshots the cache and reschedules on failure.
+    check('stats flush deep-copies under the lock',
+          'copy.deepcopy(_cache)' in _stats_src
+          and '_schedule_flush_unlocked()' in _stats_src,
+          'a concurrent record_run corrupted the json dump')
+    check('calibrate cleans up and kills a runaway bench',
+          'run.kill()' in _cal_src and 'time.monotonic()' in _cal_src)
+
+    # compile frees a still-running exe before rebuilding.
+    check('compile kills the tracked process holding the output exe',
+          'kill_live_for_exe' in _pm_src_fix2
+          and 'kill_running_exe_before_compile' in _pm_src_fix2,
+          'a leftover run left the .exe locked and the rebuild failed')
+    check('exe-kill setting is shipped',
+          '"kill_running_exe_before_compile"' in _chk_src(
+              'Algorithm Competition Assistant.sublime-settings'))
+    check('live registry tracks exe paths and reaps by them',
+          'def kill_live_for_exe' in _state_src and '_live_exe' in _state_src)
+
+    # default build keeps -g (free) so RE lines resolve; full debug stays opt-in.
+    check('default release build keeps debug symbols',
+          '-g' in build_mode.transform(base, build_mode.MODE_RELEASE)
+          and build_mode.default_mode() == build_mode.MODE_RELEASE,
+          'no -g meant a bare segfault had no file:line on the card')
+    check('full debug still strips -O2 and adds the sanitizer',
+          '-O2' not in debug and '-fsanitize=undefined' in debug,
+          'defaulting full debug would slow programs tens of times (false TLE)')
+
+    # RE chip on the run card + direct jump.
+    check('run card renders a jump chip for RE',
+          'test-jump' in _chk_src(os.path.join('Highlight', 'test_config.html'))
+          and 'jump_to_location' in _tm_src_fix)
+    check('the RE chip is gated on verdict RE and a known line',
+          'if verdict_short == \'RE\'' in _tm_src_fix
+          and '_crash_lineno' in _tm_src_fix)
+    check('a direct jump helper exists',
+          'def jump_to_location' in _chk_src(os.path.join('core', 'cph_jump.py')))
+
+    # Latent None dereferences and dead code removed in the review.
+    _extras_src = _chk_src('cph_extras.py')
+    check('TextCommands guard a missing window before showing a panel',
+          'window = self.view.window()' in _extras_src
+          and 'if window is None' in _extras_src
+          and 'if window is None' in _chk_src('cph_doctor.py')
+          and 'if window is None' in _chk_src('cph_tests_io.py'))
+    _io_src = _chk_src('cph_tests_io.py')
+    check('copy-actual is limited to the run panel',
+          'class CphCopyTestActualCommand' in _io_src
+          and 'return _is_run_view(self.view)' in _io_src)
+    _manual_src = _chk_src('cph_manual.py')
+    check('dead manual anchor command and method removed',
+          'CphManualAnchorCommand' not in _manual_src
+          and 'def pending_input' not in _manual_src)
+    check('the announce no-op chain removed',
+          '_ANNOUNCED' not in _chk_src(os.path.join('Modules', 'build_artifact.py'))
+          and 'reset_build_announcements' not in _tm_src_fix)
+    check('unreferenced helpers removed',
+          all(sym not in src for sym, src in (
+              ('def add_strings', _chk_src(os.path.join('core', 'cph_i18n.py'))),
+              ('def get_supported_exts', _chk_src(os.path.join('core', 'cph_settings.py'))),
+              ('def _fmt_duration_public', _chk_src(os.path.join('core', 'cph_stats.py'))),
+              ('def get_run_entry', _pm_src_fix2))))
 
     print('')
     print('%d checks, %d failures' % (CHECKS[0], len(FAILURES)))

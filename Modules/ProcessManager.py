@@ -17,6 +17,7 @@ import locale
 from .memprobe import MemorySampler, bytes_to_mb, sample_memory_bytes
 from .build_artifact import output_path_from_compile_cmd, resolve_artifact, retarget_command, names_match
 from ..core.cph_i18n import t
+from ..core.cph_settings import get_settings
 from ..core import cph_state
 from ..core.cph_build_mode import get_mode as _build_mode, transform as _apply_build_mode
 from ..core.cph_std_ladder import apply as _std_apply, escalate as _std_escalate
@@ -316,19 +317,6 @@ class ProcessManager(object):
 			out.append(d)
 		return out
 
-	def get_run_entry(self):
-		"""The run_settings entry that applies to this file, or None.
-
-		Used by the optional features that live next to the run itself
-		(checker / interactor / subtasks) so they read the same entry the
-		compiler and runner do.
-		"""
-		ext = path.splitext(self.file)[1][1:]
-		for entry in (self.run_settings or []):
-			if ext in (entry.get('extensions') or []):
-				return entry
-		return None
-
 	def get_compile_inputs(self):
 		"""All files a compile depends on (for the compile cache)."""
 		files = [self.file]
@@ -494,7 +482,7 @@ class ProcessManager(object):
 		else:
 			return -1
 
-	def _track_live(self, proc, what):
+	def _track_live(self, proc, what, exe_path=None):
 		"""Register one child so plugin_unloaded can reap it.
 
 		Sublime does not wait for this process when the package unloads (an
@@ -512,7 +500,8 @@ class ProcessManager(object):
 			cph_state.register_live(
 				key,
 				lambda p=proc: p.poll() is None,
-				lambda p=proc, s=self: s._kill_tree(p))
+				lambda p=proc, s=self: s._kill_tree(p),
+				exe_path=exe_path)
 		except Exception as e:
 			print('[Algorithm Competition Assistant] child process not tracked: %s' % e)
 		return key
@@ -611,8 +600,28 @@ class ProcessManager(object):
 		if cmd == -1:
 			return (1, '[Algorithm Competition Assistant] no compile command configured for this file extension')
 		if cmd is not None:
+			# Free the output binary before the linker opens it. A run left
+			# going from an earlier click (or an orphan from before a reload)
+			# still holds the .exe; on Windows the compile then fails with
+			# "Permission denied" and on POSIX "Text file busy". Kill only the
+			# run processes this plugin launched for THIS binary - never a pid
+			# guessed from a name - and only when the setting allows it.
+			freed = 0
+			if get_settings().get('kill_running_exe_before_compile', True):
+				try:
+					wanted, actual = self.artifact_paths(cmd)
+					target = actual or wanted
+					if target:
+						freed = cph_state.kill_live_for_exe(target)
+				except Exception:
+					freed = 0
 			try:
 				returncode, compile_result = self._popen_compile(cmd)
+				if freed:
+					compile_result = (
+						'[Algorithm Competition Assistant] stopped %d still-running '
+						'process(es) holding the old binary before rebuilding\n' % freed
+					) + compile_result
 				if returncode != 0 and isinstance(cmd, str) \
 						and '-fsanitize' in cmd:
 					# The sanitizer runtimes are not part of every toolchain
@@ -867,7 +876,16 @@ class ProcessManager(object):
 		# move the number without the program doing anything.
 		self.spawn_time = time.monotonic()
 		self.exit_time = None
-		self._track_live(self.process, 'run')
+		# Tag the run with the binary it holds open. compile() reaps a still-
+		# live process for the same exe before rebuilding it, so a program
+		# left running from an earlier run no longer blocks the linker with
+		# "Permission denied" (a manual terminal / an orphan from before a
+		# reload is exactly the case the panel's own Stop cannot reach).
+		try:
+			held_exe = self.program_path()
+		except Exception:
+			held_exe = None
+		self._track_live(self.process, 'run', exe_path=held_exe)
 
 		# Remember the process group now: once the direct child is reaped,
 		# os.getpgid(pid) raises ProcessLookupError and a backgrounded

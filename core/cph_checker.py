@@ -93,7 +93,19 @@ def config(run_settings, file, settings=None):
 			if ' ' in checker:
 				parts = shlex.split(checker)
 				head = parts[0]
-				path = parts[-1] if len(parts) > 1 else head
+				# The script is the first argument that names a file, NOT the
+				# last token: "python checker.py --strict" used to resolve to
+				# "--strict" and report checker_missing. Fall back to the old
+				# head/last rule when nothing on the command line exists yet
+				# (e.g. a checker that generates its own script at runtime).
+				path = None
+				for token in parts[1:]:
+					candidate = token if os.path.isabs(token) else os.path.join(src_dir, token)
+					if os.path.isfile(candidate):
+						path = candidate
+						break
+				if path is None:
+					path = parts[-1] if len(parts) > 1 else head
 				if not os.path.isabs(path):
 					path = os.path.join(src_dir, path)
 				return {
@@ -284,12 +296,20 @@ def _reap(proc):
 			except Exception:
 				pass
 	else:
-		# The compile led its own session (preexec_fn=os.setsid above), so a
-		# group kill reaches the shell and the compiler without touching the
-		# plugin host's own group.
+		# A group kill is ONLY safe when this child leads its own process
+		# group (setsid / start_new_session). The compile path does that
+		# (preexec_fn=os.setsid above), but judge() and the interactor spawn
+		# their Popen without it - for those, getpgid(pid) is the plugin
+		# host's own group and killpg() would SIGKILL Sublime itself along
+		# with every unsaved buffer. Take the group down only when the child
+		# is genuinely its leader; otherwise kill just this one PID.
 		try:
 			import signal
-			os.killpg(os.getpgid(pid), signal.SIGKILL)
+			pgid = os.getpgid(pid)
+			if pgid == pid:
+				os.killpg(pgid, signal.SIGKILL)
+			else:
+				os.kill(pid, signal.SIGKILL)
 		except Exception:
 			pass
 	try:
@@ -352,11 +372,19 @@ def judge(cfg, exe, input_text, output_text, expected_text, workdir=None):
 	code = None
 	try:
 		startupinfo = hidden_startupinfo()
+		# Own process group on POSIX so _reap() can take the checker (and any
+		# child it spawned) down on timeout with killpg - without that, a
+		# timed-out checker left the group of the plugin host and killpg would
+		# have killed Sublime. start_new_session is a no-op on Windows, where
+		# _reap() uses taskkill /T instead.
+		spawn_kwargs = {}
+		if os.name != 'nt':
+			spawn_kwargs['start_new_session'] = True
 		proc = subprocess.Popen(
 			argv, shell=False,
 			stdin=subprocess.PIPE if payload is not None else None,
 			stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-			cwd=cfg['dir'], startupinfo=startupinfo)
+			cwd=cfg['dir'], startupinfo=startupinfo, **spawn_kwargs)
 		out = proc.communicate(
 			payload.encode('utf-8', 'replace') if payload is not None else None,
 			timeout=limit_s)[0]

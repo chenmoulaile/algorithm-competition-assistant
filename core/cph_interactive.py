@@ -19,6 +19,7 @@ worker 固定为 1。
 """
 
 import os
+import shlex
 import subprocess
 import tempfile
 import threading
@@ -72,8 +73,19 @@ def config(run_settings, file):
 			src_dir = os.path.dirname(os.path.abspath(file))
 			# A value with a space is a COMMAND ("python interactor.py").
 			if ' ' in interactor:
-				parts = interactor.split()
-				path = parts[-1]
+				# shlex (not str.split) so a quoted path with spaces survives;
+				# and the script is the first existing file among the
+				# arguments, not the last token ("python it.py --strict" used
+				# to resolve to "--strict" and report interactor_missing).
+				parts = shlex.split(interactor)
+				path = None
+				for token in parts[1:]:
+					candidate = token if os.path.isabs(token) else os.path.join(src_dir, token)
+					if os.path.isfile(candidate):
+						path = candidate
+						break
+				if path is None:
+					path = parts[-1]
 				if not os.path.isabs(path):
 					path = os.path.join(src_dir, path)
 				return {
@@ -150,11 +162,20 @@ def executable(cfg):
 	cmd = _expand(cfg['compile_cmd'], cfg)
 	proc = None
 	try:
+		# Match cph_checker.executable(): an own session on POSIX so the
+		# compile timeout's _reap() can kill the shell and g++ as a group
+		# instead of killpg-ing the plugin host's own group. Without this the
+		# compile here diverged from the checker's identical code and could
+		# terminate Sublime on timeout.
+		build_kwargs = {}
+		if os.name != 'nt':
+			build_kwargs['start_new_session'] = True
 		proc = subprocess.Popen(cmd, shell=True, stdin=None,
 								stdout=subprocess.PIPE,
 								stderr=subprocess.STDOUT,
 								cwd=cfg['dir'],
-								startupinfo=hidden_startupinfo())
+								startupinfo=hidden_startupinfo(),
+								**build_kwargs)
 		out = proc.communicate(timeout=_COMPILE_TIMEOUT)[0]
 	except subprocess.TimeoutExpired:
 		_reap(proc)
@@ -232,11 +253,18 @@ def run_case(make_solution, exe, input_text, answer_text, time_limit_ms,
 		# raised TypeError, so every interaction ended as UKE.
 		if cwd is None and isinstance(exe, str):
 			cwd = os.path.dirname(exe) or None
+		# Own session on POSIX: the timeout / cancel / unload paths call
+		# _reap(), which uses killpg only for a process leading its own group.
+		# Spawning in the host's group made a stalled interactor killpg the
+		# editor itself. Windows keeps taskkill /T from _reap().
+		proc_kwargs = {}
+		if os.name != 'nt':
+			proc_kwargs['start_new_session'] = True
 		interactor = subprocess.Popen(
 			prefix + [in_path, out_path, ans_path], shell=False,
 			stdin=subprocess.PIPE, stdout=subprocess.PIPE,
 			stderr=subprocess.PIPE, cwd=cwd,
-			startupinfo=hidden_startupinfo())
+			startupinfo=hidden_startupinfo(), **proc_kwargs)
 		# The pool tracks the solution manager, but the interactor is a bare
 		# Popen: register it for plugin unload and for the panel's Stop.
 		live_key = 'interactor:%s:%s' % (os.getpid(), interactor.pid)

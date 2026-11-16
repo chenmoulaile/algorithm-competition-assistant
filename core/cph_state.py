@@ -74,6 +74,10 @@ def is_listener_running():
 
 # key -> (is_alive, kill)
 _live = {}
+# key -> absolute path of the executable a live *run* process is holding.
+# compile() uses this to free a binary still running from an earlier run
+# (on Windows the linker otherwise fails with "Permission denied").
+_live_exe = {}
 # 本插件建出来的临时目录
 _temp_dirs = set()
 
@@ -86,23 +90,70 @@ SCRATCH_PREFIXES = ('cph-stress-', 'cph-calibrate-', 'cph-checker-',
 _LIVE_CAP = 64
 
 
-def register_live(key, is_alive, kill):
+def register_live(key, is_alive, kill, exe_path=None):
 	"""Track one child process so an unload can reap it.
 
 	`is_alive` decides whether the process still needs killing (killing a pid
 	that already exited can hit whatever the OS has since handed that pid to),
 	`kill` reaps it. Nothing here raises: the caller is on a spawn path.
+
+	`exe_path`, when given, is the binary a *run* process holds open. compile()
+	uses it to reuse a still-running process's exe instead of fighting the
+	OS-level "file in use" error on the next build.
 	"""
 	try:
 		_live[key] = (is_alive, kill)
+		if exe_path:
+			_live_exe[key] = os.path.normcase(os.path.abspath(exe_path))
+		else:
+			_live_exe.pop(key, None)
 		if len(_live) > _LIVE_CAP:
 			prune_live()
 	except Exception as e:
 		print('[Algorithm Competition Assistant] could not track a child process: %s' % e)
 
 
+def kill_live_for_exe(exe_path):
+	"""Reap tracked run processes still holding `exe_path`; return how many.
+
+	Only processes this plugin launched and registered are touched - never a
+	PID guessed from a name, so an unrelated process that happens to share the
+	binary name is safe. Dead entries are forgotten but not counted.
+	"""
+	if not exe_path:
+		return 0
+	try:
+		wanted = os.path.normcase(os.path.abspath(exe_path))
+	except Exception:
+		return 0
+	killed = 0
+	for key in list(_live_exe.keys()):
+		if _live_exe.get(key) != wanted:
+			continue
+		entry = _live.get(key)
+		if entry is None:
+			_live_exe.pop(key, None)
+			continue
+		is_alive, killer = entry
+		try:
+			alive = is_alive()
+		except Exception:
+			alive = False
+		if alive:
+			try:
+				killer()
+				killed += 1
+			except Exception:
+				pass
+		# Whether it was killed or already gone, the binary is free now.
+		_live.pop(key, None)
+		_live_exe.pop(key, None)
+	return killed
+
+
 def unregister_live(key):
 	_live.pop(key, None)
+	_live_exe.pop(key, None)
 
 
 def prune_live():
@@ -110,9 +161,9 @@ def prune_live():
 	for key in list(_live.keys()):
 		try:
 			if not _live[key][0]():
-				_live.pop(key, None)
+				unregister_live(key)
 		except Exception:
-			_live.pop(key, None)
+			unregister_live(key)
 
 
 def live_count():
@@ -129,7 +180,9 @@ def kill_all_live():
 	pruned = 0
 	errors = 0
 	for key in sorted(_live.keys(), key=str):
-		is_alive, kill = _live.pop(key)
+		is_alive, kill = _live.get(key, (None, None))
+		_live.pop(key, None)
+		_live_exe.pop(key, None)
 		try:
 			if not is_alive():
 				pruned += 1

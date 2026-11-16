@@ -1,0 +1,58 @@
+Algorithm Competition Assistant 3.0.11
+======================================
+
+A deep code review turned up two host-level process bugs, a broken stress
+replay, and several silent wrong-verdict paths. Also: a still-running program
+no longer blocks the next compile, and an RE now shows its source line on the
+run card itself.
+
+Process / crash safety
+* POSIX: a timed-out checker or interactor could killpg the plugin host's own
+  process group and terminate Sublime along with unsaved work. _reap() now
+  group-kills only a child that leads its own session; the checker verdict,
+  the interactor compile/process and the gdb replay all get their own session.
+* A gdb replay that timed out left the debuggee (e.g. an infinite loop) running
+  in the background. The whole process group is now taken down.
+
+Stress test
+* Replay failed outright for compiled languages: the generator's .exe was
+  passed where a source file was expected. It is now wrapped into argv.
+* Replay ignored both programs' exit codes and the reference's timeout, so two
+  empty outputs were reported as "outputs match". It only compares when both
+  programs actually ran cleanly.
+* Replay used the finished run's session, writing .exe files next to your
+  source and leaving process registrations behind. It now uses its own scratch
+  directory and cleans up.
+* The custom time limit in the "with options" flow was computed then ignored.
+* The round limit was not clamped: -1 reported a bogus "all timeout", and a
+  huge value with no wall-clock cap could run forever.
+* Counterexample output is decoded with the console codepage fallback, as the
+  other paths already did.
+
+Compile
+* Before rebuilding, any process this plugin started for that exact binary and
+  that is still running is terminated first. Windows "Permission denied" and
+  POSIX "Text file busy" on recompile are gone. Unrelated processes are never
+  touched; the behavior can be turned off with
+  kill_running_exe_before_compile.
+* The default release build now carries -g debug symbols. They add no runtime
+  cost, so bare segfaults resolve to a source line without switching modes.
+* Full Debug mode is NOT the default: it drops -O2 and adds UBSan plus
+  assertions, which slows programs tens of times and causes false TLE.
+
+Run panel
+* When an RE has a known source line, the card shows a clickable red "arrow
+  file:line" chip that jumps straight to that line.
+
+Correctness / cleanup
+* "Is this output already accepted?" now uses the judge's token comparison;
+  the old whitespace-stripped test treated "1 23" as the answer "12 3" and
+  silently cleared a WA card.
+* Stats flush deep-copies the cache under the lock and reschedules a failed
+  write; a concurrent run could previously corrupt the JSON and lose the batch.
+* checkers/interactors accept trailing arguments ("python checker.py --strict").
+* Calibration kills a runaway benchmark and cleans its temp directory.
+* Dead code and no-op helpers removed; several TextCommands now guard against
+  a view with no window; "copy actual output" is run-panel only.
+
+Regression suite: 1104 checks, 0 failures.

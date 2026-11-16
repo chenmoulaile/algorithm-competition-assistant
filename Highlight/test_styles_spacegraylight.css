@@ -62,6 +62,10 @@ a {
 	background-color: color(var(--purplish) alpha(0.3));
 }
 
+.config-jump {
+	background-color: color(var(--redish) alpha(0.3));
+}
+
 .test-compiling {
 	background-color: color(var(--bluish) alpha(0.3));
 	/* Same inner side padding as the default theme: without it the chip text

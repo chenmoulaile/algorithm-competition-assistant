@@ -147,6 +147,15 @@ def transform(cmd, mode):
 		out = _SANITIZER.sub('', cmd)
 		out = _FRAME_POINTER.sub('', out)
 		out = _ASSERT_FLAG.sub('', out)
+		# Debug symbols are FREE at runtime: -g only adds DWARF sections, it
+		# does not change the generated code or slow the program. Keeping them
+		# in the default (optimised) build lets the gdb replay in
+		# cph_gdb_trace turn a bare segfault into the user's own file:line for
+		# the run-panel RE chip. This is the zero-cost half of debug mode -
+		# unlike -fsanitize/-D_GLIBCXX_ASSERTIONS (removed above), it costs no
+		# runtime speed, so the default build can afford it.
+		if not _DEBUG_SYM.search(out):
+			out = out.rstrip() + ' -g'
 		if not _OPT.search(out):
 			out = out.rstrip() + ' -O2'
 		return _tidy(out)
