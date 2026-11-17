@@ -191,15 +191,21 @@ def find_crash_location(text, source_file=None):
     if source_file:
         wanted = source_file.replace('\\', '/').rsplit('/', 1)[-1]
     fallback = None
+    # Scan EVERY pattern for a hit in the file under test before falling back
+    # to the first match found. Returning a fallback at the end of the first
+    # pattern that matched (the old behaviour) let a libstdc++ header name in
+    # a sanitizer line beat the user's own frame named later in a Python
+    # traceback - the exact case the caller's gdb replay is meant to avoid.
+    # A source-file match is always the actionable one, regardless of which
+    # pattern reported it.
     for pattern in _CRASH_PATTERNS:
         for match in pattern.finditer(text):
             path, line = match.group(1), int(match.group(2))
-            if wanted and path.replace('\\', '/').rsplit('/', 1)[-1] == wanted:
+            if (wanted and
+                    path.replace('\\', '/').rsplit('/', 1)[-1] == wanted):
                 return (path, line)
             if fallback is None:
                 fallback = (path, line)
-        if fallback is not None:
-            return fallback
     return fallback
 
 

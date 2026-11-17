@@ -18,6 +18,8 @@ from .core.cph_jump import (diagnostics as parse_diagnostics,
 							jump_to_location,
 							handle_event as handle_jump_event)
 from .core.cph_build_mode import label as build_mode_label
+from .core.cph_views import (tag_run_view, tag_detail_view,
+							 views_owned_by, close_views)
 from .core.cph_std_ladder import reset as std_ladder_reset
 from .core.cph_calibrate import label as calibrate_label
 from .core.cph_parallel import run_batch as run_parallel_batch
@@ -1932,7 +1934,9 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		window = self.view.window()
 		if window is None:
 			return None
-		name = 'test %d %s' % (test_id, '-edit' if mode == 'input' else '-answer')
+		# 1-based like the card and the edit tab's set_name; test_id itself
+		# stays 0-based for the write-back in CphTestEditCommand.
+		name = 'test %d %s' % (test_id + 1, '-edit' if mode == 'input' else '-answer')
 		for wv in window.views():
 			if (wv.name() or '') != name:
 				continue
@@ -2760,8 +2764,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			return False
 
 	def _mark_detail_view(self, view, i):
+		tag_detail_view(view, self._detail_source(), i)
 		try:
-			view.settings().set('cph_detail_source', self._detail_source())
 			view.settings().set('cph_detail_index', i)
 		except Exception:
 			pass
@@ -4381,7 +4385,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		# 'cph_run_view' marks this scratch view as the run panel. The old
 		# status key still exists but now carries something useful
 		# (language and limits) instead of the FOC-era 'opdebugger-file'.
-		v.settings().set('cph_run_view', True)
+		tag_run_view(v, run_file)
 		try:
 			v.set_status('opd_info', run_view_status_label(
 				run_file, time_limit_ms, memory_limit_mb))
@@ -5404,34 +5408,18 @@ class CloseListener(sublime_plugin.EventListener):
 		if window is None:
 			return
 
-		# Closing xxx.cpp closes 'xxx.cpp -run' (and any 'test N -edit' /
-		# '-answer' tabs opened from it). Leaving them behind meant the user
-		# had to close the panel by hand every time - and a forgotten panel
-		# keeps its process, its output and its own tab around.
-		target = file_name.replace('\\', '/').split('/')[-1] + ' -run'
-		view_id = view.id()
-		for other in list(window.views()):
-			if other is view:
-				continue
-			if (other.name() or '') == target:
-				# ST4215: calling close() on another view directly from
-				# inside on_pre_close SIGSEGVs the host when the layout has
-				# two groups and the panel view sits in group 1. Defer the
-				# close out of the host's view-teardown frame.
-				def close_panel(other=other):
-					try:
-						other.close()
-					except Exception:
-						pass
-				sublime.set_timeout(close_panel, 0)
-				continue
-			if other.settings().get('cph_edit_source') == view_id:
-				def close_edit(other=other):
-					try:
-						other.close()
-					except Exception:
-						pass
-				sublime.set_timeout(close_edit, 0)
+		# Closing xxx.cpp closes 'xxx.cpp -run' and every detail tab and
+		# 'test N -edit' / '-answer' tab opened from it. Leaving them behind
+		# meant the user had to close each one by hand, and a forgotten panel
+		# keeps its process, its output and its own tab around. Identity is by
+		# settings (shared with unload), never by the translated view name:
+		# two main.cpp in different folders used to close each other's panel.
+		owned = views_owned_by(window, file_name, view.id())
+		# ST4215: closing another view from inside on_pre_close SIGSEGVs the
+		# host when the layout has two groups and the panel sits in group 1.
+		# Defer the whole batch out of the host's view-teardown frame.
+		if owned:
+			sublime.set_timeout(lambda: close_views(owned), 0)
 
 
 class CphViewTesterCommand(sublime_plugin.TextCommand):

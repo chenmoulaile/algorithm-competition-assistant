@@ -1,0 +1,22 @@
+Algorithm Competition Assistant 3.0.12
+======================================
+
+Cleaner view lifecycle, consistent test numbering, and a crash-location fix.
+
+* Quitting (or reloading) the package now closes every open -run panel, test
+  detail tab and edit tab, then restores a single-column layout with the file
+  sidebar visible. No more stale panels pointing at dead processes on the next
+  launch.
+* Closing a source file closes its -run panel, its detail tabs and its edit
+  tabs together. Views are matched by the source path stored on them, not by
+  the translated tab name, so two same-named files in different folders no
+  longer close each other's panel.
+* Edit tabs are numbered like the run panel: clicking edit on "test 1" opens
+  "test 1 -edit" / "test 1 -answer" instead of the FOC-style "test 0". The
+  0-based internal index used to save answers is unchanged.
+* Crash location: when the output contains both a system-header sanitizer
+  report and a traceback naming your own source, the user's line now wins.
+  Previously the system header (e.g. bits/stl_vector.h:1263) was returned and
+  clicking jumped into libstdc++ instead of your code.
+
+Regression suite: 1115 checks, 0 failures.

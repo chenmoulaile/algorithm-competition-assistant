@@ -659,6 +659,18 @@ def main():
           verdict.find_crash_location('', 'main.cpp') is None)
     check('ordinary output yields no location',
           verdict.find_crash_location('3\n', 'main.cpp') is None)
+    # A later pattern can name the file under test even when an earlier,
+    # more specific pattern already found an unrelated system header. The
+    # function promises the user's own file wins; returning the first
+    # pattern's fallback pointed the RE chip at stl_vector.h instead.
+    _mixed_crash = ('bits/stl_vector.h:1263:5: runtime error: index out of bounds\n'
+                    'Traceback (most recent call last):\n'
+                    '  File "D:/p/main.cpp", line 12, in <module>\n'
+                    '    print(1 / 0)\n')
+    check('a source-file match wins over an earlier system-header fallback',
+          verdict.find_crash_location(_mixed_crash, 'D:/p/main.cpp')
+          == ('D:/p/main.cpp', 12),
+          repr(verdict.find_crash_location(_mixed_crash, 'D:/p/main.cpp')))
 
     print('== Tester: the multi-sample chain crash ==')
     tm = importlib.import_module(pkg + '.test_manager')
@@ -5080,8 +5092,8 @@ def main():
     close_src = tm_src[tm_src.find('class CloseListener'):]
     close_src = close_src[:close_src.find('\nclass ', 10)]
     check('closing a source file closes its run panel and edit tabs',
-          "' -run'" in close_src and 'cph_edit_source' in close_src
-          and close_src.count('.close()') >= 2, close_src[:60])
+          'views_owned_by(' in close_src and 'close_views(' in close_src
+          and 'set_timeout' in close_src, close_src[:60])
 
     # The edit card template must stay byte-identical to the v1.4.13 one. The
     # whitespace inside each <a> is what gives the chips their inner padding:
@@ -9346,6 +9358,85 @@ def main():
               ('def get_supported_exts', _chk_src(os.path.join('core', 'cph_settings.py'))),
               ('def _fmt_duration_public', _chk_src(os.path.join('core', 'cph_stats.py'))),
               ('def get_run_entry', _pm_src_fix2))))
+
+    # 11. view lifecycle: closing a source / quitting Sublime ----------------
+    try:
+        views_mod = importlib.import_module(pkg + '.core.cph_views')
+    except Exception:
+        views_mod = None
+    check('a core view-lifecycle helper exists', views_mod is not None)
+
+    if views_mod is not None:
+        _sub = sys.modules['sublime']
+        _w = _sub.Window()
+        _src = _sub.View(file_name='D:/p/main.cpp')
+        _w._views.append(_src)
+        _run = _sub.View(settings={'cph_run_view': True,
+                                   'cph_run_source': 'D:/p/main.cpp'})
+        _run.set_name('main.cpp -run')
+        _w._views.append(_run)
+        _det = _sub.View(settings={'cph_detail_source': 'D:/p/main.cpp'})
+        _det.set_name('main.cpp - test 1 detail')
+        _w._views.append(_det)
+        _edt = _sub.View(settings={'cph_edit_view': True,
+                                   'cph_edit_source': _run.id()})
+        _edt.set_name('test 1 -edit')
+        _w._views.append(_edt)
+        _other_run = _sub.View(settings={'cph_run_view': True,
+                                         'cph_run_source': 'D:/p/other.cpp'})
+        _other_run.set_name('other.cpp -run')
+        _w._views.append(_other_run)
+
+        _mine = views_mod.views_owned_by(_w, 'D:/p/main.cpp', _src.id())
+        check('closing a source finds its run, detail and edit views',
+              set(_mine) == set((_run, _det, _edt)),
+              repr([v.name() for v in _mine]))
+        check("a different problem's panel is left alone",
+              _other_run not in _mine)
+
+        views_mod.close_views(_mine)
+        check('those views are actually closed',
+              all(not v.is_valid() for v in (_run, _det, _edt))
+              and _other_run.is_valid())
+
+        _w2 = _sub.Window()
+        _w2.set_layout = lambda layout: setattr(_w2, '_layout_set', layout)
+        _w2.set_sidebar_visible = lambda visible: setattr(_w2, '_sidebar', visible)
+        _p = _sub.View(settings={'cph_run_view': True})
+        _w2._views.append(_p)
+        _saved_windows = _sub.windows
+        _sub.windows = lambda: [_w2]
+        try:
+            views_mod.cleanup_on_exit()
+        finally:
+            _sub.windows = _saved_windows
+        check('exit cleanup closes panel views and restores sidebar/layout',
+              not _p.is_valid()
+              and getattr(_w2, '_sidebar', None) is True
+              and (getattr(_w2, '_layout_set', {}) or {}).get('cols') == [0, 1],
+              repr((_p.is_valid(), getattr(_w2, '_sidebar', None),
+                    getattr(_w2, '_layout_set', None))))
+
+    check('the entry point closes plugin views on unload',
+          'cleanup_on_exit()' in _unload_src)
+    check('source-file close delegates to the shared view cleanup',
+          'views_owned_by(' in _tm_src_fix and 'close_views(' in _tm_src_fix)
+    check('the run view is tagged with its source path',
+          'tag_run_view(v, run_file)' in _tm_src_fix
+          and "RUN_SOURCE = 'cph_run_source'" in _chk_src(
+              os.path.join('core', 'cph_views.py')))
+
+    # 12. edit views are numbered like the run panel (1-based) --------------
+    _edit_src = _chk_src('test_edit.py')
+    check('edit tabs and cards are numbered from 1',
+          'str(test_id + 1) + suffix' in _edit_src
+          and "str(self.test_id + 1) + ' -answer'" in _edit_src
+          and 'test_id=self.test_id + 1' in _edit_src
+          and "(test_id + 1, '-edit'" in _tm_src_fix,
+          'a "test 1" card opened a "test 0" tab (FOC numbering)')
+    check('the 0-based id is still used for saving and deleting',
+          "'id': self.test_id" in _edit_src
+          and "'test_id': i," in _tm_src_fix)
 
     print('')
     print('%d checks, %d failures' % (CHECKS[0], len(FAILURES)))

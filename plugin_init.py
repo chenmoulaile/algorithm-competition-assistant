@@ -4,7 +4,7 @@ import os
 import sublime
 
 # Kept in sync with messages.json by tests/check_messages.py.
-VERSION = '3.0.11'
+VERSION = '3.0.12'
 
 
 def plugin_loaded():
@@ -48,6 +48,15 @@ def plugin_unloaded():
                   'be reaped' % (killed, removed, errors))
     except Exception as e:
         print('[Algorithm Competition Assistant] unload cleanup failed: %s' % e)
+    # Close the scratch run panels, per-test detail tabs and edit tabs, and
+    # put the window layout back (single column, sidebar visible). On quit
+    # Sublime otherwise restores those tabs next launch pointing at a dead
+    # process; on a package reload they show output from an old build.
+    try:
+        from .core.cph_views import cleanup_on_exit
+        cleanup_on_exit()
+    except Exception as e:
+        print('[Algorithm Competition Assistant] view cleanup failed: %s' % e)
 
 
 def _init():

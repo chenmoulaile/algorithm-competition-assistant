@@ -32,9 +32,14 @@ class CphTestEditCommand(sublime_plugin.TextCommand):
 	# ---------- sibling view helpers ----------
 
 	def _sibling_name(self):
+		# The run panel numbers cards from 1; self.test_id is the 0-based
+		# model index (used to write the answer back). Keep the write-back
+		# 0-based and convert ONLY the displayed/name number here, so an
+		# opened 'test 1' card's tabs are 'test 1 -edit/-answer', not the
+		# FOC-era 'test 0'.
 		if self.mode == 'input':
-			return 'test ' + str(self.test_id) + ' -answer'
-		return 'test ' + str(self.test_id) + ' -edit'
+			return 'test ' + str(self.test_id + 1) + ' -answer'
+		return 'test ' + str(self.test_id + 1) + ' -edit'
 
 	def _find_sibling(self):
 		window = self.view.window()
@@ -164,7 +169,7 @@ class CphTestEditCommand(sublime_plugin.TextCommand):
 		hint = _i18n_t('edit_input_hint') if self.mode == 'input' \
 			else _i18n_t('edit_answer_hint')
 		content = content.format(
-			test_id=self.test_id,
+			test_id=self.test_id + 1,
 			test_label=_i18n_t('test_label'),
 			save_label=_i18n_t('save'),
 			delete_label=_i18n_t('delete'),
@@ -206,7 +211,7 @@ class CphTestEditCommand(sublime_plugin.TextCommand):
 
 		v.set_scratch(True)
 		suffix = ' -edit' if self.mode == 'input' else ' -answer'
-		v.set_name('test ' + str(test_id) + suffix)
+		v.set_name('test ' + str(test_id + 1) + suffix)
 		v.run_command('toggle_setting', {'setting': 'line_numbers'})
 		v.run_command('set_setting', {'setting': 'fold_buttons', 'value': False})
 		# 'cph_edit_view' marks this tab as a test-edit view (the run view
