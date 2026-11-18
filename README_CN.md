@@ -46,7 +46,7 @@ Settings`：左边是只读的默认值，右边是可编辑的
 
 **两种方式不要同时用。** `Packages/` 下同时有同名文件夹和 zip 时，Package Control 升级
 zip 会把那个文件夹清空，现象是"改了代码、重启、什么都没变"。启动时会在控制台和状态栏
-提示检测到两份安装，`Ctrl+Alt+D` 会写明当前加载的是文件夹还是 zip。
+提示检测到两份安装，`Ctrl+Alt+Shift+D` 会写明当前加载的是文件夹还是 zip。
 
 ## 上手
 
@@ -73,6 +73,7 @@ zip 会把那个文件夹清空，现象是"改了代码、重启、什么都没
 | `MLE` | 峰值内存超过上限 |
 | `RE` | 非零退出、崩溃或触发断言 |
 | `PE` | 内容一致，空白或换行不同 |
+| `PC` | 部分正确（checker 判定，退出码 7） |
 | `CE` | 编译失败 |
 | `SK` | 被手动停止 |
 | `UKE` | 没有得出结论，例如程序没启动起来 |
@@ -157,9 +158,10 @@ C++20 / 23——编译命令写什么标准，就用什么标准编。
 设 `"detail_rich": false` 回到无卡片、无颜色的纯文本详情；`"detail_style": "phantom"`
 是旧的嵌入式面板，那种模式下文字不能选中。
 
-详情页和运行面板共用右侧那一列，列宽由运行面板的卡片决定。运行面板的宽度跟着内容走：
+详情页和运行面板共用右侧那一列，列宽由运行面板的卡片决定。运行面板的宽度自动跟着内容走：
 卡片放不下时会加宽，内容变短时也会收窄，上下限是 8% 窗口宽和 `max_panel_width_ratio`
-（默认半个窗口）。想读宽一点就直接拖，拖过的宽度不会被自动收回。
+（默认半个窗口）。手动拖动分隔条后，下次面板刷新或切回运行面板时会按内容重新自适应；
+唯一例外是详情页在前台时不会被收窄。
 
 ## 文件输入输出（NOI / CSP-S）
 
@@ -191,12 +193,12 @@ problem reads/writes files`，两个文件名会按源码名预填（`add.cpp` �
 
 在源码视图按 `Ctrl+Alt+S`。正解和生成器从哪来由 `stress_file_source` 决定：
 
-- `pick_once`（默认）：同目录正好有一对就先用它，不问；没有才第一次问你，选完记在
+- `pick_once`（默认）：同目录找到一对匹配文件就先用它，不问；没有才第一次问你，选完记在
   `<名>__tests.stress`，以后直接开跑；
-- `same_dir`：只在同目录按文件名主干找，不弹窗。正解匹配文件名含 `std` / `brute` /
+- `same_dir`：只在同目录按文件名主干找，平时不弹窗。正解匹配文件名含 `std` / `brute` /
   `bf` / `baoli` / `sol` / `standard` / `correct` / `right` / `暴力` 之一的，生成器匹配
   含 `gen` / `data` / `maker` / `make` / `rand` / `random` / `generator` / `shuju` /
-  `生成` / `数据` 之一的；找不到会告诉你查了哪个目录；
+  `生成` / `数据` 之一的；找不到时会提示搜索过的目录，并弹出文件选择框让你手动指定；
 - `auto`：同目录找不到就用设置里手填的 `stress_std_file` / `stress_generator_file`
   （这两个键插件不自动写入），仍不确定才问。
 
@@ -214,7 +216,7 @@ problem reads/writes files`，两个文件名会按源码名预填（`add.cpp` �
 
 ## Competitive Companion
 
-装好浏览器扩展，Sublime 启动时就会在 `12345` 端口监听（`companion_auto_listen`，
+装好浏览器扩展，Sublime 启动后约 1.2 秒开始在 `12345` 端口监听（`companion_auto_listen`，
 默认开），不用先打开文件。扩展的端口列表里要加入 `12345`，这一步在浏览器里，插件
 代劳不了。
 
@@ -227,9 +229,10 @@ problem reads/writes files`，两个文件名会按源码名预填（`add.cpp` �
 `companion_target` 决定默认行为，右键菜单和命令面板里两项都有。`new_file` 模式下
 "固定目标文件"不生效，一题一个文件就是这个模式的意思。
 
-列表页要注意：AtCoder、洛谷的题目列表页点一次会把整包题目都发过来（实测 7 个请求）。
-这种页面用 `Ctrl+Alt+L`；用 `Ctrl+Alt+F` 的话，七道题的样例会全并进当前那个文件。
-同一文件的重复自动运行会合并成一轮（2 秒防抖），不会连编七次。
+列表页要注意：AtCoder、洛谷的题目列表页点一次会把整包题目都发过来（实测 7 个请求），
+里面是好几道**不同的题**，这种页面用 `Ctrl+Alt+L`；用 `Ctrl+Alt+F` 的话，这几道题的样例
+会全并进当前那个文件。但对**同一道题**（题名 + URL 相同）重复抓取时，会先清空该题的旧
+样例，再写入新样例。同一文件的重复自动运行会合并成一轮（2 秒防抖），不会连编七次。
 
 新文件建在哪，按顺序取第一个能用的：`auto_create_dir` → 执行命令时那个 cpp 的目录 →
 当前文件所在目录 → 工作区第一个文件夹。注释头可以用 `auto_create_header` 自定义，
@@ -254,16 +257,18 @@ problem reads/writes files`，两个文件名会按源码名预填（`add.cpp` �
 | --- | --- | --- |
 | Benchmark | `Ctrl+Alt+Shift+K` | 当前测试点跑 N 次（`benchmark_runs`，默认 5），报最快、平均、最慢。 |
 | 机器校准 | 命令面板 `Calibrate this machine's speed` | 算出本机相对参考评测机的速度系数，状态栏显示等效时限。判题仍按你设的原始时限。 |
-| 练习统计 | 命令面板 `Show practice statistics` | 每题的尝试次数、首次 AC、判题分布、对拍轮数。数据在本插件自己的文件里。 |
+| 练习统计 | 命令面板 `Show practice statistics` | 总览、Solved 总数、判题分布（总计）、按日统计、对拍轮数（总计）、总时长，以及"需练习"列表里每题的尝试次数、首次 AC、对拍轮数。数据在本插件自己的文件里。 |
 | 比赛计时器 | `Ctrl+Alt+Shift+T` | 状态栏倒计时，剩 30 / 10 / 5 分钟各提醒一次。默认时长 `contest_duration_minutes`（120 分钟），0 表示每次手输。 |
 | 模板片段 | `Ctrl+Alt+T` | 光标停在关键字后展开。查找顺序：`algorithms_base` 目录 → `templates` 字典 → 内置片段（fastio / main / bf / debug / testlib）。 |
-| 环境自检 | `Ctrl+Alt+D` | 编译器、端口、路径、资源，另附一段可以粘进 issue 的 Markdown 报告。 |
+| 环境自检 | `Ctrl+Alt+Shift+D` | 编译器、端口、路径、资源，另附一段可以粘进 issue 的 Markdown 报告。 |
 
 ## 快捷键
 
 绑定随包加载，不写进你的 keymap；禁用或卸载插件时按键会自动还回去。`Ctrl` 和 `Alt`
 都是字面按键，macOS 上是 Control + Option（包里没有 `super+`）。设
-`"enable_keybindings": false` 可以整体让出键位。
+`"enable_keybindings": false` 可以整体让出键位。例外是测试编辑视图内部的按键
+（`Enter` / `Ctrl+D` / `Ctrl+X` / `Ctrl+Alt+B`）：它们只按视图的 selector / `edit_mode` 把关，
+不受这个设置影响，仍然可用。
 
 | 按键 | 功能 |
 | --- | --- |
@@ -288,18 +293,20 @@ problem reads/writes files`，两个文件名会按源码名预填（`add.cpp` �
 | `Ctrl+Alt+Shift+K` | Benchmark 当前测试点 |
 | `Ctrl+Alt+Shift+T` | 比赛计时器 |
 | `Ctrl+Alt+G` | Debug / Release 切换 |
-| `Ctrl+Alt+D` | 环境自检 |
+| `Ctrl+Alt+Shift+D` | 环境自检 |
 | `Ctrl+Alt+J` | 跳到第一个错误位置 |
 | `Ctrl+Alt+T` | 展开模板片段 |
 | `Ctrl+Alt+P` / `Ctrl+K, Ctrl+P` | 收起 / 恢复运行面板 |
 
-在插件的测试编辑和详情视图里（`source.TestSyntax`）：`Enter` 插入行，`Ctrl+Enter`
+`Ctrl+Alt+T` 只在 C++ 文件（`source.c++`）里生效；其它语言可以从命令面板调用。
+
+在插件的测试编辑视图里（`source.TestSyntax`）：`Enter` 插入行，`Ctrl+Enter`
 新建测试，`Ctrl+V` 粘贴，`Ctrl+X` 停进程，`Ctrl+D` 删除测试，`Ctrl+Shift+Up/Down`
 交换顺序。
 
 ## 设置
 
-四个设置面板在 `View → Algorithm Competition Assistant` 菜单里（前三个在 `Settings`
+五个设置面板在 `View → Algorithm Competition Assistant` 菜单里（前四个在 `Settings`
 子菜单，最后一个在 `Problem` 子菜单），改的就是设置文件里那几个键，改完立刻生效：
 
 | 面板 | 管什么 |
@@ -307,6 +314,7 @@ problem reads/writes files`，两个文件名会按源码名预填（`add.cpp` �
 | `Verdict rules` | 浮点容差、PE 是否算 AC、第一个失败是否停、判题时是否忽略 stderr |
 | `Stress test options` | std / gen 从哪来、挑文件方式、反例是否存成测试点、轮数、每轮时限 |
 | `Competitive Companion options` | 默认送哪儿、启动是否自动监听、是否记录点击日志 |
+| Panel width options | 运行面板列宽是否自动跟随内容，以及最大宽度比例 |
 | `This problem reads/writes files` | 这一题按 stdin 还是按文件，以及文件名 |
 
 `companion_auto_listen` 是其中唯一要下次启动监听才生效的一项；端口同理，只在启动监听时
@@ -338,9 +346,10 @@ problem reads/writes files`，两个文件名会按源码名预填（`add.cpp` �
 
 默认中文，`"language": "zh"`。切英文的入口：`View → Algorithm Competition Assistant →
 Settings → Switch language (中/EN)`（旁边就是 `Switch to English`），或命令面板里的
-`Algorithm Competition Assistant: Switch to English`。状态栏、弹窗、面板文案和命令面板
-里的命令描述会跟着变；菜单项是静态 JSON，不跟语言，文案一律英文——例外是语言切换和
-中文说明两个入口，特意带上中文标注，方便中文用户找得到。
+`Algorithm Competition Assistant: Switch to English`。状态栏、弹窗和面板文案会跟着变；
+命令面板里只有五个设置面板和运行模式命令的描述跟随语言，其余命令标题是固定英文。
+菜单项是静态 JSON，不跟语言，文案一律英文——例外是三个入口特意带上中文标注
+（语言切换的两个入口和中文说明入口），方便中文用户找得到。
 
 界面切到英文后，详情页 `[信息]` 区块里插件自己写的判决附言（RE 位置、输出截断提示、
 TLE 原因）可以仍然用中文：设 `"message_language": "zh"`（默认 `"auto"`，跟随界面）。
@@ -349,7 +358,6 @@ TLE 原因）可以仍然用中文：设 `"message_language": "zh"`（默认 `"a
 ## 已知限制
 
 - macOS 的内存是单进程采样得到的峰值，不是内核统计的峰值 RSS，可能比活动监视器略低。
-- Release 下裸段错误的行号只能给到函数名；要行号就切 Debug，或自己加 `-g`。
 - `sync_output` 默认关闭。开启后每个字符刷新一次视图，只适合交互程序。
 - stderr 只在详情页显示，卡片上不挂。
 - 空测试点（没有输入也没有答案）不存盘，它只是接收粘贴的占位。
@@ -373,7 +381,7 @@ TLE 原因）可以仍然用中文：设 `"message_language": "zh"`（默认 `"a
   默认禁用；本插件实测在 3.14 宿主上加载运行正常。代码本身仍以 **Python 3.3 为兼容性
   下限**，不能用 f-string、`subprocess.run`、`Popen(encoding=…)` 这些新版本的东西，
   `tests/check_py33.py` 会拦。
-- 回归测试：`python tests/run_tests.py`，当前 1115 项，0 失败。测试用假的 `sublime`
+- 回归测试：`python tests/run_tests.py`，当前 1151 项，0 失败。测试用假的 `sublime`
   模块，不需要装 Sublime。
 - CI 跑 Linux（3.9 / 3.12）、Windows、macOS。
 - 版本号在 `plugin_init.py`。发版要往 `messages.json` 加对应键、放

@@ -101,6 +101,22 @@
 	},
 	{
 		"keys": [
+			"ctrl+d"
+		],
+		"command": "cph_test_manager",
+		"args": {
+			"action": "delete_tests"
+		},
+		"context": [
+			{
+				"key": "setting.cph_run_view",
+				"operator": "equal",
+				"operand": true
+			}
+		]
+	},
+	{
+		"keys": [
 			"ctrl+shift+up"
 		],
 		"command": "cph_test_manager",
@@ -470,9 +486,31 @@
 	},
 	{
 		"keys": [
-			"ctrl+alt+d"
+			"ctrl+alt+shift+d"
 		],
 		"command": "cph_doctor",
+		"context": [
+			{
+				"key": "selector",
+				"operator": "equal",
+				"match_all": false,
+				"operand": "source.c++, source.c, source.python, source.java, source.rust, source.go, source.pascal, source.js, source.TestSyntax"
+			},
+			{
+				"key": "cph_keybindings_enabled",
+				"operator": "equal",
+				"operand": true
+			}
+		]
+	},
+	{
+		"keys": [
+			"ctrl+alt+shift+h"
+		],
+		"command": "cph_test_manager",
+		"args": {
+			"action": "toggle_hide_phantoms"
+		},
 		"context": [
 			{
 				"key": "selector",

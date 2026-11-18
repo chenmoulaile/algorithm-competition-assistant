@@ -1,0 +1,37 @@
+Algorithm Competition Assistant 3.0.13
+======================================
+
+A panel-width switch, plus fixes for several behaviour/documentation mismatches.
+
+* New "Run panel width options" settings panel (View > Algorithm Competition
+  Assistant > Settings): toggle whether the run/detail column auto-fits its
+  content, and set the maximum width ratio. Previously this was only editable
+  by hand in auto_fit_panel_width; now it is one click away and takes effect
+  immediately.
+* Interactive problems: the solution no longer inherits the interactor's 20s
+  time limit (interactor_time_limit_ms only widens the dialogue wall clock),
+  and a crashed solution is judged RE even when the interactor exits 0 instead
+  of being wrongly accepted.
+* Stress testing: generator timeouts are now consecutive -- three in a row stop
+  the run; three scattered timeouts no longer end the session.
+* Practice statistics now show each problem's first AC and stress rounds, as
+  documented.
+* Documentation now matches the code: the panel width re-fits after a manual
+  drag on the next refresh (it is not "kept" as the old manual claimed); the
+  default Release build carries -g so a bare segfault can locate a line; the
+  PC verdict (checker exit code 7) is listed; same_dir opens a picker when no
+  pair is found; and only the settings-panel and run-mode palette descriptions
+  follow the interface language.
+* New ACA (Algorithm Competition Assistant) top-level menu; the View-menu commands are
+  also available there.
+* Environment doctor shortcut moved from Ctrl+Alt+D to Ctrl+Alt+Shift+D (avoids a conflict).
+* The delete-test shortcut Ctrl+D is now available in the run panel as well.
+* New hide-cards shortcut Ctrl+Alt+Shift+H.
+* New classic no-verdict card theme (the original FastOlympicCoding look); the panel_style
+  setting accepts full / classic, switchable from row 3 "Card style" of the Run panel width
+  options panel.
+* Companion: Ctrl+Alt+F now clears a problem's old samples before re-grabbing the same
+  problem (matched by title + URL); several different problems from one click on a contest
+  list page are still merged into the current file.
+
+Regression suite: 1151 checks, 0 failures.

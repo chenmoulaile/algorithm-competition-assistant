@@ -859,7 +859,16 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		def get_config(self, i, pt, _cb_act, _out, view, running=False):
 			if not running:
 				styles = get_test_styles(view)
-				content = read_resource('Highlight/test_config.html')
+				# 卡片样式开关 (panel_style): "full" 保留彩色 verdict 徽章 +
+				# 时间/内存/detail/jump 芯片; "classic" 是原插件 FastOlympicCoding
+				# 那种只有 test / edit / run / time 的小卡片。这里只切换模板,
+				# 判定/运行逻辑完全不动——隐藏徽章不等于禁用功能, 结果仍可在
+				# detail 页 / 状态栏查到, 编辑运行点击照旧。两个模板用同样的
+				# 占位符名, 下面的 format 传入多余 key 会被 str.format 忽略。
+				if get_settings().get('panel_style', 'full') == 'classic':
+					content = read_resource('Highlight/test_config_classic.html')
+				else:
+					content = read_resource('Highlight/test_config.html')
 
 				verdict_class = self.get_verdict_class()
 				verdict_short = self.verdict['name'] if self.verdict else 'UKE'
@@ -2458,9 +2467,12 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				workers = 1
 
 				def case_runner(index, input_text, expected):
+					# The solution keeps its own time limit; the interactor's
+					# (larger) limit only widens the dialogue's wall clock.
 					return interactive_run_case(
 						make_manager, exe, input_text, expected,
-						cfg['time_limit_ms'], cwd=cfg.get('dir'),
+						time_limit_ms, cwd=cfg.get('dir'),
+						wall_time_limit_ms=cfg['time_limit_ms'],
 						cancel=cancel,
 						register_kill=tester.add_batch_kill)
 

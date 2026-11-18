@@ -51,9 +51,15 @@ _listener = {
 
 #: One click on a contest page is not one problem: an AtCoder task list sends
 #: every task at once (seven POSTs measured here), so filling one file would
-#: queue a compile and a run per problem, back to back. The samples are all
-#: stored; only the repeat runs are folded away.
+#: queue a compile and a run per problem, back to back. Samples from different
+#: problems are all merged and kept; only a re-grab of the SAME problem clears
+#: the file first. The repeat runs are folded away.
 AUTO_RUN_DEBOUNCE_SECONDS = 2.0
+
+#: Session-local map file_name -> last written problem identity (name, url),
+#: both normalized with str(...).strip().lower(). Lets the current_file target
+#: tell a re-grab (clear old samples) from a contest-list burst (keep them all).
+_last_problem_by_file = {}
 
 
 def _should_run(file_name):
@@ -134,6 +140,30 @@ def merge_tests(file_name, incoming):
 def _merge_with_stored(file_name, incoming):
     """Pure-data twin of merge_tests: (merged, conflicts), no UI."""
     return merge_stored_with(load_all_tests(file_name), incoming)
+
+
+def replace_tests(file_name, incoming):
+    """Pure-data helper: drop every stored test and write a fresh batch.
+
+    Used when the `current_file` target re-grabs the SAME problem: old samples
+    must not survive, so this never reads the existing tests at all. Drops
+    duplicates by input (the shared merge policy's key) and returns
+    (saved, total). An empty batch is a true no-op (True, 0): a blank POST
+    must never wipe the user's tests, nor be reported as a failed save.
+    """
+    if not incoming:
+        return True, 0
+    unique = []
+    seen = set()
+    for item in list(incoming):
+        key = item.get('test', '')
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(dict(item))
+    with tests_lock():
+        saved = bool(save_tests(file_name, unique))
+    return saved, len(unique)
 
 
 def remember_limits(file_name, time_limit_ms, memory_limit_mb):
@@ -356,15 +386,25 @@ def build_handler():
                        % (problem_name, len(incoming), time_limit_ms,
                           memory_limit_mb, _target_mode(), file_name))
 
-            # 2. Merge + write HERE, on the HTTP thread. encode_value /
-            # decode_value are pure converters and the data is plain
-            # str/list/dict, so none of this touches view state.
+            # 2. Write HERE, on the HTTP thread. encode_value / decode_value
+            # are pure converters and the data is plain str/list/dict, so
+            # none of this touches view state.
+            identity = (str(problem_name or '').strip().lower(),
+                        str((data.get('url') or '')).strip().lower())
+            prev = _last_problem_by_file.get(file_name)
+            same_problem = prev is not None and prev == identity
             try:
-                # Read+merge+write as one critical section: the run panel's
-                # async save may be writing the same file at this instant.
+                # Read+write as one critical section: the run panel's async
+                # save may be writing the same file at this instant.
                 with tests_lock():
-                    merged, conflicts = _merge_with_stored(file_name, incoming)
-                    saved = save_tests(file_name, merged)
+                    if _target_mode() == _TARGET_CURRENT and same_problem and incoming:
+                        # 同一题重抓：先清空旧样例，只写刚抓到的这一批。
+                        saved, _total = replace_tests(file_name, incoming)
+                        conflicts = []
+                    else:
+                        # 首次写入 / 不同题（列表页 burst）/ new_file：合并保留旧样例。
+                        merged, conflicts = _merge_with_stored(file_name, incoming)
+                        saved = save_tests(file_name, merged)
             except Exception as e:
                 print(t('error_handling_post', error=str(e)))
                 return
@@ -380,6 +420,8 @@ def build_handler():
                         sublime.status_message(t('import_save_failed'))
                 sublime.set_timeout(_report_io_error, 0)
                 return
+            if saved and incoming and _target_mode() == _TARGET_CURRENT:
+                _last_problem_by_file[file_name] = identity
             remember_limits(file_name, time_limit_ms, memory_limit_mb)
             print('[Algorithm Competition Assistant] %s' % t('new_test_file_path', path=file_name))
 

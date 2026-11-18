@@ -58,7 +58,7 @@ Checked against the Package Control review guidelines, and enforced by tests whe
 - [x] `tests/`, `.github/` and development documents are excluded from the package.
 - [x] README and LICENSE ship with the package.
 
-Current test status: `python tests/run_tests.py` reports 1044 checks, 0 failures. The suite
+Current test status: `python tests/run_tests.py` reports 1151 checks, 0 failures. The suite
 uses a fake `sublime` module; CI runs it on Linux (3.9 and 3.12), Windows and macOS, plus
 `check_py33.py`, `check_messages.py`, `check_import_dir.py` and `check_perf.py`.
 

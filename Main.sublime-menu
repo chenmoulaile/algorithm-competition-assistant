@@ -192,7 +192,7 @@
 						"caption": "Tools",
 						"children": [
 							{
-								"caption": "Check environment - doctor (Ctrl+Alt+D)",
+								"caption": "Check environment - doctor (Ctrl+Alt+Shift+D)",
 								"command": "cph_doctor"
 							},
 							{
@@ -234,6 +234,10 @@
 							{
 								"caption": "Competitive Companion options (target mode, click log)...",
 								"command": "cph_companion_options"
+							},
+							{
+								"caption": "Panel width options (auto-fit, max width)...",
+								"command": "cph_panel_options"
 							},
 							{
 								"caption": "-"
@@ -325,6 +329,90 @@
 						]
 					}
 				]
+			}
+		]
+	},
+	{
+		"caption": "ACA",
+		"mnemonic": "A",
+		"children": [
+			{
+				"caption": "Run tests",
+				"command": "cph_view_tester",
+				"args": {
+					"action": "make_opd"
+				}
+			},
+			{
+				"caption": "Run all tests",
+				"command": "cph_run_all_tests"
+			},
+			{
+				"caption": "Run failed tests",
+				"command": "cph_run_failed_tests"
+			},
+			{
+				"caption": "Run in parallel",
+				"command": "cph_run_parallel"
+			},
+			{
+				"caption": "-"
+			},
+			{
+				"caption": "Import tests from file",
+				"command": "cph_import_tests"
+			},
+			{
+				"caption": "Add test from clipboard",
+				"command": "cph_add_test_from_clipboard"
+			},
+			{
+				"caption": "Export tests",
+				"command": "cph_export_tests"
+			},
+			{
+				"caption": "-"
+			},
+			{
+				"caption": "Fetch problem from URL",
+				"command": "cph_fetch_problem"
+			},
+			{
+				"caption": "Competitive Companion: new file per problem",
+				"command": "cph_companion_listener",
+				"args": {"target": "new_file"}
+			},
+			{
+				"caption": "Competitive Companion: fill current file",
+				"command": "cph_companion_listener",
+				"args": {"target": "current_file"}
+			},
+			{
+				"caption": "-"
+			},
+			{
+				"caption": "Check environment (Ctrl+Alt+Shift+D)",
+				"command": "cph_doctor"
+			},
+			{
+				"caption": "Show practice statistics",
+				"command": "cph_stats"
+			},
+			{
+				"caption": "Open settings",
+				"command": "cph_open_package_file",
+				"args": {
+					"file": "Algorithm Competition Assistant.sublime-settings",
+					"edit_base": true,
+					"default": "{\n\t$0\n}\n"
+				}
+			},
+			{
+				"caption": "Open manual (Chinese)",
+				"command": "cph_open_package_file",
+				"args": {
+					"file": "README_CN.md"
+				}
 			}
 		]
 	}

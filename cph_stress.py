@@ -1518,6 +1518,10 @@ def _run_stress_loop(sess):
                             '[Algorithm Competition Assistant] ' + t('stress_generator_limit_hint', limit=l) + '\n'), 0)
                     break
                 continue
+            # Only a *consecutive* generator timeout counts toward the limit.
+            # A round whose generator did not time out resets the streak, so
+            # three scattered timeouts do not stop the whole run.
+            gen_timeouts = 0
             if ret != 0:
                 # Say *why*: exit code plus whatever the generator printed.
                 sublime.set_timeout(

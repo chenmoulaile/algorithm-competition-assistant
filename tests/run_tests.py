@@ -2760,6 +2760,62 @@ def main():
         check('and every problem of the burst is still stored',
               len(burst_tests) == 3, repr(len(burst_tests)))
 
+        # 11b-2. a re-grab of the SAME problem (same name + url) must clear the
+        # old samples; a DIFFERENT problem landing in the same file must be
+        # merged and keep them. The two POSTs differ only in problem identity,
+        # which pins the branch that regressed: wiping on every POST into
+        # current_file used to turn a contest-list burst into one lone sample.
+        regrab_file = os.path.join(work_dir, 'regrab.cpp')
+        with io.open(regrab_file, 'w', encoding='utf-8') as f:
+            f.write('// hand written\n')
+        settings_mod.save_tests(regrab_file, [
+            {'test': '1\n', 'correct_answers': ['one\n']},
+            {'test': '2\n', 'correct_answers': ['two\n']},
+        ])
+        regrab_view = _RunRecordingView(regrab_file)
+        fake_sublime.active_window = lambda: _FocusedWindow(work_dir, regrab_view)
+        settings_mod.init_settings(dict(base_settings, companion_target='current_file',
+                                       run_settings=[cpp_only]))
+        comp._stop_listener()
+        comp._last_problem_by_file.pop(regrab_file, None)
+        port = _arm()
+        comp._start_listener(None, quiet=True)
+        regrab_data = os.path.join(work_dir, 'tests', 'regrab.cpp__tests')
+
+        def _stored_regrab():
+            if not os.path.exists(regrab_data):
+                return []
+            with io.open(regrab_data, encoding='utf-8') as f:
+                return json.loads(f.read())
+
+        problem_p = {'name': 'P', 'url': 'https://x.test/P',
+                     'timeLimit': 500, 'memoryLimit': 64}
+        first_body = json.dumps(dict(
+            problem_p, tests=[{'input': '10\n', 'output': 'ten\n'}])).encode('utf-8')
+        again_body = json.dumps(dict(
+            problem_p, tests=[{'input': '99\n', 'output': 'ninety nine\n'}])
+        ).encode('utf-8')
+        try:
+            _post_at(first_body, port)
+            _drain_main()
+            got_first = _stored_regrab()
+            # Same identity, brand-new sample: the handler answers 200 before
+            # it finishes writing, so let the drain settle before reading.
+            _post_at(again_body, port)
+            _drain_main()
+            got_again = _stored_regrab()
+        finally:
+            comp._stop_listener()
+            _drain_main()
+        check('a different problem in the same file is merged, not wiped',
+              sorted(t['test'] for t in got_first) == ['1\n', '10\n', '2\n'],
+              repr(got_first))
+        check('re-grab of the same problem replaces its samples',
+              len(got_again) == 1
+              and got_again[0]['test'] == '99\n'
+              and got_again[0]['correct_answers'] == ['ninety nine'],
+              repr(got_again))
+
         # 11c. pressing the key has to say what it will do: a list page plus
         #       "fill the current file" is how seven problems end up in std.cpp.
         warned = []
@@ -3130,12 +3186,77 @@ def main():
         finally:
             fake_sublime.packages_path = saved_pp
 
+        # The run panel shares this JSON store too: two rows for the width
+        # (auto-fit flag + ratio), plus a third that cycles the card style.
+        win5 = _PanelWindow()
+        store.set('auto_fit_panel_width', True)
+        store.set('max_panel_width_ratio', 0.5)
+        opts.CphPanelOptionsCommand(win5).run()
+        items5, choose5 = win5.panels[-1]
+        # compared through t(), not against a literal: the panel answers in the
+        # configured language, not the suite's own locale.
+        check('the panel options lists both width rows and the card-style row',
+              len(items5) == 3
+              and items5[0][0] == opts.t('opt_auto_fit_panel_width')
+              and items5[1][0] == opts.t('opt_max_panel_width_ratio')
+              and items5[0][1] in (opts.t('opt_on'), opts.t('opt_off'))
+              and items5[2][0] == opts.t('opt_panel_style')
+              and items5[2][1] in (opts.t('opt_panel_style_full'),
+                                   opts.t('opt_panel_style_classic')),
+              repr(items5))
+        before_width = store.get('auto_fit_panel_width')
+        choose5(0)
+        check('clicking auto-fit flips it and saves the file',
+              store.get('auto_fit_panel_width') is not before_width
+              and writes[-1] == sfile,
+              repr((store.get('auto_fit_panel_width'), writes[-1])))
+        choose5(0)
+        check('clicking it again switches back',
+              store.get('auto_fit_panel_width') is before_width,
+              repr(store.get('auto_fit_panel_width')))
+        prompts_before = len(win5.prompts)
+        choose5(1)
+        check('the ratio row opens an input panel pre-filled with the live value',
+              len(win5.prompts) == prompts_before + 1
+              and win5.prompts[-1][1] == str(0.5),
+              repr(win5.prompts[-1:]))
+        win5.prompts[-1][2]('0.7')
+        check('a valid ratio is stored as a number',
+              store.get('max_panel_width_ratio') == 0.7,
+              repr(store.get('max_panel_width_ratio')))
+        win5.prompts[-1][2]('nonsense')
+        check('a non-number leaves the stored ratio alone',
+              store.get('max_panel_width_ratio') == 0.7,
+              repr(store.get('max_panel_width_ratio')))
+
+        # The third row cycles full -> classic -> full. The store was never
+        # given a panel_style, so the command falls back to the file default
+        # 'full'; reopening the panel is what makes the closure read the value
+        # just written and lets the next click flip it back.
+        choose5(2)
+        check('the style row flips full -> classic and saves the file',
+              store.get('panel_style') == 'classic' and writes[-1] == sfile
+              and opts.t('opt_panel_style') in win5.status[-1]
+              and opts.t('opt_panel_style_classic') in win5.status[-1],
+              repr((store.get('panel_style'), writes[-1], win5.status[-1])))
+        opts.CphPanelOptionsCommand(win5).run()
+        items5b, choose5b = win5.panels[-1]
+        check('reopening shows the stored classic style',
+              items5b[2][1] == opts.t('opt_panel_style_classic'),
+              repr(items5b[2]))
+        choose5b(2)
+        check('clicking it again flips classic -> full',
+              store.get('panel_style') == 'full' and writes[-1] == sfile
+              and opts.t('opt_panel_style') in win5.status[-1]
+              and opts.t('opt_panel_style_full') in win5.status[-1],
+              repr((store.get('panel_style'), writes[-1], win5.status[-1])))
+
         palette = io.open(os.path.join(ROOT, 'Default.sublime-commands'),
                           encoding='utf-8').read()
         view_menu = io.open(os.path.join(ROOT, 'Main.sublime-menu'),
                             encoding='utf-8').read()
         for command in ('cph_verdict_mode', 'cph_stress_options',
-                        'cph_companion_options'):
+                        'cph_companion_options', 'cph_panel_options'):
             check('%s is reachable from the palette and the menu' % command,
                   command in palette and command in view_menu, command)
             entry = _palette_entry(palette, command)
@@ -3146,7 +3267,7 @@ def main():
               '"caption": "Algorithm Competition Assistant: Toggle Debug / Release build mode"'
               not in palette)
         for cls in ('CphVerdictModeCommand', 'CphStressOptionsCommand',
-                    'CphCompanionOptionsCommand'):
+                    'CphCompanionOptionsCommand', 'CphPanelOptionsCommand'):
             name = getattr(opts, cls)(None).description()
             check('%s names itself after the package' % cls,
                   name.startswith('Algorithm Competition Assistant: ')
@@ -3762,8 +3883,15 @@ def main():
                     item.get('key') == 'selector' and item.get('operator') == 'equal'
                     and str(item.get('operand', '')).strip() == 'source.TestSyntax'
                     for item in contexts)
-                stateful = any(str(item.get('key', '')).startswith('cph_')
-                               for item in contexts)
+                # A view setting owned by this package (setting.cph_run_view,
+                # set by core/cph_views.py on our own -run scratch view) is as
+                # safe as a cph_ context key: it can only be true inside a view
+                # we created. Plain `setting.foo` is NOT okay - that would let
+                # any binding claim keys in ordinary editing.
+                stateful = any(
+                    str(item.get('key', '')).startswith('cph_')
+                    or str(item.get('key', '')).startswith('setting.cph_')
+                    for item in contexts)
                 if not (own_view or stateful):
                     claims.append('%s %s' % (name, '+'.join(entry.get('keys') or [])))
     check('shipped bindings never claim keys while editing code', not claims,
@@ -3843,6 +3971,40 @@ def main():
     check('every chord the README table prints is really bound',
           len(documented) >= 20 and not undocumented_rows,
           '%d rows, not bound: %s' % (len(documented), ', '.join(undocumented_rows)))
+
+    # 2a2. Targeted guards for the shortcuts and assets the latest round
+    #      added: a rename or a dropped file must not slip past the broad
+    #      checks above.
+    for name in DEFAULTS:
+        binds = _bindings(name)
+        doctor_keys = [e.get('keys') for e in binds if e.get('command') == 'cph_doctor']
+        hide_keys = [e.get('keys') for e in binds
+                     if (e.get('args') or {}).get('action') == 'toggle_hide_phantoms']
+        check('%s binds the doctor shortcut to ctrl+alt+shift+d' % name,
+              ['ctrl+alt+shift+d'] in doctor_keys, repr(doctor_keys))
+        check('%s binds hide-phantoms to ctrl+alt+shift+h' % name,
+              ['ctrl+alt+shift+h'] in hide_keys, repr(hide_keys))
+        check('%s leaves the bare ctrl+alt+d off the doctor' % name,
+              all('ctrl+alt+d' not in (keys or []) for keys in doctor_keys),
+              repr(doctor_keys))
+
+    classic_theme = os.path.join(ROOT, 'Highlight', 'test_config_classic.html')
+    classic_html = (io.open(classic_theme, encoding='utf-8').read()
+                    if os.path.exists(classic_theme) else '')
+    check('the classic card theme ships with all three actions wired',
+          os.path.exists(classic_theme)
+          and all('href="%s"' % action in classic_html
+                  for action in ('test-click', 'test-edit', 'test-run')),
+          classic_theme)
+    check('the settings file documents panel_style and defaults to full',
+          '"panel_style"' in settings_text
+          and '"panel_style": "full"' in settings_text)
+    with open(os.path.join(ROOT, 'Main.sublime-menu'), encoding='utf-8') as f:
+        top_menu = json.load(f)
+    top_captions = [entry.get('caption') for entry in top_menu]
+    check('ACA sits in the top-level menu beside Preferences',
+          'ACA' in top_captions and 'Preferences' in top_captions,
+          repr(top_captions))
 
     # 2b. A binding scoped to "source.c++, source.c, source.python,
     #     source.java" is a binding that does nothing in the Rust, Go, Pascal
@@ -9437,6 +9599,114 @@ def main():
     check('the 0-based id is still used for saving and deleting',
           "'id': self.test_id" in _edit_src
           and "'test_id': i," in _tm_src_fix)
+
+    # 13. feature-conformance fixes (2026-11-18) ----------------------------
+    # H-1: the interactor's 20s budget must not be handed to the solution.
+    _int_src_fix = _chk_src(os.path.join('core', 'cph_interactive.py'))
+    check('interactive: the solution limit and the interactor wall clock are separate',
+          'wall_time_limit_ms=None' in _int_src_fix
+          and 'solution.set_time_limit(time_limit_ms)' in _int_src_fix
+          and 'wall_time_limit_ms or time_limit_ms or 10000' in _int_src_fix,
+          'the interactor 20s limit could still override the solution limit')
+    check('interactive: the panel passes the two limits apart',
+          "time_limit_ms, cwd=cfg.get('dir')" in _tm_src_fix
+          and "wall_time_limit_ms=cfg['time_limit_ms']" in _tm_src_fix)
+
+    # H-1 behavioural: a solution that died must not be judged AC just because
+    # the interactor exited 0.
+    class _CrashSolution(object):
+        def __init__(self):
+            self.limit = None
+            self._read_once = False
+            self.stdin_closed = False
+
+        def set_separate_stderr(self, v):
+            pass
+
+        def set_time_limit(self, v):
+            self.limit = v
+
+        def run_file(self):
+            pass
+
+        def read(self, bfsize=None):
+            if self._read_once:
+                return ''
+            self._read_once = True
+            return 'A 1' + chr(10)
+
+        def insert(self, s):
+            pass
+
+        def close_stdin(self):
+            self.stdin_closed = True
+
+        def is_stopped(self):
+            return -11  # SIGSEGV
+
+        def get_stderr(self):
+            return ''
+
+        def finish_memory_sampling(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def close_stderr(self):
+            pass
+
+    _crash_solution = _CrashSolution()
+    _ac_interactor = [sys.executable, '-c',
+                      "import sys; sys.stdout.write('Q?'); sys.stdout.flush(); "
+                      "sys.stdin.readline(); sys.exit(0)"]
+    _crash_res = inter.run_case(lambda: _crash_solution, _ac_interactor,
+                                'input', 'answer', 2000,
+                                wall_time_limit_ms=20000)
+    check('interactive: a crashed solution is RE even when the interactor says AC',
+          _crash_res['verdict']['name'] == 'RE', str(_crash_res['verdict']))
+    check('interactive: the solution receives its own limit, not the 20s wall clock',
+          _crash_solution.limit == 2000, str(_crash_solution.limit))
+
+    # H-3: a non-timeout round resets the *consecutive* generator timeout
+    # streak, so three scattered timeouts no longer stop the whole run.
+    _stress_src_fix = _chk_src('cph_stress.py')
+    _gl_pos = _stress_src_fix.find('if gen_tle:')
+    _reset_pos = _stress_src_fix.find('gen_timeouts = 0', _gl_pos)
+    _next_if = _stress_src_fix.find('if ret != 0:', _gl_pos)
+    check('stress: a normal round resets the consecutive generator timeout streak',
+          _gl_pos > 0 and _reset_pos > _gl_pos and _reset_pos < _next_if,
+          'gen_timeouts was cumulative, so scattered timeouts stopped the run')
+
+    # M-2: the needs list shows first AC and per-problem stress rounds.
+    _info_fix = {'days': 7, 'problems': 2, 'runs': 9, 'solved': 1, 'per_day': [],
+                 'needs': [{'file': 'q.cpp', 'attempts': 40,
+                            'first_ac': '2026-11-18', 'stress_rounds': 123}],
+                 'verdicts': {'WA': 3, 'AC': 1}, 'stress_rounds': 123, 'span': 0}
+    _stats_en_fix = stats_mod.render_summary(_info_fix)
+    check('stats: the English report shows first AC and per-problem stress rounds',
+          '2026-11-18' in _stats_en_fix and '123' in _stats_en_fix,
+          repr(_stats_en_fix))
+    _prev_lang = getattr(i18n, '_current_lang', 'en')
+    i18n.set_lang('zh')
+    _stats_zh_fix = stats_mod.render_summary(_info_fix, translate=i18n.t)
+    check('stats: the Chinese report shows first AC and stress rounds',
+          '2026-11-18' in _stats_zh_fix and '123' in _stats_zh_fix,
+          repr(_stats_zh_fix))
+    i18n.set_lang(_prev_lang)
+
+    # Documentation conformance: the stale claims are gone from both manuals.
+    _readme_fix = _chk_src('README.md')
+    _readme_cn_fix = _chk_src('README_CN.md')
+    check('docs: the stale panel-width promise is gone',
+          'not taken back automatically' not in _readme_fix
+          and '不会被自动收回' not in _readme_cn_fix)
+    check('docs: the stale Release segfault claim is gone',
+          'only yields a function name' not in _readme_fix
+          and '只能给到函数名' not in _readme_cn_fix)
+    check('docs: the PC verdict is now listed in both manuals',
+          'partially correct (checker verdict' in _readme_fix
+          and '部分正确（checker 判定' in _readme_cn_fix)
 
     print('')
     print('%d checks, %d failures' % (CHECKS[0], len(FAILURES)))

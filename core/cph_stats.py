@@ -630,9 +630,29 @@ def summary_data(days=7, now=None):
 		if entry is None:
 			continue
 		if not entry[1].get('all_ac'):
+			# entry[1] is a history event (key/file/time/verdict/all_ac), not
+			# the per-problem ledger record: first_ac and stress_rounds live
+			# on ledger[k]. Missing/malformed values degrade to '' / 0 so the
+			# report never raises.
+			rec = ledger.get(k) or {}
+			raw_first_ac = rec.get('first_ac') if isinstance(rec, dict) else None
+			first_ac = ''
+			ac_epoch = _iso_to_epoch(raw_first_ac)
+			if ac_epoch is not None:
+				try:
+					first_ac = time.strftime('%Y-%m-%d', time.localtime(ac_epoch))
+				except Exception:
+					first_ac = ''
+			raw_rounds = rec.get('stress_rounds') if isinstance(rec, dict) else None
+			try:
+				stress_rounds = int(raw_rounds or 0)
+			except (TypeError, ValueError):
+				stress_rounds = 0
 			needs.append({
 				'file': _short(entry[1].get('file')),
 				'attempts': attempts_by_key.get(k, 0),
+				'first_ac': first_ac,
+				'stress_rounds': stress_rounds,
 			})
 	needs.sort(key=lambda item: (-item['attempts'], item['file']))
 	needs = needs[:10]
@@ -711,8 +731,19 @@ def render_summary(info, translate=None):
 	lines.append(say('stats_summary_needs_work', count=len(info['needs'])))
 	if info['needs']:
 		for index, row in enumerate(info['needs']):
+			# An unsolved problem has no first AC: show '-' rather than an
+			# empty slot so the line stays unambiguous in both languages.
+			first_ac = row.get('first_ac') or '-'
+			stress_rounds = row.get('stress_rounds', 0)
+			try:
+				stress_rounds = int(stress_rounds or 0)
+			except (TypeError, ValueError):
+				stress_rounds = 0
+			detail = say('stats_summary_needs_detail', first_ac=first_ac,
+						 stress_rounds=stress_rounds)
 			lines.append(say('stats_summary_needs_row', index=index + 1,
-							 file=row['file'], attempts=row['attempts']))
+							 file=row['file'], attempts=row['attempts'],
+							 detail=detail))
 	else:
 		lines.append(say('stats_summary_needs_none'))
 	if info.get('stress_rounds'):
@@ -733,7 +764,8 @@ _ENGLISH_LABELS = {
 	'stats_summary_day_row': '  {date}  {runs} runs  {solved} solved',
 	'stats_summary_no_runs': '  (no runs)',
 	'stats_summary_needs_work': 'Needs work ({count}):',
-	'stats_summary_needs_row': '  {index}. {file}  attempts={attempts}',
+	'stats_summary_needs_row': '  {index}. {file}  attempts={attempts}  {detail}',
+	'stats_summary_needs_detail': 'first AC {first_ac} · stress {stress_rounds} rounds',
 	'stats_summary_needs_none': '  none',
 	'stats_summary_stress': 'Stress rounds: {count}',
 	'stats_summary_total_time': 'Total time on task: {duration}',
@@ -749,7 +781,8 @@ _LABEL_FIELDS = {
 	'stats_summary_day_row': ('date', 'runs', 'solved'),
 	'stats_summary_no_runs': (),
 	'stats_summary_needs_work': ('count',),
-	'stats_summary_needs_row': ('index', 'file', 'attempts'),
+	'stats_summary_needs_row': ('index', 'file', 'attempts', 'detail'),
+	'stats_summary_needs_detail': ('first_ac', 'stress_rounds'),
 	'stats_summary_needs_none': (),
 	'stats_summary_stress': ('count',),
 	'stats_summary_total_time': ('duration',),

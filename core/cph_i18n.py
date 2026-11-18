@@ -272,8 +272,12 @@ STRINGS = {
         'en': 'Needs work ({count}):',
     },
     'stats_summary_needs_row': {
-        'zh': '  {index}. {file}  尝试 {attempts} 次',
-        'en': '  {index}. {file}  attempts={attempts}',
+        'zh': '  {index}. {file}  尝试 {attempts} 次  {detail}',
+        'en': '  {index}. {file}  attempts={attempts}  {detail}',
+    },
+    'stats_summary_needs_detail': {
+        'zh': '首次 AC {first_ac} · 对拍 {stress_rounds} 轮',
+        'en': 'first AC {first_ac} · stress {stress_rounds} rounds',
     },
     'stats_summary_needs_none': {
         'zh': '  无',
@@ -1152,6 +1156,30 @@ STRINGS = {
         'zh': '判定口径（浮点容差 / PE 当 AC / 首错即停 / stderr）',
         'en': 'Verdict rules (float tolerance, PE, stop on first failure)',
     },
+    'opt_panel_options': {
+        'zh': '运行面板宽度选项',
+        'en': 'Run panel width options',
+    },
+    'opt_panel_style': {
+        'zh': '卡片样式',
+        'en': 'Card style',
+    },
+    'opt_panel_style_classic': {
+        'zh': '原插件简洁卡片',
+        'en': 'Classic (no verdict)',
+    },
+    'opt_panel_style_full': {
+        'zh': '完整判题卡片',
+        'en': 'Full (with verdict)',
+    },
+    'opt_auto_fit_panel_width': {
+        'zh': '宽度自动跟随内容',
+        'en': 'Auto-fit width to content',
+    },
+    'opt_max_panel_width_ratio': {
+        'zh': '最大宽度比例（占窗口）',
+        'en': 'Max width ratio (of window)',
+    },
     'opt_companion_options': {
         'zh': '监听设置：样例送到哪里 (Competitive Companion)',
         'en': 'Competitive Companion options (target mode, click log)',
@@ -1378,6 +1406,12 @@ STRINGS = {
         'en': '{exe} is not on PATH; the feature that needs it degrades silently',
     },
 }
+
+# render_summary() reaches the stats_summary_* keys through its injected
+# translator (say()), not a direct t() call. The other stats keys are
+# whitelisted in the i18n hygiene check; keep a literal reference here so the
+# newly added detail key is not mistaken for a dead entry.
+_STRINGS_STATS_NEEDS_DETAIL = STRINGS.get('stats_summary_needs_detail')
 
 
 def set_lang(lang):

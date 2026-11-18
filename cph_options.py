@@ -229,6 +229,59 @@ class CphCompanionOptionsCommand(sublime_plugin.WindowCommand):
 		self.window.show_quick_panel(items, choose)
 
 
+class CphPanelOptionsCommand(sublime_plugin.WindowCommand):
+	"""运行面板列宽。两行都每次使用时现读，改完下一次展开面板就生效。
+
+	`auto_fit_panel_width` 在运行面板里每次用到时都重新读一遍 settings
+	（`get_settings()` 拿到的是同一个对象），所以这里点一下开关立刻生效，
+	不需要额外刷新逻辑；最大宽度比例同理。第三行切换卡片样式，原插件简洁
+	卡片隐藏 verdict 徽章但功能不变。
+	"""
+
+	def description(self):
+		return PREFIX + t('opt_panel_options')
+
+	def run(self):
+		def style_label(value):
+			return (t('opt_panel_style_classic') if value == 'classic'
+					else t('opt_panel_style_full'))
+
+		style = _settings().get('panel_style', 'full')
+		items = [
+			[t('opt_auto_fit_panel_width'),
+			 _onoff(bool(_settings().get('auto_fit_panel_width', True)))],
+			[t('opt_max_panel_width_ratio'),
+			 str(_settings().get('max_panel_width_ratio', 0.5))],
+			[t('opt_panel_style'), style_label(style)],
+		]
+
+		def choose(index):
+			if index < 0:
+				return
+			if index == 0:
+				new = _write('auto_fit_panel_width',
+							 not bool(_settings().get('auto_fit_panel_width', True)))
+				self.window.status_message('%s: %s' % (items[0][0], _onoff(new)))
+			elif index == 1:
+				self.window.show_input_panel(
+					t('opt_value_prompt', label=t('opt_max_panel_width_ratio')),
+					str(_settings().get('max_panel_width_ratio', 0.5)),
+					self._set_max_ratio, None, None)
+			elif index == 2:
+				new = _write('panel_style', _cycle(style, ('full', 'classic')))
+				self.window.status_message('%s: %s' % (items[2][0], style_label(new)))
+
+		self.window.show_quick_panel(items, choose)
+
+	def _set_max_ratio(self, text):
+		previous = _settings().get('max_panel_width_ratio', 0.5)
+		value = _number(text, previous)
+		if value is None:
+			return
+		_write('max_panel_width_ratio', value)
+		self.window.status_message('%s: %s' % (t('opt_max_panel_width_ratio'), value))
+
+
 class CphIoModeCommand(sublime_plugin.TextCommand):
 	"""这一题怎么评测：管道（stdin）还是文件（NOI / CSP-S 复赛那种）。
 

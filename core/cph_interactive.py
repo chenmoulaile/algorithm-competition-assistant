@@ -205,13 +205,17 @@ def _write(path, text):
 
 
 def run_case(make_solution, exe, input_text, answer_text, time_limit_ms,
-			 cwd=None, cancel=None, register_kill=None):
+			 cwd=None, cancel=None, register_kill=None, wall_time_limit_ms=None):
 	"""Run one interaction and return a result dict.
 
 	Same shape as cph_parallel._run_one so the panel code can be shared:
 	{'rtcode','stdout','stderr','runtime','memory','verdict','crash','error',
 	 'message','interactor_output'}
 
+	`time_limit_ms` is the SOLUTION's own limit (it is applied with
+	`set_time_limit`); `wall_time_limit_ms`, when given, is the interactor's
+	limit and only widens the overall dialogue deadline, so the solution is
+	never handed the interactor's (larger) limit by mistake.
 	`cancel` is the run panel's threading.Event and `register_kill` receives
 	callables that terminate this dialogue's two processes, so closing the
 	panel / Ctrl+X can stop an interactive batch (the pool itself only knows
@@ -357,7 +361,9 @@ def run_case(make_solution, exe, input_text, answer_text, time_limit_ms,
 			thread.daemon = True
 			thread.start()
 
-		limit_s = float(time_limit_ms or 10000) / 1000.0
+		# Overall wall clock may be wider than the solution's own limit: the
+		# interactor has its own (default 20s) budget for the dialogue.
+		limit_s = float(wall_time_limit_ms or time_limit_ms or 10000) / 1000.0
 		deadline = started + limit_s + _GRACE_SECONDS
 		timed_out = False
 		cancelled = False
@@ -400,6 +406,7 @@ def run_case(make_solution, exe, input_text, answer_text, time_limit_ms,
 			memory = None
 
 		code = interactor.poll()
+		solution_code = solution.is_stopped()
 		if cancelled:
 			verdict = 'skipped'
 		elif timed_out:
@@ -411,6 +418,18 @@ def run_case(make_solution, exe, input_text, answer_text, time_limit_ms,
 		else:
 			verdict = EXIT_CODES.get(code, 'unknown_error')
 			if code < 0:
+				verdict = 'runtime_error'
+			# The interactor's exit code alone is not enough: a solution that
+			# crashed (or was killed) can still leave a "success" code behind,
+			# e.g. an interactor that quit()s AC on first output before the
+			# solution dereferences a null pointer. Only override the
+			# interactor's SUCCESS verdicts, and only when the solution really
+			# exited non-zero or its stderr/output looks like a crash; leave
+			# the interactor's WA/TLE/... decisions untouched.
+			if (verdict in ('accepted', 'presentation_error',
+							'partially_correct')
+					and (solution_code not in (None, 0)
+						 or looks_like_crash(solution_err or solution_output))):
 				verdict = 'runtime_error'
 
 		result.update(

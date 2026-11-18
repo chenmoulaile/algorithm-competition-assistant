@@ -48,7 +48,7 @@ Assistant → Settings`: the left pane is the read-only default, the right pane 
 
 **Do not use both at once.** If a folder of the same name sits in `Packages/` while the zip
 is installed, installing or upgrading the zip empties that folder, and the only symptom is
-"nothing changed after I edited the code". Startup prints a notice, and `Ctrl+Alt+D`
+"nothing changed after I edited the code". Startup prints a notice, and `Ctrl+Alt+Shift+D`
 reports whether the loaded copy is a folder or a zip.
 
 ## Quick start
@@ -76,6 +76,7 @@ can look like a TLE locally.
 | `MLE` | peak memory over the limit |
 | `RE` | non-zero exit, crash or failed assertion |
 | `PE` | same tokens, different whitespace |
+| `PC` | partially correct (checker verdict, exit code 7) |
 | `CE` | compilation failed |
 | `SK` | stopped by hand |
 | `UKE` | no verdict, for example the program never started |
@@ -111,9 +112,10 @@ verdict.
 When the program crashes, the output is searched for a position first: a Python traceback, a
 Java stack or a sanitizer diagnostic gives `file:line`, shown on the card and in the status
 bar, and the link jumps to the source. A bare C++ segfault carries no line, so the plugin
-replays the crash under gdb and looks for your frame in the backtrace. That needs debug
-symbols: a Release build only yields a name like `main ()`, while `Ctrl+Alt+G` (Debug)
-locates the line.
+replays the crash under gdb and looks for your frame in the backtrace. The default Release
+build already carries `-g`, so that backtrace locates the line even in Release; `Ctrl+Alt+G`
+(Debug) is for turning otherwise non-crashing undefined behaviour into `RE`, not for getting
+a line number.
 
 Debug adds
 `-g -fsanitize=undefined -fsanitize-trap=undefined -fno-omit-frame-pointer -D_GLIBCXX_ASSERTIONS`.
@@ -165,9 +167,11 @@ page; `"detail_style": "phantom"` is the old embedded panel, where the text cann
 selected.
 
 The detail tab shares the right column with the run panel, and that column is sized by the
-run panel cards. Those follow their content between a floor of 8% of the window and
-`max_panel_width_ratio` (half the window by default). Drag it wider if you need to; a width
-you set is not taken back automatically.
+run panel cards. Those follow their content automatically between a floor of 8% of the window
+and `max_panel_width_ratio` (half the window by default): the column widens as the cards grow
+and narrows as they shrink. You can drag the divider yourself, but the next panel refresh or
+switch back to the run tab re-fits the width to the content; the only exception is that the
+column is not narrowed while the detail view is in the foreground.
 
 ## File input/output (NOI / CSP-S)
 
@@ -200,13 +204,15 @@ default).
 Press `Ctrl+Alt+S` in the source view. Where the pair comes from is controlled by
 `stress_file_source`:
 
-- `pick_once` (default): ask the first time for this file, then remember the choice in
-  `<name>__tests.stress`;
-- `same_dir`: look in the source directory only, matching file name stems, with no dialog:
-  the reference matches a stem containing `std` / `brute` / `bf` / `baoli` / `sol` /
+- `pick_once` (default): if a matching std/gen pair is found in the same directory it is used
+  directly without asking and remembered; otherwise ask the first time for this file and
+  remember the choice in `<name>__tests.stress`;
+- `same_dir`: look in the source directory only, matching file name stems, and normally with
+  no dialog: the reference matches a stem containing `std` / `brute` / `bf` / `baoli` / `sol` /
   `standard` / `correct` / `right` / `暴力`, the generator one containing `gen` / `data` /
   `maker` / `make` / `rand` / `random` / `generator` / `shuju` / `生成` / `数据`; if nothing
-  matches it says which directory it searched;
+  matches it reports the directories searched and then opens a file picker so you can choose
+  the pair by hand;
 - `auto`: the old behaviour, directory first, then the global paths from last time, then ask.
 
 Picking the same file twice is refused: a program compared with itself agrees every round.
@@ -225,8 +231,8 @@ are not reported as mismatches. Without one, `float_tolerance` applies.
 
 ## Competitive Companion
 
-With the browser extension installed, Sublime listens on port `12345` from startup
-(`companion_auto_listen`, on by default). No file needs to be open first. Add `12345` to the
+With the browser extension installed, Sublime starts listening on port `12345` about 1.2
+seconds after startup (`companion_auto_listen`, on by default). No file needs to be open first. Add `12345` to the
 extension's port list; that part happens in the browser.
 
 Two targets:
@@ -239,9 +245,11 @@ Two targets:
 `new_file` mode a pinned target is ignored.
 
 A problem list page is not one problem. AtCoder and Luogu send the whole set in one click
-(7 requests measured), so use `Ctrl+Alt+L` there. `Ctrl+Alt+F` would merge all seven problems
-into the file you are standing in. Repeated auto-runs of the same file are debounced into one
-(2 s), so that does not become seven compiles.
+(7 requests measured), so use `Ctrl+Alt+L` there: one click sends several *different*
+problems, which `Ctrl+Alt+F` would all merge into the file you are standing in. Re-grabbing
+the *same* problem (matched by title + URL), however, clears that problem's old samples before
+writing the new ones. Repeated auto-runs of the same file are debounced into one (2 s), so that
+does not become seven compiles.
 
 New files land in the first usable place: `auto_create_dir`, then the directory of the cpp
 from which the command was invoked, then the current file's directory, then the first
@@ -269,16 +277,19 @@ verdict.
 | --- | --- | --- |
 | Benchmark | `Ctrl+Alt+Shift+K` | runs the current test N times (`benchmark_runs`, 5 by default) and reports min, average and max. |
 | Calibrate machine | palette: `Calibrate this machine's speed` | estimates this machine's speed factor and shows the equivalent judge limit in the status bar. Judging still uses the limit you set. |
-| Practice statistics | palette: `Show practice statistics` | attempts, first AC, verdict distribution and stress rounds per problem. The data lives in the plugin's own files. |
+| Practice statistics | palette: `Show practice statistics` | overview, total solved, overall verdict distribution, per-day stats, total stress rounds and total time, plus a "needs practice" list showing each problem's attempts, first AC and stress rounds. The data lives in the plugin's own files. |
 | Contest timer | `Ctrl+Alt+Shift+T` | counts down in the status bar, with notes at 30, 10 and 5 minutes left. Default length `contest_duration_minutes` (120 minutes); 0 asks every time. |
 | Template snippets | `Ctrl+Alt+T` | expand after a keyword. Lookup order: the `algorithms_base` directory → the `templates` dict → built-ins (fastio / main / bf / debug / testlib). |
-| Environment check | `Ctrl+Alt+D` | compiler, port, paths and resources, plus a Markdown report you can paste into an issue. |
+| Environment check | `Ctrl+Alt+Shift+D` | compiler, port, paths and resources, plus a Markdown report you can paste into an issue. |
 
 ## Key bindings
 
 The bindings ship in the package's own keymap, so they load and unload with it and nothing is
 written into your personal keymap. `Ctrl` and `Alt` are literal: on macOS that is Control and
 Option, and no `super+` binding ships. Set `"enable_keybindings": false` to release them all.
+The exception is the keys inside the plugin's own test editor view (`Enter`, `Ctrl+D`,
+`Ctrl+X`, `Ctrl+Alt+B`): those are gated by the view's selector / `edit_mode`, not by this
+setting, so they keep working.
 
 | Key | Action |
 | --- | --- |
@@ -303,19 +314,22 @@ Option, and no `super+` binding ships. Set `"enable_keybindings": false` to rele
 | `Ctrl+Alt+Shift+K` | benchmark the current test |
 | `Ctrl+Alt+Shift+T` | contest timer |
 | `Ctrl+Alt+G` | switch Debug / Release |
-| `Ctrl+Alt+D` | environment check |
+| `Ctrl+Alt+Shift+D` | environment check |
 | `Ctrl+Alt+J` | jump to the first error |
 | `Ctrl+Alt+T` | expand a template snippet |
 | `Ctrl+Alt+P` / `Ctrl+K, Ctrl+P` | collapse / restore the run panel |
 
-Inside the plugin's own test editor and detail views (`source.TestSyntax`): `Enter` inserts a
+`Ctrl+Alt+T` is bound only in C++ files (`source.c++`); in other file types call the command
+from the palette.
+
+Inside the plugin's own test editor view (`source.TestSyntax`): `Enter` inserts a
 line, `Ctrl+Enter` adds a test, `Ctrl+V` pastes, `Ctrl+X` kills the process, `Ctrl+D` deletes
 the test, `Ctrl+Shift+Up/Down` swaps tests.
 
 ## Settings
 
-Four panels edit the keys in the settings file and take effect immediately; they live in
-`View → Algorithm Competition Assistant` (the first three under `Settings`, the last one
+Five panels edit the keys in the settings file and take effect immediately; they live in
+`View → Algorithm Competition Assistant` (the first four under `Settings`, the last one
 under `Problem`):
 
 | Panel | What it controls |
@@ -323,6 +337,7 @@ under `Problem`):
 | `Verdict rules` | float tolerance, PE as AC, stop on first failure, ignore stderr |
 | `Stress test options` | where std / gen come from, file picker, saving counterexamples, rounds, per-round limit |
 | `Competitive Companion options` | default target, auto listen, click log |
+| Panel width options | whether the run panel column auto-fits its content, and the maximum width ratio |
 | `This problem reads/writes files` | stdin or file I/O for this problem, and the file names |
 
 `companion_auto_listen` is the one item that only takes effect the next time the listener
@@ -353,10 +368,12 @@ The remaining keys are documented in `Algorithm Competition Assistant.sublime-se
 Chinese is the default (`"language": "zh"`). To switch to English, use
 `View → Algorithm Competition Assistant → Settings → Switch language (中/EN)` (with
 `Switch to English` right next to it) or the palette's
-`Algorithm Competition Assistant: Switch to English`. The status bar, dialogs, panel text and
-palette descriptions follow; menu items are static JSON and stay English — with two
-deliberate exceptions carrying Chinese labels (the language switch and the Chinese manual
-entry) so Chinese users can find them.
+`Algorithm Competition Assistant: Switch to English`. The status bar, dialogs and panel text
+follow the language. In the command palette, only the descriptions of the five settings-panel
+commands and the run-modes command are localized; the other command titles are fixed English.
+Menu items are static JSON and stay English — with three deliberate exceptions carrying
+Chinese labels (the two language-switch entries and the Chinese manual entry) so Chinese users
+can find them.
 
 Once the interface is English, the verdict notes the plugin writes into the detail tab's
 `[Message]` section (the RE location, the truncation notice, the TLE explanation) can stay in
@@ -368,7 +385,6 @@ Text printed by a checker itself is never touched.
 
 - macOS memory is a sampled peak for one process, not the kernel's peak RSS, so it can read
   lower than Activity Monitor.
-- A bare segfault in a Release build only yields a function name. Use Debug, or add `-g`.
 - `sync_output` is off by default. It refreshes the view per character and only suits
   interactive programs.
 - stderr appears in the detail tab only, not on the card.
@@ -394,7 +410,7 @@ Text printed by a checker itself is never touched.
   (tested). The code itself still keeps **Python 3.3 as its compatibility floor**: no
   f-strings, no `subprocess.run`, no `Popen(encoding=...)` — `tests/check_py33.py` enforces
   this.
-- Tests: `python tests/run_tests.py`, currently 1115 checks, 0 failures, using a fake
+- Tests: `python tests/run_tests.py`, currently 1151 checks, 0 failures, using a fake
   `sublime` module and no third-party packages.
 - CI runs Linux (3.9 and 3.12), Windows and macOS.
 - Bump `VERSION` in `plugin_init.py`. A release adds a `messages/<version>.txt` file, the

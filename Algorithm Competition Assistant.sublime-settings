@@ -362,6 +362,18 @@
 	// 面板最大宽度占窗口布局的比例, 0.5 表示最多占半个窗口 (下限 8%)
 	"max_panel_width_ratio": 0.5,
 
+	// ================= 测试卡片样式 =================
+	// 运行面板里每张测试卡片的风格:
+	// "full":    当前默认。彩色 verdict 徽章 (AC/WA/TLE...) + 时间/内存/
+	//            detail/RE jump 等芯片, 判定结果一眼可见。
+	// "classic": 原插件 FastOlympicCoding 那种小卡片——只有 test N / edit /
+	//            run / time, 没有 verdict 徽章、内存和 detail/jump 芯片。
+	//            这只是"外观隐藏", 不影响功能: 判定结果仍可在 detail 页和
+	//            状态栏查到, 编辑/运行/点击卡片等交互完全照旧。
+	// 切换入口：View → Algorithm Competition Assistant → Settings → Panel width options
+	// 的第三行「卡片样式」可一键切换 full / classic，无需手改这个键。
+	"panel_style": "full",
+
 	// 是否在运行时间/内存数值前显示标签前缀 (2.9.1 的样式):
 	// true:  卡片显示 "test 1 ... time: 2542ms | mem: 4 MB"（中文界面为
 	//        "时间: 2542ms | 内存: 4 MB"）。
