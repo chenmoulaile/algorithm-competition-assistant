@@ -424,12 +424,16 @@ def run_case(make_solution, exe, input_text, answer_text, time_limit_ms,
 			# e.g. an interactor that quit()s AC on first output before the
 			# solution dereferences a null pointer. Only override the
 			# interactor's SUCCESS verdicts, and only when the solution really
-			# exited non-zero or its stderr/output looks like a crash; leave
-			# the interactor's WA/TLE/... decisions untouched.
+			# exited non-zero or its stderr looks like a crash; leave
+			# the interactor's WA/TLE/... decisions untouched. stdout is the
+			# legitimate dialogue the solution sends to the interactor and may
+			# legally contain crash-like words (e.g. "runtime error:"), so it
+			# must NOT take part in this check: stderr is the trusted source of
+			# crash signatures here.
 			if (verdict in ('accepted', 'presentation_error',
 							'partially_correct')
 					and (solution_code not in (None, 0)
-						 or looks_like_crash(solution_err or solution_output))):
+						 or looks_like_crash(solution_err))):
 				verdict = 'runtime_error'
 
 		result.update(

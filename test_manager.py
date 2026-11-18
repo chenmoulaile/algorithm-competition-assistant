@@ -4889,8 +4889,29 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 	def toggle_hide_phantoms(self):
 		view = self.view
-		view.settings().set('hide_phantoms', not view.settings().get('hide_phantoms'))
-		self.update_configs()
+		window = view.window()
+		# This shortcut is bound in source files too, but the cards live in the
+		# paired -run view, which has its own view settings and its own command
+		# instance. Toggling the source view did nothing visible: its
+		# update_configs() returns immediately because tester is None. Target
+		# the run view that actually renders the cards instead.
+		targets = []
+		if view.settings().get('cph_run_view'):
+			targets = [view]
+		else:
+			file_name = view.file_name()
+			if window is not None and file_name:
+				for other in views_owned_by(window, file_name, view.id()):
+					if other.settings().get('cph_run_view'):
+						targets.append(other)
+		if not targets:
+			# No panel open (or no window/file): keep the old behaviour so the
+			# key never silently no-ops.
+			targets = [view]
+		for target in targets:
+			settings = target.settings()
+			settings.set('hide_phantoms', not bool(settings.get('hide_phantoms')))
+			target.run_command('cph_test_manager', {'action': 'update_configs'})
 
 	def get_begin_region(self, id):
 		v = self.view
@@ -5032,6 +5053,12 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 
 		elif action == 'toggle_hide_phantoms':
 			self.toggle_hide_phantoms()
+
+		elif action == 'update_configs':
+			# Repaint the cards after an external setting change (such as
+			# hide_phantoms or panel_style). update_configs() no-ops when the
+			# view has no tester, so this is safe on a restored/empty panel.
+			self.update_configs()
 
 		elif action == 'set_cursor_to_end':
 			v.sel().clear()

@@ -18,9 +18,9 @@ Handy keys (source view):
   Ctrl+Alt+S           stress test
   Ctrl+Alt+I           import tests from files
   Ctrl+Alt+T           expand a template snippet (fastio / main / ...)
-  Ctrl+Alt+D           check environment (doctor)
+  Ctrl+Alt+Shift+D     check environment (doctor)
   Ctrl+Alt+P           collapse/restore the run panel
 
 Settings: Preferences -> Package Settings -> Algorithm Competition Assistant
           -> Settings (left = defaults, right = Packages/User/...sublime-settings)
-On macOS use Cmd instead of Ctrl.
+Ctrl and Alt are literal keys (on macOS: Control and Option); there is no super+ binding.

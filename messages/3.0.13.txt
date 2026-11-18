@@ -34,4 +34,4 @@ A panel-width switch, plus fixes for several behaviour/documentation mismatches.
   problem (matched by title + URL); several different problems from one click on a contest
   list page are still merged into the current file.
 
-Regression suite: 1151 checks, 0 failures.
+Regression suite: 1159 checks, 0 failures.

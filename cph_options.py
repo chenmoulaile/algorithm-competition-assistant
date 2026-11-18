@@ -230,12 +230,12 @@ class CphCompanionOptionsCommand(sublime_plugin.WindowCommand):
 
 
 class CphPanelOptionsCommand(sublime_plugin.WindowCommand):
-	"""运行面板列宽。两行都每次使用时现读，改完下一次展开面板就生效。
+	"""运行面板列宽。三行都每次使用时现读，改完下一次展开面板就生效。
 
 	`auto_fit_panel_width` 在运行面板里每次用到时都重新读一遍 settings
 	（`get_settings()` 拿到的是同一个对象），所以这里点一下开关立刻生效，
 	不需要额外刷新逻辑；最大宽度比例同理。第三行切换卡片样式，原插件简洁
-	卡片隐藏 verdict 徽章但功能不变。
+	卡片隐藏 verdict 徽章但功能不变，改动会立刻重绘已打开的面板。
 	"""
 
 	def description(self):
@@ -270,6 +270,21 @@ class CphPanelOptionsCommand(sublime_plugin.WindowCommand):
 			elif index == 2:
 				new = _write('panel_style', _cycle(style, ('full', 'classic')))
 				self.window.status_message('%s: %s' % (items[2][0], style_label(new)))
+				# Repaint any open run panel so the style change shows on the
+				# cards already on screen, not only on the next run. The card
+				# markup is built at draw time, so a fresh update_configs is
+				# enough; guard views() for hosts that have no views yet.
+				try:
+					views = list(self.window.views())
+				except Exception:
+					views = []
+				for view in views:
+					try:
+						if view.settings().get('cph_run_view'):
+							view.run_command('cph_test_manager',
+											 {'action': 'update_configs'})
+					except Exception:
+						continue
 
 		self.window.show_quick_panel(items, choose)
 

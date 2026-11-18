@@ -58,6 +58,9 @@ zip 会把那个文件夹清空，现象是"改了代码、重启、什么都没
 4. 命令面板搜 `Algorithm` 能看到全部命令，`View → Algorithm Competition Assistant`
    里有同样的一套。
 
+顶部菜单栏还有 `ACA` 菜单（与 `Preferences` 同级），运行、抓题、工具等常用入口都在里面，
+新手可以从这里开始。
+
 默认 C++ 编译命令是 `g++ … -std=c++17 -O2`。**`-O2` 不要省**：没优化时，一个正确的程序
 也可能跑到超时。
 
@@ -297,6 +300,7 @@ problem reads/writes files`，两个文件名会按源码名预填（`add.cpp` �
 | `Ctrl+Alt+J` | 跳到第一个错误位置 |
 | `Ctrl+Alt+T` | 展开模板片段 |
 | `Ctrl+Alt+P` / `Ctrl+K, Ctrl+P` | 收起 / 恢复运行面板 |
+| `Ctrl+Alt+Shift+H` | 隐藏 / 显示测试卡片 |
 
 `Ctrl+Alt+T` 只在 C++ 文件（`source.c++`）里生效；其它语言可以从命令面板调用。
 
@@ -314,7 +318,7 @@ problem reads/writes files`，两个文件名会按源码名预填（`add.cpp` �
 | `Verdict rules` | 浮点容差、PE 是否算 AC、第一个失败是否停、判题时是否忽略 stderr |
 | `Stress test options` | std / gen 从哪来、挑文件方式、反例是否存成测试点、轮数、每轮时限 |
 | `Competitive Companion options` | 默认送哪儿、启动是否自动监听、是否记录点击日志 |
-| Panel width options | 运行面板列宽是否自动跟随内容，以及最大宽度比例 |
+| Panel width options | 运行面板列宽是否自动跟随内容、最大宽度比例，以及卡片样式（第三行：`full` 判题卡片 / `classic` 原插件那种没有 verdict 徽章的简洁小卡片） |
 | `This problem reads/writes files` | 这一题按 stdin 还是按文件，以及文件名 |
 
 `companion_auto_listen` 是其中唯一要下次启动监听才生效的一项；端口同理，只在启动监听时
@@ -381,7 +385,7 @@ TLE 原因）可以仍然用中文：设 `"message_language": "zh"`（默认 `"a
   默认禁用；本插件实测在 3.14 宿主上加载运行正常。代码本身仍以 **Python 3.3 为兼容性
   下限**，不能用 f-string、`subprocess.run`、`Popen(encoding=…)` 这些新版本的东西，
   `tests/check_py33.py` 会拦。
-- 回归测试：`python tests/run_tests.py`，当前 1151 项，0 失败。测试用假的 `sublime`
+- 回归测试：`python tests/run_tests.py`，当前 1159 项，0 失败。测试用假的 `sublime`
   模块，不需要装 Sublime。
 - CI 跑 Linux（3.9 / 3.12）、Windows、macOS。
 - 版本号在 `plugin_init.py`。发版要往 `messages.json` 加对应键、放

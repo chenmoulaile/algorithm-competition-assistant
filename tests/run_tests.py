@@ -2777,7 +2777,7 @@ def main():
         settings_mod.init_settings(dict(base_settings, companion_target='current_file',
                                        run_settings=[cpp_only]))
         comp._stop_listener()
-        comp._last_problem_by_file.pop(regrab_file, None)
+        comp._seen_problems_by_file.pop(regrab_file, None)
         port = _arm()
         comp._start_listener(None, quiet=True)
         regrab_data = os.path.join(work_dir, 'tests', 'regrab.cpp__tests')
@@ -2815,6 +2815,115 @@ def main():
               and got_again[0]['test'] == '99\n'
               and got_again[0]['correct_answers'] == ['ninety nine'],
               repr(got_again))
+
+        # The listener answers 200 before it finishes the write on its own
+        # thread, so a plain read can beat the samples to disk. Poll for the
+        # expected state instead of asserting on a possibly-stale snapshot.
+        def _wait_stored(reader, predicate, timeout=4.0):
+            end = time.monotonic() + timeout
+            while True:
+                got = reader()
+                if predicate(got):
+                    return got
+                if time.monotonic() >= end:
+                    return got
+                time.sleep(0.05)
+
+        # 11b-3. a burst remembers EVERY problem identity, not just the last
+        # one: re-grabbing the FIRST of A/B/C still has to hit the replace
+        # branch. A set (not a single "last problem") is what makes that work.
+        setburst_file = os.path.join(work_dir, 'setburst.cpp')
+        with io.open(setburst_file, 'w', encoding='utf-8') as f:
+            f.write('// hand written\n')
+        setburst_view = _RunRecordingView(setburst_file)
+        fake_sublime.active_window = lambda: _FocusedWindow(work_dir, setburst_view)
+        settings_mod.init_settings(dict(base_settings, companion_target='current_file',
+                                       run_settings=[cpp_only]))
+        comp._stop_listener()
+        comp._seen_problems_by_file.pop(setburst_file, None)
+        port = _arm()
+        comp._start_listener(None, quiet=True)
+        setburst_data = os.path.join(work_dir, 'tests', 'setburst.cpp__tests')
+
+        def _stored_setburst():
+            if not os.path.exists(setburst_data):
+                return []
+            with io.open(setburst_data, encoding='utf-8') as f:
+                return json.loads(f.read())
+
+        def _setburst_body(letter, sample_in, sample_out):
+            return json.dumps({
+                'name': u'%s - setburst' % letter,
+                'url': 'https://x.test/setburst/%s' % letter,
+                'timeLimit': 100, 'memoryLimit': 64,
+                'tests': [{'input': sample_in, 'output': sample_out}]}
+            ).encode('utf-8')
+
+        try:
+            _post_at(_setburst_body('A', '1\n', 'ans-a\n'), port)
+            _drain_main()
+            _post_at(_setburst_body('B', '2\n', 'ans-b\n'), port)
+            _drain_main()
+            _post_at(_setburst_body('C', '3\n', 'ans-c\n'), port)
+            _drain_main()
+            mid = _wait_stored(_stored_setburst, lambda got: len(got) == 3)
+            # A again, with a brand-new sample: its identity is in the set.
+            _post_at(_setburst_body('A', '9\n', 'ans-a-new\n'), port)
+            _drain_main()
+            final = _wait_stored(
+                _stored_setburst,
+                lambda got: len(got) == 1 and got[0]['test'] == '9\n')
+        finally:
+            comp._stop_listener()
+            _drain_main()
+        check('a burst of A/B/C merges all three samples into one file',
+              sorted(t['test'] for t in mid) == ['1\n', '2\n', '3\n'],
+              repr(mid))
+        check('re-grabbing the FIRST problem of a burst replaces all samples',
+              len(final) == 1 and final[0]['test'] == '9\n'
+              and final[0]['correct_answers'] == ['ans-a-new'],
+              repr(final))
+
+        # 11b-4. a POST with neither name nor url has no reliable identity:
+        # two such POSTs to the same file must both be kept. An empty identity
+        # used to compare equal to itself and wipe the first one on re-grab.
+        noid_file = os.path.join(work_dir, 'noid.cpp')
+        with io.open(noid_file, 'w', encoding='utf-8') as f:
+            f.write('// hand written\n')
+        noid_view = _RunRecordingView(noid_file)
+        fake_sublime.active_window = lambda: _FocusedWindow(work_dir, noid_view)
+        settings_mod.init_settings(dict(base_settings, companion_target='current_file',
+                                       run_settings=[cpp_only]))
+        comp._stop_listener()
+        comp._seen_problems_by_file.pop(noid_file, None)
+        port = _arm()
+        comp._start_listener(None, quiet=True)
+        noid_data = os.path.join(work_dir, 'tests', 'noid.cpp__tests')
+
+        def _stored_noid():
+            if not os.path.exists(noid_data):
+                return []
+            with io.open(noid_data, encoding='utf-8') as f:
+                return json.loads(f.read())
+
+        def _noid_body(sample_in, sample_out):
+            return json.dumps({
+                'timeLimit': 100, 'memoryLimit': 64,
+                'tests': [{'input': sample_in, 'output': sample_out}]}
+            ).encode('utf-8')
+
+        try:
+            _post_at(_noid_body('11\n', 'eleven\n'), port)
+            _drain_main()
+            _post_at(_noid_body('22\n', 'twenty two\n'), port)
+            _drain_main()
+            both = _wait_stored(_stored_noid, lambda got: len(got) == 2)
+        finally:
+            comp._stop_listener()
+            _drain_main()
+        check('two POSTs without name/url both survive (no identity, no wipe)',
+              sorted(t['test'] for t in both) == ['11\n', '22\n'],
+              repr(both))
 
         # 11c. pressing the key has to say what it will do: a list page plus
         #       "fill the current file" is how seven problems end up in std.cpp.
@@ -8493,6 +8602,65 @@ def main():
     check('interactive: the runtime is the real dialogue time',
           0 < res['runtime'] < 5000, str(res['runtime']))
 
+    # --- third pass: stdout is legitimate dialogue, stderr is the crash source.
+    # A solution may legally print "runtime error:" to the interactor (that is
+    # its side of the protocol). The success-verdict override must only look at
+    # stderr; otherwise a clean AC is flipped to RE by its own output.
+    class _DialogueSolution(object):
+        def __init__(self, stdout='', stderr=''):
+            self._to_say = stdout
+            self._said = False
+            self._stderr = stderr
+
+        def set_separate_stderr(self, v):
+            pass
+
+        def set_time_limit(self, v):
+            pass
+
+        def run_file(self):
+            pass
+
+        def read(self, bfsize=None):
+            if self._said:
+                return ''
+            self._said = True
+            return self._to_say
+
+        def insert(self, s):
+            pass
+
+        def close_stdin(self):
+            pass
+
+        def is_stopped(self):
+            return 0
+
+        def get_stderr(self):
+            return self._stderr
+
+        def finish_memory_sampling(self):
+            return None
+
+        def terminate(self):
+            pass
+
+        def close_stderr(self):
+            pass
+
+    _dialogue_exe = [sys.executable, '-c',
+                     "import sys; sys.stdin.readline(); sys.exit(0)"]
+    res_stdout = inter.run_case(
+        lambda: _DialogueSolution(stdout='runtime error: x\n', stderr=''),
+        _dialogue_exe, 'in', 'ans', 10000)
+    check('interactive: a crash-like word on stdout stays AC',
+          res_stdout['verdict']['name'] == 'AC', str(res_stdout['verdict']))
+    res_stderr = inter.run_case(
+        lambda: _DialogueSolution(stdout='ok\n', stderr='runtime error: x\n'),
+        _dialogue_exe, 'in', 'ans', 10000)
+    check('interactive: the same word on stderr turns AC into RE',
+          res_stderr['verdict']['name'] == 'RE', str(res_stderr['verdict']))
+
     # --- P1-5(3): record_run is memory work; the store lands later ---
     stats_mod = importlib.import_module(pkg + '.core.cph_stats')
     stats_dir = tempfile.mkdtemp(prefix='cph-stats-suite-')
@@ -8558,6 +8726,28 @@ def main():
     check('run() unlocks the view only for writing actions',
           'if action in _WRITE_ACTIONS and v.is_read_only():' in _tm_src2
           and "elif action == 'sync_read_only':" not in _tm_src2)
+
+    # --- third pass: hide-cards and panel_style repaint the RUN view --------
+    # The shortcut is bound in source files too, but the cards live in the
+    # paired -run view. Toggling the source view did nothing visible.
+    _toggle = _tm_src2.split('def toggle_hide_phantoms(self):', 1)[-1][:1600]
+    check('toggle_hide_phantoms acts on the paired run view',
+          'cph_run_view' in _toggle
+          and ('views_owned_by' in _toggle or '_paired_run_view' in _toggle),
+          _toggle[:300])
+
+    _opts_src = open(os.path.join(ROOT, 'cph_options.py'),
+                     encoding='utf-8').read()
+    _opts_cls = _opts_src.split('class CphPanelOptionsCommand', 1)[-1]
+    _opts_doc = _opts_cls.split('"""', 2)[1] if '"""' in _opts_cls else ''
+    check('CphPanelOptionsCommand documents three lines',
+          '三行' in _opts_doc or 'three' in _opts_doc.lower(),
+          _opts_doc[:120])
+    _opts_idx2 = _opts_cls.split('elif index == 2:', 1)[-1]
+    _opts_idx2 = _opts_idx2.split('elif ', 1)[0]
+    check('the panel_style toggle repaints an open run view',
+          'run_command' in _opts_idx2 and 'cph_test_manager' in _opts_idx2,
+          _opts_idx2[:240])
 
     # --- P1-7: the pump coalesces output instead of one hop per chunk ---
     tester_flush = make_tester([card_cls('1' + chr(10))])

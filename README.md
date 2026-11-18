@@ -61,6 +61,9 @@ reports whether the loaded copy is a folder or a zip.
 4. The command palette (`Algorithm`) and `View → Algorithm Competition Assistant` expose the
    same commands.
 
+The top menu bar also has an `ACA` menu (next to `Preferences`) that gathers the common run,
+fetch and tool entries; beginners can start there.
+
 The shipped C++ command uses `-std=c++17 -O2`. **Keep `-O2`**: without it a correct program
 can look like a TLE locally.
 
@@ -318,6 +321,7 @@ setting, so they keep working.
 | `Ctrl+Alt+J` | jump to the first error |
 | `Ctrl+Alt+T` | expand a template snippet |
 | `Ctrl+Alt+P` / `Ctrl+K, Ctrl+P` | collapse / restore the run panel |
+| `Ctrl+Alt+Shift+H` | hide / show the test cards |
 
 `Ctrl+Alt+T` is bound only in C++ files (`source.c++`); in other file types call the command
 from the palette.
@@ -337,7 +341,7 @@ under `Problem`):
 | `Verdict rules` | float tolerance, PE as AC, stop on first failure, ignore stderr |
 | `Stress test options` | where std / gen come from, file picker, saving counterexamples, rounds, per-round limit |
 | `Competitive Companion options` | default target, auto listen, click log |
-| Panel width options | whether the run panel column auto-fits its content, and the maximum width ratio |
+| Panel width options | whether the run panel column auto-fits its content, the maximum width ratio, and the card style (`full` judging cards / `classic` the original plugin's plain cards without a verdict) |
 | `This problem reads/writes files` | stdin or file I/O for this problem, and the file names |
 
 `companion_auto_listen` is the one item that only takes effect the next time the listener
@@ -410,7 +414,7 @@ Text printed by a checker itself is never touched.
   (tested). The code itself still keeps **Python 3.3 as its compatibility floor**: no
   f-strings, no `subprocess.run`, no `Popen(encoding=...)` — `tests/check_py33.py` enforces
   this.
-- Tests: `python tests/run_tests.py`, currently 1151 checks, 0 failures, using a fake
+- Tests: `python tests/run_tests.py`, currently 1159 checks, 0 failures, using a fake
   `sublime` module and no third-party packages.
 - CI runs Linux (3.9 and 3.12), Windows and macOS.
 - Bump `VERSION` in `plugin_init.py`. A release adds a `messages/<version>.txt` file, the

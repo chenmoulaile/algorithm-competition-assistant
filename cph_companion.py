@@ -52,14 +52,23 @@ _listener = {
 #: One click on a contest page is not one problem: an AtCoder task list sends
 #: every task at once (seven POSTs measured here), so filling one file would
 #: queue a compile and a run per problem, back to back. Samples from different
-#: problems are all merged and kept; only a re-grab of the SAME problem clears
-#: the file first. The repeat runs are folded away.
+#: problems are all merged and kept; only a re-grab of the SAME problem (same
+#: normalized name + URL) clears the file first. When neither name nor URL is
+#: available the identity is unreliable, so such POSTs always merge - they
+#: never clear samples. The repeat runs are folded away.
 AUTO_RUN_DEBOUNCE_SECONDS = 2.0
 
-#: Session-local map file_name -> last written problem identity (name, url),
-#: both normalized with str(...).strip().lower(). Lets the current_file target
-#: tell a re-grab (clear old samples) from a contest-list burst (keep them all).
-_last_problem_by_file = {}
+#: Session-local map file_name -> set of problem identities already seen for
+#: that file. An identity is (name, url), both normalized with
+#: str(...).strip().lower(). In current_file mode a POST whose identity is
+#: already in the set is treated as a re-grab (clear old samples); a fresh
+#: identity is merged. Every successfully saved identity is recorded, so a
+#: later re-grab of any problem from a burst (A -> B -> C) is still detected.
+#: Identities with both parts empty are never recorded and never compared,
+#: so name/url-less script POSTs always merge. A problem POSTed twice within
+#: one burst is treated as a re-grab the second time - acceptable: the client
+#: normally posts a problem once.
+_seen_problems_by_file = {}
 
 
 def _should_run(file_name):
@@ -391,8 +400,11 @@ def build_handler():
             # none of this touches view state.
             identity = (str(problem_name or '').strip().lower(),
                         str((data.get('url') or '')).strip().lower())
-            prev = _last_problem_by_file.get(file_name)
-            same_problem = prev is not None and prev == identity
+            # Without a usable name AND url there is no reliable identity:
+            # treat every such POST as a different problem (merge only).
+            meaningful = bool(identity[0] or identity[1])
+            seen = _seen_problems_by_file.get(file_name)
+            same_problem = meaningful and seen is not None and identity in seen
             try:
                 # Read+write as one critical section: the run panel's async
                 # save may be writing the same file at this instant.
@@ -420,8 +432,11 @@ def build_handler():
                         sublime.status_message(t('import_save_failed'))
                 sublime.set_timeout(_report_io_error, 0)
                 return
-            if saved and incoming and _target_mode() == _TARGET_CURRENT:
-                _last_problem_by_file[file_name] = identity
+            if saved and meaningful and _target_mode() == _TARGET_CURRENT:
+                # Record regardless of which branch wrote the samples: a
+                # burst's A/B/C must all be remembered so re-grabbing any of
+                # them later is recognized. Empty identities are skipped.
+                _seen_problems_by_file.setdefault(file_name, set()).add(identity)
             remember_limits(file_name, time_limit_ms, memory_limit_mb)
             print('[Algorithm Competition Assistant] %s' % t('new_test_file_path', path=file_name))
 
