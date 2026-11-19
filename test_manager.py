@@ -19,6 +19,7 @@ from .core.cph_jump import (diagnostics as parse_diagnostics,
 							handle_event as handle_jump_event)
 from .core.cph_build_mode import label as build_mode_label
 from .core.cph_views import (tag_run_view, tag_detail_view,
+							 detail_view_matches,
 							 views_owned_by, close_views)
 from .core.cph_std_ladder import reset as std_ladder_reset
 from .core.cph_calibrate import label as calibrate_label
@@ -2769,11 +2770,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 		in different folders) produced identically named tabs, and the first
 		match was reused/closed for the wrong file.
 		"""
-		try:
-			return (view.settings().get('cph_detail_source') or '') == \
-				self._detail_source()
-		except Exception:
-			return False
+		return detail_view_matches(view, self._detail_source())
 
 	def _mark_detail_view(self, view, i):
 		tag_detail_view(view, self._detail_source(), i)
@@ -4439,6 +4436,20 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 			self.dbg_file = run_file
 			self.build_sys = build_sys
 			self.code_view_id = code_view_id
+
+		# A fresh run supersedes the previous run's detail tabs. Close this
+		# source's own detail views so the rebuild starts clean; the run view
+		# itself and other problems' tabs are left untouched. This runs after
+		# the load_session branch above has settled `run_file`, so it always
+		# targets the source this run actually belongs to.
+		try:
+			win = v.window()
+			if win is not None and run_file:
+				stale_details = [wv for wv in views_owned_by(win, run_file)
+				                 if wv.settings().get('cph_detail_source')]
+				close_views(stale_details)
+		except Exception:
+			pass
 
 		self.prepare_code_view()
 

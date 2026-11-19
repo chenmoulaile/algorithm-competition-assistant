@@ -33,5 +33,9 @@ A panel-width switch, plus fixes for several behaviour/documentation mismatches.
 * Companion: Ctrl+Alt+F now clears a problem's old samples before re-grabbing the same
   problem (matched by title + URL); several different problems from one click on a contest
   list page are still merged into the current file.
+* Fixed detail tabs stacking up: clicking "detail" repeatedly used to open a new tab each
+  time, and old details were not cleared on a fresh run. The tab-ownership path was
+  normalized on one side only, so it never matched; details now reuse one tab and stale
+  details of the source are closed on a fresh run.
 
-Regression suite: 1159 checks, 0 failures.
+Regression suite: 1169 checks, 0 failures.

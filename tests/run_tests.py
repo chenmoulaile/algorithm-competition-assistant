@@ -9447,6 +9447,128 @@ def main():
           and 'def _detail_view_belongs' in _tm_src_all
           and 'wv.name() == name and self._detail_view_belongs(wv)'
           in _tm_src_all)
+
+    # --- detail tabs: normalized identity, reuse, fresh-run cleanup -------
+    # The marker is written by tag_detail_view(), which stores the *normalized*
+    # source path, while detail_view_matches/_detail_view_belongs are handed
+    # the raw dbg_file. On Windows those differ in case and slash direction,
+    # so a raw string compare failed to recognize the tab it had just opened
+    # and a second click stacked another one ("标签叠加 / 不清理").
+    _views_fix = importlib.import_module(pkg + '.core.cph_views')
+    if hasattr(_views_fix, 'detail_view_matches'):
+        _raw_source = 'C:/Work/MAIN.cpp'
+        _norm_source = _views_fix._norm(_raw_source)
+        _marked_view = _sub_mod.View(
+            settings={'cph_detail_source': _norm_source})
+        check('detail_view_matches compares both sides after _norm',
+              _views_fix.detail_view_matches(_marked_view, _raw_source) is True,
+              'marker=%r raw=%r' % (_norm_source, _raw_source))
+        check('detail_view_matches rejects a different source',
+              _views_fix.detail_view_matches(
+                  _marked_view, 'C:/Work/OTHER.cpp') is False)
+        check('detail_view_matches rejects an untagged view',
+              _views_fix.detail_view_matches(
+                  _sub_mod.View(), _raw_source) is False)
+        # A differently-cased original is the Windows case that broke the raw
+        # compare. The expectation is driven from the real _norm so this stays
+        # honest on Linux/macOS, where normcase keeps the original case.
+        _case_source = _raw_source.swapcase()
+        if os.name == 'nt':
+            check('detail_view_matches folds Windows path case',
+                  _views_fix.detail_view_matches(
+                      _marked_view, _case_source) is True,
+                  'marker=%r variant=%r' % (_norm_source, _case_source))
+        else:
+            check('detail_view_matches follows _norm on path case',
+                  _views_fix.detail_view_matches(_marked_view, _case_source)
+                  == (_views_fix._norm(_case_source) == _norm_source))
+
+        # The predicate the reuse loop actually calls, against a real command
+        # instance (the direct regression assertion for the stacking bug).
+        _belong_cmd = tm.CphTestManagerCommand.__new__(
+            tm.CphTestManagerCommand)
+        _belong_cmd.dbg_file = _raw_source
+        check('a detail tab marked with the normalized path still belongs '
+              'to the raw source',
+              _belong_cmd._detail_view_belongs(_marked_view) is True)
+        check("another source's detail tab does not belong",
+              _belong_cmd._detail_view_belongs(_sub_mod.View(settings={
+                  'cph_detail_source':
+                      _views_fix._norm('C:/Work/OTHER.cpp')})) is False)
+
+        # show_test_detail() twice over the same source must reuse one tab.
+        # Only the pieces the open path touches are faked; the real
+        # get_detail_view_name/_mark_detail_view/_detail_view_belongs run.
+        class _ReuseWindow(object):
+            def __init__(self):
+                self._views = []
+                self.new_files = 0
+
+            def views(self):
+                return list(self._views)
+
+            def new_file(self):
+                self.new_files += 1
+                view = _sub_mod.View()
+                self._views.append(view)
+                return view
+
+            def set_view_index(self, view, group, index):
+                pass
+
+            def focus_view(self, view):
+                pass
+
+        class _ReuseTester(object):
+            def __init__(self, tests):
+                self.tests = tests
+
+        _reuse_win = _ReuseWindow()
+        _reuse_cmd = tm.CphTestManagerCommand.__new__(
+            tm.CphTestManagerCommand)
+        _reuse_view = _sub_mod.View()
+        _reuse_view.window = lambda: _reuse_win
+        _reuse_cmd.view = _reuse_view
+        _reuse_cmd.dbg_file = _raw_source
+        _reuse_cmd.get_detail_style = lambda: 'view'
+        _reuse_cmd.detail_view_args = lambda i, test: {}
+        _reuse_test = tm.CphTestManagerCommand.Test('1\n')
+        _reuse_test.verdict = verdict.get_verdict_by_name('AC')
+        _reuse_test.runtime = 1
+        _reuse_test.stdout = '1'
+        _reuse_test.fold = False
+        _reuse_cmd.tester = _ReuseTester([_reuse_test])
+
+        _reuse_cmd.show_test_detail(0)
+        check('opening a detail tab creates exactly one view',
+              _reuse_win.new_files == 1,
+              'new_file calls=%d' % _reuse_win.new_files)
+        _first_detail = _reuse_win._views[0]
+        check('the new detail tab is tagged with the normalized source',
+              _first_detail.settings().get('cph_detail_source')
+              == _norm_source)
+        _reuse_cmd.show_test_detail(0)
+        check('opening the same detail twice reuses the first tab',
+              _reuse_win.new_files == 1
+              and _reuse_win._views[0] is _first_detail,
+              'new_file calls=%d, views=%r' % (
+                  _reuse_win.new_files,
+                  [v.name() for v in _reuse_win._views]))
+    else:
+        check('core.cph_views defines detail_view_matches', False,
+              'product code has not landed yet')
+
+    # Source-level fallback for make_opd: driving the whole run would need a
+    # compiler/process, so assert the fresh-run path closes this source's
+    # stale detail tabs through the shared lifecycle helpers.
+    _make_start = _tm_src_all.index('\tdef make_opd(')
+    _make_src = _tm_src_all[_make_start:_tm_src_all.index(
+        '\n\tdef ', _make_start + 10)]
+    check("a fresh run closes this source's stale detail tabs",
+          'views_owned_by(' in _make_src and 'close_views(' in _make_src
+          and 'cph_detail_source' in _make_src,
+          'make_opd has no stale-detail cleanup')
+
     _edit_src = open(os.path.join(ROOT, 'test_edit.py'),
                      encoding='utf-8').read()
     check('a save from the input tab keeps the answer tab state',

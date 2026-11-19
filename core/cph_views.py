@@ -49,6 +49,15 @@ def tag_detail_view(view, source_file, index):
         pass
 
 
+def detail_view_matches(view, source_file):
+    """True iff view 是本源文件的 detail 标签（两边都 _norm 归一化后比较）。"""
+    try:
+        tagged = view.settings().get(DETAIL_SOURCE)
+        return bool(tagged) and _norm(tagged) == _norm(source_file)
+    except Exception:
+        return False
+
+
 def tag_edit_view(view, run_view_id):
     """Mark a view as a test-edit tab of a run panel (id kept for pairing)."""
     try:
