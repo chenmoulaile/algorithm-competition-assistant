@@ -1,0 +1,13 @@
+Algorithm Competition Assistant 3.0.14
+======================================
+
+Fix for detail tabs stacking up and stale details surviving a fresh run.
+
+* Detail tabs: clicking "detail" repeatedly used to open a new tab every time
+  instead of reusing one, and details from a previous run were never cleared.
+  The tab's ownership path was stored normalized but compared against the raw
+  source path, so on Windows the two never matched and every lookup failed.
+  Detail tabs now reuse a single tab per test, refresh in place, and the
+  source's old detail tabs are closed when you start a fresh run.
+
+Regression suite: 1169 checks, 0 failures.
