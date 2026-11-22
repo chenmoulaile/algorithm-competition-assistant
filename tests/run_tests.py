@@ -10099,6 +10099,15 @@ def main():
           and 'chunk_size = 262144' in _pm_large_src
           and 'data = data[n:]' not in _pm_large_src)
 
+    # Stress counterexample minimizer has bounded, revalidated reduction passes
+    _stress_src = _chk_src('cph_stress.py')
+    check('stress minimizer uses delta debugging and numeric shrinking',
+          'def _ddmin_lines(text, fails' in _stress_src
+          and 'def _shrink_integer_tokens(text, fails' in _stress_src
+          and 'if fails(candidate)' in _stress_src)
+    check('stress minimizer refuses custom checker cases',
+          'Automatic minimization currently skips custom-checker (SPJ) cases.' in _stress_src)
+
     print('')
     print('%d checks, %d failures' % (CHECKS[0], len(FAILURES)))
     if FAILURES:

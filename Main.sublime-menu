@@ -145,6 +145,10 @@
 							{
 								"caption": "Stress: replay last counterexample seed",
 								"command": "cph_stress_replay"
+							},
+							{
+								"caption": "Minimize last stress counterexample",
+								"command": "cph_stress_minimize"
 							}
 						]
 					},

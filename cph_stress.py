@@ -1898,6 +1898,181 @@ def _on_stress_crash(round_count, inp, rc, user_out, user_err, sess):
     _stop_stress(sess)
 
 
+
+def _ddmin_lines(text, fails, max_attempts=200):
+    """Delta-debug line chunks while preserving the failing property."""
+    lines = text.splitlines(True)
+    if len(lines) < 2:
+        return text, 0
+    granularity = 2
+    attempts = 0
+    while len(lines) >= 2 and attempts < max_attempts:
+        chunk = max(1, (len(lines) + granularity - 1) // granularity)
+        reduced = False
+        for start in range(0, len(lines), chunk):
+            candidate = lines[:start] + lines[start + chunk:]
+            attempts += 1
+            if fails(''.join(candidate)):
+                lines = candidate
+                granularity = max(2, granularity - 1)
+                reduced = True
+                break
+            if attempts >= max_attempts:
+                break
+        if not reduced:
+            if granularity >= len(lines):
+                break
+            granularity = min(len(lines), granularity * 2)
+    return ''.join(lines), attempts
+
+
+def _shrink_integer_tokens(text, fails, max_attempts=120):
+    """Try zero/one/half for numeric tokens, always validating the candidate."""
+    pattern = re.compile(r'(?<![A-Za-z_])[-+]?\\d+')
+    attempts = 0
+    while attempts < max_attempts:
+        matches = list(pattern.finditer(text))
+        changed = False
+        for match in matches:
+            try:
+                old = int(match.group(0))
+            except Exception:
+                continue
+            choices = []
+            for value in (0, 1, -1, old // 2):
+                if value != old and value not in choices:
+                    choices.append(value)
+            for value in choices:
+                candidate = text[:match.start()] + str(value) + text[match.end():]
+                attempts += 1
+                if fails(candidate):
+                    text = candidate
+                    changed = True
+                    break
+                if attempts >= max_attempts:
+                    break
+            if changed or attempts >= max_attempts:
+                break
+        if not changed:
+            break
+    return text, attempts
+
+
+def _minimize_counterexample(sess, state, say):
+    """Rebuild both programs in a private temp dir, then ddmin the saved input."""
+    user_file = sess.get('user_file')
+    std_file = sess.get('std_file')
+    if not (user_file and std_file):
+        say('[ACA] Cannot minimize: source or reference file is missing.\\n')
+        return
+    entry = _lang_entry(user_file) or {}
+    if entry.get('checker'):
+        say('[ACA] Automatic minimization currently skips custom-checker (SPJ) cases.\\n')
+        return
+
+    work = _new_session(user_file, std_file, sess.get('generator_file'),
+                        sess.get('time_limit', 2), 1)
+    try:
+        try:
+            work['build_root'] = tempfile.mkdtemp(prefix='cph-minimize-')
+            register_temp_dir(work['build_root'])
+        except Exception as e:
+            say('[ACA] Cannot create temporary build directory: %s\\n' % e)
+            return
+        ok_user, user_exe, why = _compile_program(user_file, sess=work)
+        if not ok_user:
+            say('[ACA] User program compile failed: %s\\n' % (why or 'unknown error'))
+            return
+        ok_std, std_exe, why = _compile_program(std_file, sess=work)
+        if not ok_std:
+            say('[ACA] Reference program compile failed: %s\\n' % (why or 'unknown error'))
+            return
+        user_argv = _program_command(user_exe, user_file) or user_exe
+        std_argv = _program_command(std_exe, std_file) or std_exe
+        original = state.get('input') or ''
+        original_crash = bool(state.get('crash'))
+        timeout = max(0.1, float(sess.get('time_limit', 2) or 2))
+        tolerance = get_settings().get('float_tolerance', 0) or 0
+        cache = {}
+
+        def still_fails(candidate):
+            if candidate in cache:
+                return cache[candidate]
+            rc_u, out_u, err_u, tle_u = _run_program(
+                user_argv, candidate, cwd=os.path.dirname(user_file) or None,
+                time_limit=timeout, sess=work)
+            if original_crash:
+                result = bool(tle_u or rc_u != 0 or looks_like_crash(err_u) or looks_like_crash(out_u))
+                cache[candidate] = result
+                return result
+            if tle_u or rc_u != 0:
+                rc_s, out_s, err_s, tle_s = _run_program(
+                    std_argv, candidate, cwd=os.path.dirname(std_file) or None,
+                    time_limit=timeout, sess=work)
+                result = not tle_s and rc_s == 0
+                cache[candidate] = result
+                return result
+            rc_s, out_s, err_s, tle_s = _run_program(
+                std_argv, candidate, cwd=os.path.dirname(std_file) or None,
+                time_limit=timeout, sess=work)
+            result = (not tle_s and rc_s == 0 and
+                      not outputs_equal(out_u, out_s, tolerance))
+            cache[candidate] = result
+            return result
+
+        if not still_fails(original):
+            say('[ACA] Original counterexample did not reproduce; source files or build environment may have changed.\\n')
+            return
+        say('[ACA] Minimizing counterexample (line reduction, then integer shrinking)...\\n')
+        reduced, line_attempts = _ddmin_lines(original, still_fails)
+        reduced, token_attempts = _shrink_integer_tokens(reduced, still_fails)
+        if not still_fails(reduced):
+            reduced = original
+        if len(reduced) >= len(original):
+            say('[ACA] No smaller failing input was found after %d checks.\\n' % len(cache))
+            return
+
+        # Re-run once to capture the reference output for the reduced case.
+        rc_s, out_s, err_s, tle_s = _run_program(
+            std_argv, reduced, cwd=os.path.dirname(std_file) or None,
+            time_limit=timeout, sess=work)
+        state['input'] = reduced
+        state['std_out'] = out_s if not tle_s and rc_s == 0 else ''
+        state['minimized'] = True
+        save_text = _save_counterexample(work, reduced, (state['std_out'] or '').strip(),
+                                         crash=original_crash)
+        say('[ACA] Minimized input: %d -> %d characters; %d executions checked.\\n'
+            % (len(original), len(reduced), len(cache)))
+        say(save_text)
+        say('[ACA] Reduced input is shown below:\\n' + reduced + '\\n')
+        _append_stress(sess, '')
+    finally:
+        _finish_stress(work)
+
+
+class CphStressMinimizeCommand(sublime_plugin.TextCommand):
+    """Minimize the last saved stress counterexample."""
+
+    def run(self, edit):
+        sess = _sessions.get(self.view.id()) or _session_for_view(self.view)
+        state = sess.get('last_counterexample') if sess else None
+        if not state or not state.get('input'):
+            sublime.status_message('[Algorithm Competition Assistant] No counterexample to minimize')
+            return
+        if sess.get('running'):
+            sublime.status_message('[Algorithm Competition Assistant] Stop the stress test before minimizing')
+            return
+
+        def say(message):
+            sublime.set_timeout(lambda m=message: _append_stress(sess, m), 0)
+
+        say('\\n[ACA] Starting counterexample minimization...\\n')
+        worker = threading.Thread(target=_minimize_counterexample,
+                                  args=(sess, dict(state), say))
+        worker.daemon = True
+        worker.start()
+
+
 class CphStressReplayCommand(sublime_plugin.TextCommand):
 	"""Re-run the last counterexample from its recorded generator seed.
 

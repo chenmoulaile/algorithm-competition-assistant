@@ -223,6 +223,10 @@
 		"command": "cph_stress_replay"
 	},
 	{
+		"caption": "Algorithm Competition Assistant: Minimize last stress counterexample",
+		"command": "cph_stress_minimize"
+	},
+	{
 		"caption": "Algorithm Competition Assistant: Run in interactive terminal (Ctrl+Alt+Shift+X)",
 		"command": "cph_manual_open"
 	},
