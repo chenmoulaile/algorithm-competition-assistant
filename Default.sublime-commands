@@ -132,6 +132,10 @@
 		"command": "cph_export_tests"
 	},
 	{
+		"caption": "Algorithm Competition Assistant: Export failed tests with diagnostics",
+		"command": "cph_export_failed_tests"
+	},
+	{
 		"command": "cph_verdict_mode"
 	},
 	{

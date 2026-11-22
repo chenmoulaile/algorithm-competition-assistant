@@ -10,6 +10,7 @@ Algorithm Competition Assistant - 测试数据杂项 I/O
 
 import os
 import re
+import json
 import sublime
 import sublime_plugin
 
@@ -175,6 +176,72 @@ class CphCopyTestActualCommand(_CopyTestPartCommand):
 		# tests, never in the ones loaded from disk for a source view. Showing
 		# an enabled command there just produced 'nothing_to_copy'.
 		return _is_run_view(self.view)
+
+
+class CphExportFailedTestsCommand(sublime_plugin.TextCommand):
+	"""Export only judged non-AC tests, including their captured diagnostics."""
+
+	def run(self, edit):
+		file_name = _resolve_source_file(self.view)
+		if not file_name:
+			sublime.status_message(t('save_file_first'))
+			return
+		tests = load_all_tests(file_name) or []
+		failed = []
+		for index, test in enumerate(tests, 1):
+			verdict = str(test.get('verdict') or '').upper()
+			if verdict and verdict not in ('AC', 'WT', 'CP', 'CPD', 'JG', 'JGD', 'CMP'):
+				failed.append((index, test, verdict))
+		if not failed:
+			sublime.status_message('没有已判定的失败测试点可导出')
+			return
+		window = self.view.window()
+		if window is None:
+			return
+		default_dir = os.path.join(os.path.dirname(file_name), 'failed_tests')
+		window.show_input_panel('失败测试点导出目录:', default_dir,
+								self._export, None, None)
+
+	def _export(self, target_dir):
+		target_dir = (target_dir or '').strip().strip('"').strip("'")
+		if not target_dir:
+			return
+		file_name = _resolve_source_file(self.view)
+		tests = load_all_tests(file_name) or []
+		failed = []
+		for index, test in enumerate(tests, 1):
+			verdict = str(test.get('verdict') or '').upper()
+			if verdict and verdict not in ('AC', 'WT', 'CP', 'CPD', 'JG', 'JGD', 'CMP'):
+				failed.append((index, test, verdict))
+		try:
+			if not os.path.isdir(target_dir):
+				os.makedirs(target_dir)
+			manifest = []
+			for index, test, verdict in failed:
+				stem = 'test_%03d' % index
+				def write_part(suffix, value):
+					if value is None or value == '':
+						return ''
+					name = stem + suffix
+					with open(os.path.join(target_dir, name), 'w', encoding='utf-8') as f:
+						f.write(str(value))
+					return name
+				entry = {
+					'test_id': index,
+					'verdict': verdict,
+					'input': write_part('.in', test.get('test', '')),
+					'expected': write_part('.ans', (test.get('correct_answers') or [''])[0]),
+					'actual': write_part('.actual', test.get('stdout', '')),
+					'stderr': write_part('.stderr', test.get('stderr', '')),
+					'runtime': test.get('runtime'),
+					'memory': test.get('memory')
+				}
+				manifest.append(entry)
+			with open(os.path.join(target_dir, 'manifest.json'), 'w', encoding='utf-8') as f:
+				json.dump(manifest, f, ensure_ascii=False, indent=2)
+			sublime.status_message('已导出 %d 个失败测试点到 %s' % (len(failed), target_dir))
+		except Exception as e:
+			sublime.error_message(t('import_failed', error=str(e)))
 
 
 class CphExportTestsCommand(sublime_plugin.TextCommand):

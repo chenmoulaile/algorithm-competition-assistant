@@ -89,6 +89,10 @@
 								"command": "cph_export_tests"
 							},
 							{
+								"caption": "Export failed tests with diagnostics",
+								"command": "cph_export_failed_tests"
+							},
+							{
 								"caption": "-"
 							},
 							{
