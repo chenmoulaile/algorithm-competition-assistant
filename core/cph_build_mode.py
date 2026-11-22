@@ -33,6 +33,7 @@ README 里一直写着"想要 RE 行号请手动给 compile_cmd 加 -fsanitize"�
 放在 core/ 是因为根级插件模块之间不允许互相 import（Package Control 审查规则）。
 """
 
+import os
 import re
 
 from .cph_settings import get_settings
@@ -79,7 +80,7 @@ _DEFAULT_SANITIZE = '-fsanitize=undefined -fsanitize-trap=undefined'
 _ASSERTIONS = '-D_GLIBCXX_ASSERTIONS'
 _FRAME_POINTER_FLAG = '-fno-omit-frame-pointer'
 
-_OPT = re.compile(r'-O[0-3sg]\b')
+_OPT = re.compile(r'-O(?:[0-3sg]|fast)\b')
 #: Every flag that begins with -fsanitize, so that both halves of the default
 #: pair (-fsanitize=undefined and -fsanitize-trap=undefined) are removed whole.
 #: The old r'-fsanitize=\S+' left "-fsanitize-trap=undefined" behind as an
@@ -132,7 +133,10 @@ def toggle(file):
 
 def _norm(file):
 	try:
-		return file.replace('\\', '/').lower()
+		normalized = file.replace('\\', '/')
+		# Windows paths are case-insensitive; POSIX paths are not. Lowercasing
+		# on Linux/macOS made A.cpp and a.cpp share one per-file build setting.
+		return normalized.lower() if os.name == 'nt' else normalized
 	except Exception:
 		return file
 

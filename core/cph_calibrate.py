@@ -15,6 +15,7 @@
 import json
 import os
 import re
+import signal
 import subprocess
 import tempfile
 import time
@@ -90,16 +91,44 @@ def save_factor(factor, score=None):
 		return False
 
 
-def measure(workdir=None, compile_cmd=DEFAULT_COMPILE_CMD, compiler='g++'):
-	"""Compile and run the benchmark. Returns (factor, score, seconds, error).
+def _kill_process_tree(proc):
+	"""Kill and reap a calibration process, including shell descendants."""
+	if proc is None:
+		return
+	if os.name == 'nt':
+		try:
+			if proc.poll() is None:
+				subprocess.Popen(
+					['taskkill', '/F', '/T', '/PID', str(proc.pid)],
+					stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+					startupinfo=hidden_startupinfo()).wait(timeout=3)
+		except Exception:
+			try:
+				proc.kill()
+			except Exception:
+				pass
+	else:
+		# The shell is created in its own session below; killpg also reaches
+		# its compiler child if the shell itself has already exited.
+		try:
+			os.killpg(proc.pid, signal.SIGKILL)
+		except Exception:
+			try:
+				proc.kill()
+			except Exception:
+				pass
+	try:
+		proc.wait(timeout=2)
+	except Exception:
+		pass
 
-	Every exit path cleans up the scratch directory, and a timed-out or
-	failed benchmark process is killed first - a runaway bench left behind
-	otherwise spun forever and its mkdtemp dir leaked for the whole session.
-	"""
+
+def measure(workdir=None, compile_cmd=DEFAULT_COMPILE_CMD, compiler='g++'):
+	"""Compile and run the benchmark with bounded, tree-aware subprocesses."""
 	workdir = workdir or tempfile.mkdtemp(prefix='cph-calibrate-')
 	src = os.path.join(workdir, 'bench.cpp')
 	exe = os.path.join(workdir, 'bench.exe')
+	compile_proc = None
 	run = None
 	try:
 		try:
@@ -110,34 +139,32 @@ def measure(workdir=None, compile_cmd=DEFAULT_COMPILE_CMD, compiler='g++'):
 
 		cmd = compile_cmd.replace('{src}', src).replace('{exe}', exe)
 		try:
-			proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE,
-									stderr=subprocess.STDOUT,
-									startupinfo=hidden_startupinfo())
-			out = proc.communicate()[0]
+			compile_proc = subprocess.Popen(
+				cmd, shell=True, stdout=subprocess.PIPE,
+				stderr=subprocess.STDOUT, startupinfo=hidden_startupinfo(),
+				start_new_session=(os.name != 'nt'))
+			out = compile_proc.communicate(timeout=30)[0]
+		except subprocess.TimeoutExpired:
+			_kill_process_tree(compile_proc)
+			return None, None, None, t('calibrate_compile_failed',
+									   compiler=compiler, error='timed out after 30s')
 		except Exception as e:
 			return None, None, None, t('calibrate_compile_failed',
 									   compiler=compiler, error=str(e))
-		if proc.returncode != 0:
+		if compile_proc.returncode != 0:
 			text = out.decode('utf-8', 'replace') if out else ''
 			return None, None, None, t('calibrate_compile_failed',
 									   compiler=compiler, error=text[-400:])
 
-		# monotonic(), not time.time(): an NTP step during the ~seconds-long
-		# benchmark could turn the interval negative and fail the sample.
 		started = time.monotonic()
 		try:
 			run = subprocess.Popen([exe], stdout=subprocess.DEVNULL,
 								   stderr=subprocess.DEVNULL,
-								   startupinfo=hidden_startupinfo())
+								   startupinfo=hidden_startupinfo(),
+								   start_new_session=(os.name != 'nt'))
 			run.communicate(timeout=60)
 		except subprocess.TimeoutExpired:
-			# Kill the benchmark before returning: communicate() only stopped
-			# waiting, the process was still running the loop.
-			try:
-				run.kill()
-				run.wait(timeout=2)
-			except Exception:
-				pass
+			_kill_process_tree(run)
 			return None, None, None, t('calibrate_run_failed', error='timed out after 60s')
 		except Exception as e:
 			return None, None, None, t('calibrate_run_failed', error=str(e))
@@ -151,11 +178,9 @@ def measure(workdir=None, compile_cmd=DEFAULT_COMPILE_CMD, compiler='g++'):
 		return factor, score, seconds, ''
 	finally:
 		if run is not None and run.poll() is None:
-			try:
-				run.kill()
-				run.wait(timeout=2)
-			except Exception:
-				pass
+			_kill_process_tree(run)
+		if compile_proc is not None and compile_proc.poll() is None:
+			_kill_process_tree(compile_proc)
 		_cleanup(workdir)
 
 

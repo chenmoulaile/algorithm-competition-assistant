@@ -13,6 +13,7 @@ Algorithm Competition Assistant - 设置管理 + 测试数据存储路径解析
 import sublime
 from os import path
 import os
+import ntpath
 import tempfile
 import threading
 
@@ -418,6 +419,25 @@ def default_io_names(file_name):
 	return root + '.in', root + '.out'
 
 
+def is_safe_io_filename(name):
+	"""Whether NAME is a single safe file name inside the file-IO sandbox.
+
+	Problem .io sidecars are user-editable. Never let an absolute path, drive,
+	alternate data stream, or path separator escape the per-run scratch folder.
+	"""
+	if not isinstance(name, str):
+		return False
+	name = name.strip()
+	if not name or name in ('.', '..') or ':' in name or '\x00' in name:
+		return False
+	if '/' in name or '\\' in name:
+		return False
+	if any(ord(ch) < 32 for ch in name):
+		return False
+	drive, unused = ntpath.splitdrive(name)
+	return not drive and os.path.basename(name) == name
+
+
 def get_problem_io(file_name):
 	"""{'mode': 'stdin'|'files', 'input': name, 'output': name} for this problem."""
 	spec = _problem_io.get(file_name)
@@ -430,8 +450,10 @@ def get_problem_io(file_name):
 	mode = spec.get('mode')
 	if mode not in ('stdin', 'files'):
 		mode = 'stdin'
-	input_name = (spec.get('input') or '').strip()
-	output_name = (spec.get('output') or '').strip()
+	input_value = spec.get('input') or ''
+	output_value = spec.get('output') or ''
+	input_name = input_value.strip() if isinstance(input_value, str) else ''
+	output_name = output_value.strip() if isinstance(output_value, str) else ''
 	if mode == 'files' and not input_name:
 		# A half-saved spec (name forgotten, file hand-edited) must not run a
 		# program that then reads nothing: fall back to the conventional names
@@ -439,6 +461,12 @@ def get_problem_io(file_name):
 		input_name, output_name = default_io_names(file_name)
 	if mode == 'files' and not output_name:
 		output_name = os.path.splitext(input_name)[0] + '.out'
+	if mode == 'files' and (not is_safe_io_filename(input_name)
+						 or not is_safe_io_filename(output_name)):
+		print('[Algorithm Competition Assistant] unsafe file-IO filename; using stdin mode')
+		spec = {'mode': 'stdin', 'input': '', 'output': ''}
+		_problem_io[file_name] = spec
+		return spec
 	return {'mode': mode, 'input': input_name, 'output': output_name}
 
 
@@ -448,13 +476,19 @@ def set_problem_io(file_name, mode, input_name=None, output_name=None):
 		return None
 	spec = get_problem_io(file_name)
 	mode = mode if mode in ('stdin', 'files') else 'stdin'
+	input_value = input_name or ''
+	output_value = output_name or ''
 	spec = {'mode': mode,
-			'input': (input_name or '').strip() if mode == 'files' else '',
-			'output': (output_name or '').strip() if mode == 'files' else ''}
+			'input': input_value.strip() if mode == 'files' and isinstance(input_value, str) else '',
+			'output': output_value.strip() if mode == 'files' and isinstance(output_value, str) else ''}
 	if mode == 'files' and not spec['input']:
 		spec['input'], spec['output'] = default_io_names(file_name)
 	if mode == 'files' and not spec['output']:
 		spec['output'] = os.path.splitext(spec['input'])[0] + '.out'
+	if mode == 'files' and (not is_safe_io_filename(spec['input'])
+						 or not is_safe_io_filename(spec['output'])):
+		print('[Algorithm Competition Assistant] unsafe file-IO filename; using stdin mode')
+		spec = {'mode': 'stdin', 'input': '', 'output': ''}
 	_problem_io[file_name] = spec
 	path = get_io_file_path(file_name, create=True)
 	if path:

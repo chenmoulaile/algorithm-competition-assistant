@@ -8,6 +8,7 @@ import os
 import random
 import re
 import shlex
+import signal
 import subprocess
 import tempfile
 import threading
@@ -984,33 +985,34 @@ def _track_proc(sess, proc):
 
 
 def _kill_tree(proc):
-    """Kill a program and everything it started.
-
-    With `shell=True` the direct child is cmd.exe, so a plain kill leaves the
-    compiler running; it then keeps holding the .exe it was writing, which is
-    what made a rebuild fail with "Permission denied" afterwards.
-    """
+    """Kill a stress child and every process in its isolated process group."""
     try:
         pid = proc.pid
     except Exception:
         return
     if pid is None:
         return
-    # Stop can race with the round finishing. On Windows taskkill works by
-    # PID, and a reaped PID may already belong to another process; the same
-    # guard is load-bearing in ProcessManager.terminate().
-    try:
-        if proc.poll() is not None:
-            return
-    except Exception:
-        pass
     if sublime.platform() == 'windows':
+        # taskkill addresses a PID, so never target it after the leader exited.
+        try:
+            if proc.poll() is not None:
+                return
+        except Exception:
+            pass
         try:
             killer = subprocess.Popen(
                 ['taskkill', '/F', '/T', '/PID', str(pid)],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 startupinfo=_hidden_startupinfo())
             killer.wait(timeout=3)
+            return
+        except Exception:
+            pass
+    else:
+        # A shell can exit while a descendant in its process group keeps
+        # running. poll() on the leader is not a reliable group-liveness test.
+        try:
+            os.killpg(pid, signal.SIGKILL)
             return
         except Exception:
             pass
@@ -1120,7 +1122,7 @@ def _communicate_abortable(proc, data, timeout, abort, sess=None):
         feeder.daemon = True
         feeder.start()
 
-    deadline = (time.time() + timeout) if timeout and timeout > 0 else None
+    deadline = (time.monotonic() + timeout) if timeout and timeout > 0 else None
     timed_out = False
     aborted = False
     while True:
@@ -1137,7 +1139,7 @@ def _communicate_abortable(proc, data, timeout, abort, sess=None):
             aborted = True
             _kill_tree(proc)
             break
-        if deadline is not None and time.time() >= deadline:
+        if deadline is not None and time.monotonic() >= deadline:
             timed_out = True
             _kill_tree(proc)
             break
@@ -1175,7 +1177,8 @@ def _popen_capture(cmd, cwd, input_text=None, shell=False, timeout=30, env=None,
         stdin=subprocess.PIPE if input_text is not None else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        startupinfo=_hidden_startupinfo()
+        startupinfo=_hidden_startupinfo(),
+        start_new_session=(os.name != 'nt')
     )
     if sess is not None:
         sess['current_proc'] = proc
