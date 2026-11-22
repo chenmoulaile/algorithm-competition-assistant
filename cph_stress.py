@@ -1874,6 +1874,7 @@ def _on_stress_crash(round_count, inp, rc, user_out, user_err, sess):
         'user_out': user_out,
         'std_out': '',
         'round': round_count,
+        'crash': True,
     }
 
     text = '\n' + '=' * 60 + '\n'
@@ -1928,7 +1929,7 @@ def _ddmin_lines(text, fails, max_attempts=200):
 
 def _shrink_integer_tokens(text, fails, max_attempts=120):
     """Try zero/one/half for numeric tokens, always validating the candidate."""
-    pattern = re.compile(r'(?<![A-Za-z_])[-+]?\\d+')
+    pattern = re.compile(r'(?<![A-Za-z_])[-+]?\d+')
     attempts = 0
     while attempts < max_attempts:
         matches = list(pattern.finditer(text))
@@ -1963,11 +1964,11 @@ def _minimize_counterexample(sess, state, say):
     user_file = sess.get('user_file')
     std_file = sess.get('std_file')
     if not (user_file and std_file):
-        say('[ACA] Cannot minimize: source or reference file is missing.\\n')
+        say('[ACA] Cannot minimize: source or reference file is missing.\n')
         return
     entry = _lang_entry(user_file) or {}
     if entry.get('checker'):
-        say('[ACA] Automatic minimization currently skips custom-checker (SPJ) cases.\\n')
+        say('[ACA] Automatic minimization currently skips custom-checker (SPJ) cases.\n')
         return
 
     work = _new_session(user_file, std_file, sess.get('generator_file'),
@@ -1977,20 +1978,21 @@ def _minimize_counterexample(sess, state, say):
             work['build_root'] = tempfile.mkdtemp(prefix='cph-minimize-')
             register_temp_dir(work['build_root'])
         except Exception as e:
-            say('[ACA] Cannot create temporary build directory: %s\\n' % e)
+            say('[ACA] Cannot create temporary build directory: %s\n' % e)
             return
         ok_user, user_exe, why = _compile_program(user_file, sess=work)
         if not ok_user:
-            say('[ACA] User program compile failed: %s\\n' % (why or 'unknown error'))
+            say('[ACA] User program compile failed: %s\n' % (why or 'unknown error'))
             return
         ok_std, std_exe, why = _compile_program(std_file, sess=work)
         if not ok_std:
-            say('[ACA] Reference program compile failed: %s\\n' % (why or 'unknown error'))
+            say('[ACA] Reference program compile failed: %s\n' % (why or 'unknown error'))
             return
         user_argv = _program_command(user_exe, user_file) or user_exe
         std_argv = _program_command(std_exe, std_file) or std_exe
         original = state.get('input') or ''
         original_crash = bool(state.get('crash'))
+        work['current_seed'] = state.get('seed')
         timeout = max(0.1, float(sess.get('time_limit', 2) or 2))
         tolerance = get_settings().get('float_tolerance', 0) or 0
         cache = {}
@@ -2021,15 +2023,15 @@ def _minimize_counterexample(sess, state, say):
             return result
 
         if not still_fails(original):
-            say('[ACA] Original counterexample did not reproduce; source files or build environment may have changed.\\n')
+            say('[ACA] Original counterexample did not reproduce; source files or build environment may have changed.\n')
             return
-        say('[ACA] Minimizing counterexample (line reduction, then integer shrinking)...\\n')
+        say('[ACA] Minimizing counterexample (line reduction, then integer shrinking)...\n')
         reduced, line_attempts = _ddmin_lines(original, still_fails)
         reduced, token_attempts = _shrink_integer_tokens(reduced, still_fails)
         if not still_fails(reduced):
             reduced = original
         if len(reduced) >= len(original):
-            say('[ACA] No smaller failing input was found after %d checks.\\n' % len(cache))
+            say('[ACA] No smaller failing input was found after %d checks.\n' % len(cache))
             return
 
         # Re-run once to capture the reference output for the reduced case.
@@ -2039,13 +2041,15 @@ def _minimize_counterexample(sess, state, say):
         state['input'] = reduced
         state['std_out'] = out_s if not tle_s and rc_s == 0 else ''
         state['minimized'] = True
+        latest = sess.get('last_counterexample')
+        if isinstance(latest, dict):
+            latest.update(state)
         save_text = _save_counterexample(work, reduced, (state['std_out'] or '').strip(),
                                          crash=original_crash)
-        say('[ACA] Minimized input: %d -> %d characters; %d executions checked.\\n'
+        say('[ACA] Minimized input: %d -> %d characters; %d executions checked.\n'
             % (len(original), len(reduced), len(cache)))
         say(save_text)
-        say('[ACA] Reduced input is shown below:\\n' + reduced + '\\n')
-        _append_stress(sess, '')
+        say('[ACA] Reduced input is shown below:\n' + reduced + '\n')
     finally:
         _finish_stress(work)
 
@@ -2066,7 +2070,7 @@ class CphStressMinimizeCommand(sublime_plugin.TextCommand):
         def say(message):
             sublime.set_timeout(lambda m=message: _append_stress(sess, m), 0)
 
-        say('\\n[ACA] Starting counterexample minimization...\\n')
+        say('\n[ACA] Starting counterexample minimization...\n')
         worker = threading.Thread(target=_minimize_counterexample,
                                   args=(sess, dict(state), say))
         worker.daemon = True
