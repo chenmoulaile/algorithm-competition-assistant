@@ -10116,6 +10116,14 @@ def main():
     check('stress minimizer refuses custom checker cases',
           'Automatic minimization currently skips custom-checker (SPJ) cases.' in _stress_src)
 
+    check('stress minimizer has a configurable bounded attempt budget',
+          'stress_minimize_max_attempts' in _stress_src
+          and 'max_attempts=line_budget' in _stress_src
+          and 'max_attempts=token_budget' in _stress_src)
+    check('stress counterexample report previews are bounded',
+          'def _stress_preview(value):' in _stress_src
+          and "_stress_preview(inp)" in _stress_src)
+
     print('')
     print('%d checks, %d failures' % (CHECKS[0], len(FAILURES)))
     if FAILURES:

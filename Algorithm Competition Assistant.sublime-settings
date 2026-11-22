@@ -178,6 +178,8 @@
 	// 超大样例在卡片详情中最多渲染多少字符；完整数据仍会送入程序。
 	// 避免 Sublime Minihtml 一次渲染几十 MB 文本造成界面无响应。
 	"large_sample_preview_chars": 65536,
+	// Maximum candidate executions used by stress counterexample minimization.
+	"stress_minimize_max_attempts": 320,
 	// 抓题时允许下载的页面体积上限（字节）。页面按 64KB 分块读取，累计一超过
 	// 该上限就停止下载并提示，不会把超大页面整页读进内存，也不会静默截断。
 	// 默认 8MB。注意它与上面的 max_output_bytes 不是一回事：那个限制的是运行

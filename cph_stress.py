@@ -1917,15 +1917,26 @@ def _on_stress_crash(round_count, inp, rc, user_out, user_err, sess):
     if seed is not None:
         text += '[Algorithm Competition Assistant] ' + t('stress_seed', seed=seed) + '\n\n'
     text += '[' + t('stress_input') + ']\n'
-    text += inp + '\n'
+    text += _stress_preview(inp) + '\n'
     if (user_out or '').strip():
-        text += '\n[' + t('stress_user_output') + ']\n' + user_out + '\n'
-    text += _stderr_block(sess, name or 'user', user_err)
+        text += '\n[' + t('stress_user_output') + ']\n' + _stress_preview(user_out) + '\n'
+    text += _stderr_block(sess, name or 'user', _stress_preview(user_err))
 
     text += _save_counterexample(sess, inp, '', crash=True)
     _append_stress(sess, text)
     _stop_stress(sess)
 
+
+
+def _stress_preview(value):
+    text = str(value or '')
+    try:
+        limit = int(get_settings().get('large_sample_preview_chars', 65536) or 65536)
+    except (TypeError, ValueError):
+        limit = 65536
+    if limit <= 0 or len(text) <= limit:
+        return text
+    return text[:limit] + '\n... [preview truncated; %d characters omitted]' % (len(text) - limit)
 
 
 def _ddmin_lines(text, fails, max_attempts=200):
@@ -2026,21 +2037,22 @@ def _minimize_counterexample(sess, state, say):
         cache = {}
 
         def still_fails(candidate):
-            if candidate in cache:
-                return cache[candidate]
+            cache_key = (len(candidate), hash(candidate))
+            if cache_key in cache:
+                return cache[cache_key]
             rc_u, out_u, err_u, tle_u = _run_program(
                 user_argv, candidate, cwd=os.path.dirname(user_file) or None,
                 time_limit=timeout, sess=work)
             if original_crash:
                 result = bool(tle_u or rc_u != 0 or looks_like_crash(err_u) or looks_like_crash(out_u))
-                cache[candidate] = result
+                cache[cache_key] = result
                 return result
             if tle_u or rc_u != 0:
                 rc_s, out_s, err_s, tle_s = _run_program(
                     std_argv, candidate, cwd=os.path.dirname(std_file) or None,
                     time_limit=timeout, sess=work)
                 result = not tle_s and rc_s == 0
-                cache[candidate] = result
+                cache[cache_key] = result
                 return result
             rc_s, out_s, err_s, tle_s = _run_program(
                 std_argv, candidate, cwd=os.path.dirname(std_file) or None,
@@ -2054,8 +2066,15 @@ def _minimize_counterexample(sess, state, say):
             say('[ACA] Original counterexample did not reproduce; source files or build environment may have changed.\n')
             return
         say('[ACA] Minimizing counterexample (line reduction, then integer shrinking)...\n')
-        reduced, line_attempts = _ddmin_lines(original, still_fails)
-        reduced, token_attempts = _shrink_integer_tokens(reduced, still_fails)
+        try:
+            total_attempts = int(get_settings().get('stress_minimize_max_attempts', 320) or 320)
+        except (TypeError, ValueError):
+            total_attempts = 320
+        total_attempts = max(20, min(2000, total_attempts))
+        line_budget = max(1, (total_attempts * 2) // 3)
+        token_budget = max(1, total_attempts - line_budget)
+        reduced, line_attempts = _ddmin_lines(original, still_fails, max_attempts=line_budget)
+        reduced, token_attempts = _shrink_integer_tokens(reduced, still_fails, max_attempts=token_budget)
         if not still_fails(reduced):
             reduced = original
         if len(reduced) >= len(original):
@@ -2077,7 +2096,11 @@ def _minimize_counterexample(sess, state, say):
         say('[ACA] Minimized input: %d -> %d characters; %d executions checked.\n'
             % (len(original), len(reduced), len(cache)))
         say(save_text)
-        say('[ACA] Reduced input is shown below:\n' + reduced + '\n')
+        preview_limit = int(get_settings().get('large_sample_preview_chars', 65536) or 65536)
+        preview = reduced[:preview_limit]
+        if len(reduced) > preview_limit:
+            preview += '\n... [preview truncated; %d characters omitted]' % (len(reduced) - preview_limit)
+        say('[ACA] Reduced input preview:\n' + preview + '\n')
     finally:
         _finish_stress(work)
 
@@ -2089,10 +2112,10 @@ class CphStressMinimizeCommand(sublime_plugin.TextCommand):
         sess = _sessions.get(self.view.id()) or _session_for_view(self.view)
         state = sess.get('last_counterexample') if sess else None
         if not state or not state.get('input'):
-            sublime.status_message('[Algorithm Competition Assistant] ' + t('stress_no_counterexample'))
+            sublime.status_message(t('stress_no_counterexample'))
             return
         if sess.get('running'):
-            sublime.status_message('[Algorithm Competition Assistant] ' + t('stress_minimize_stop_first'))
+            sublime.status_message(t('stress_minimize_stop_first'))
             return
 
         def say(message):
