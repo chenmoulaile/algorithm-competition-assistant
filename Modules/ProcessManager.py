@@ -750,7 +750,9 @@ class ProcessManager(object):
 		# file, so freopen must not fail just because this test point is empty.
 		try:
 			with open(os.path.join(root, input_name), 'wb') as f:
-				f.write((getattr(self, 'io_input_text', '') or '').encode('utf-8'))
+				text = getattr(self, 'io_input_text', '') or ''
+				for i in range(0, len(text), 65536):
+					f.write(text[i:i + 65536].encode('utf-8', 'replace'))
 		except Exception as e:
 			print('[Algorithm Competition Assistant] could not write %s: %s'
 				  % (input_name, e))

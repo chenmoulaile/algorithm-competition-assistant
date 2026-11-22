@@ -511,3 +511,56 @@ TLE 原因）可以仍然用中文：设 `"message_language": "zh"`（默认 `"a
 FastOlympicCoding（Jatana）是这个插件的基础；判题结果的显示方式参考了 cph-ng
 （langningchen）；Competitive Companion 的接入参考了 FastOlympicCodingHook（DrSchwad）。
 MIT 协议，见 `LICENSE`。
+
+
+## 多套编译配置与编译器自动选择
+
+打开 C++ 源文件，在命令面板执行 **Algorithm Competition Assistant: Select build profile**，
+或从 ACA → Run → Select build profile 选择配置。默认提供：
+
+- **Release**：正常刷题和计时，使用 \`-O2\`；
+- **Debug**：UBSan / 断言检查，便于定位未定义行为；
+- **ASan**：AddressSanitizer + UBSan，检查堆越界、释放后使用等内存问题。
+
+默认 \`compiler_preference: "auto"\` 会检查 PATH 中的 GCC 和 Clang，并使用可用的编译器。
+也可以设为 \`gcc\` 或 \`clang\` 强制选择。配置按源文件记忆，切换后编译命令变化会使缓存自动失效。
+ASan 需要工具链提供对应运行库；若链接失败，使用 Debug 或 Release。
+
+自定义配置写在对应语言的 \`run_settings\` 项下：
+
+\`\`\`json
+"build_profiles": {
+  "Release": {
+    "compile_cmds": {
+      "gcc": "g++ \\"{source_file}\\" -std=c++17 -O2 -o \\"{file_name}.exe\\"",
+      "clang": "clang++ \\"{source_file}\\" -std=c++17 -O2 -o \\"{file_name}.exe\\""
+    }
+  },
+  "My profile": {
+    "compile_cmd": "g++ \\"{source_file}\\" -std=c++20 -O2 -DLOCAL -o \\"{file_name}.exe\\""
+  }
+}
+\`\`\`
+
+普通运行与对拍会使用同一套命名配置。自定义配置可使用 \`compile_cmd\`，也可通过 \`compile_cmds\`
+分别提供 GCC / Clang / MSVC 命令；占位符与原有编译命令相同。
+
+## 导出失败测试点与缩减对拍反例
+
+运行完测试后，在命令面板执行 **Export failed tests with diagnostics**，选择目标目录。
+插件会导出已判定的非 AC 测试点，包括输入、标准答案、实际输出、stderr 和 \`manifest.json\`；
+清单包含测试点序号、判定、运行时间和内存，便于整理成回归测试包。
+
+对拍发现 WA 或崩溃后，切换到对应的 \`-stress\` 页面，执行
+**Minimize last stress counterexample**。插件会在临时目录重新编译用户程序和正解，
+尝试删除输入行、缩小整数，并对每个候选输入重新运行验证。成功后将缩小后的样例另存为新测试点，
+不会覆盖原始反例。通用缩减无法理解所有题目格式；目前配置了自定义 checker（SPJ）的题目会跳过自动缩减。
+\`stress_minimize_max_attempts\` 可控制尝试上限。缩减运行在后台，耗时较长时可用 Stop stress test 停止。
+
+## 文件夹导入报错排查
+
+导入一整组样例时，选择 **Import from folder**，路径应指向直接包含 \`1.in\`、\`1.out\` 等文件的目录，
+例如 \`...\2026 NOIP 模拟赛 Day 2\B\`。不要在 **Import from file** 中把文件夹当作单个输入文件；
+现在如果误选文件夹，插件会自动转交给批量导入流程。Windows 资源管理器复制的带引号路径和重复反斜杠
+会先被规范化。若看到 \`No cph-ng sample files found\`，说明选的是 cph-ng 单文件格式入口；
+普通的 \`.in/.out\` 文件夹应使用 **Import from folder**。

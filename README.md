@@ -426,3 +426,36 @@ Text printed by a checker itself is never touched.
 Built on FastOlympicCoding by Jatana. The verdict display follows cph-ng by langningchen, and
 the Companion integration follows FastOlympicCodingHook by DrSchwad. MIT licensed, see
 `LICENSE`.
+
+
+## Importing a folder of .in/.out samples
+
+Open the problem source file first, then run **Algorithm Competition Assistant: Import tests from file...**
+and choose **Import from folder**. Select the directory that directly contains pairs such as
+\`1.in\` / \`1.out\`, \`2.in\` / \`2.out\`. The importer also recognizes \`.ans\`, \`.in.txt\`,
+\`.out.txt\` and \`.ans.txt\`; an answer file may be absent. It merges imported samples with
+existing tests and does not overwrite manually accepted answers.
+
+On Windows, paste the folder path copied from Explorer, including quotes if Explorer adds them.
+A folder accidentally entered in the single-file flow is now routed to batch folder import.
+The cph-ng option is different: it looks for \`in.txt\` or \`input.txt\` in that format's folder;
+use **Import from folder** for ordinary numbered \`.in/.out\` files.
+
+## Build profiles, large samples and regression tools
+
+Use **Select build profile** on a source file to choose Release, Debug, ASan or a custom
+profile. The default compiler preference is automatic GCC/Clang detection; set
+\`compiler_preference\` to \`gcc\` or \`clang\` to force one. Profiles are configured under
+the language's \`run_settings\` entry as \`build_profiles\`, and stress testing now uses the
+same selected profile as normal Run.
+
+Large sample details are preview-limited by \`large_sample_preview_chars\` (default 65536),
+but the complete input is still passed to the program. Program output is separately capped
+by \`max_output_bytes\` (default 8 MB).
+
+After judging, run **Export failed tests with diagnostics** to export non-AC cases with
+input, expected/actual output, stderr and a manifest. After stress testing finds a mismatch
+or crash, use **Minimize last stress counterexample** on the \`-stress\` page. The reducer
+tries line deletion and integer simplification, re-running each candidate. It currently
+skips custom-checker (SPJ) problems because the generic output comparator cannot safely
+preserve checker-specific validity rules.

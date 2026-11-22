@@ -102,6 +102,15 @@ def main():
           repr(imp._normalize_import_path(quoted_dir)))
     check('normalization is idempotent',
           imp._normalize_import_path(imp._normalize_import_path(probe)) == probe)
+    win_path = r'"D:\\\Code_Source\\\NOIP\\\2026 NOIP 模拟赛 Day 2 - chenkuixu123456\\\B"'
+    normalized = imp._normalize_import_path(win_path)
+    check('quoted Windows path with repeated separators is normalized',
+          normalized == r'D:\Code_Source\NOIP\2026 NOIP 模拟赛 Day 2 - chenkuixu123456\B',
+          repr(normalized))
+    import inspect
+    check('single-file import routes folders to batch import',
+          'self._do_import_from_folder(input_path, window)' in
+          inspect.getsource(imp.CphImportTestsCommand._import_from_pair))
 
     failures = 0
     for label, ok, detail in checks:

@@ -39,11 +39,14 @@ def _normalize_import_path(path):
     POSIX paths on non-Windows hosts.
     """
     value = str(path or '').strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+    while len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
         value = value[1:-1].strip()
     if not value:
         return ''
-    if os.name == 'nt':
+    # Also normalize Windows drive/UNC paths in POSIX tests. ntpath collapses
+    # repeated separators (including triple backslashes from copied paths).
+    is_windows_path = bool(re.match(r'^(?:[A-Za-z]:[\\/]|\\\\)', value))
+    if os.name == 'nt' or is_windows_path:
         value = ntpath.normpath(value)
     else:
         value = os.path.normpath(value)
@@ -165,10 +168,16 @@ class CphImportTestsCommand(sublime_plugin.TextCommand):
         src_dir = os.path.dirname(src_file)
 
         def on_done(input_path):
+            input_path = _normalize_import_path(input_path)
             if not input_path:
                 return
             if _is_dir(input_path):
-                sublime.error_message(t('path_is_directory', path=input_path))
+                # A folder pasted into the single-file flow is a common
+                # Explorer mistake. Route it to the explicit batch importer.
+                self._do_import_from_folder(input_path, window)
+                return
+            if not _is_file_like(input_path):
+                sublime.status_message(t('file_not_found'))
                 return
             candidates = self._find_output_for_input(input_path)
             if not candidates:
@@ -187,7 +196,7 @@ class CphImportTestsCommand(sublime_plugin.TextCommand):
         def ask_for_path():
             window.show_input_panel(
                 t('input_file_path') + ':', '',
-                lambda s: on_done(s.strip() or None),
+                lambda s: on_done(s or None),
                 None, None
             )
 

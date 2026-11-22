@@ -10099,6 +10099,14 @@ def main():
           and 'chunk_size = 262144' in _pm_large_src
           and 'data = data[n:]' not in _pm_large_src)
 
+    # Stress compilation and counterexample reduction must use the same
+    # configured build profile as the normal Run command.
+    _stress_profile_src = _chk_src('cph_stress.py')
+    check('stress compilation honours named build profiles',
+          '_get_build_profile(file)' in _stress_profile_src
+          and '_profiles_for_file(file)' in _stress_profile_src
+          and 'if not using_profile:' in _stress_profile_src)
+
     # Stress counterexample minimizer has bounded, revalidated reduction passes
     _stress_src = _chk_src('cph_stress.py')
     check('stress minimizer uses delta debugging and numeric shrinking',

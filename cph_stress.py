@@ -11,6 +11,7 @@ import shlex
 import signal
 import subprocess
 import tempfile
+import shutil
 import threading
 import time
 
@@ -28,7 +29,9 @@ from .core.cph_i18n import t
 from .core.cph_verdict import (normalize_lines, outputs_equal,
                                is_crash_exit_code, looks_like_crash)
 from .core.cph_build_mode import (get_mode as _build_mode,
-                                  transform as _apply_build_mode)
+                                  transform as _apply_build_mode,
+                                  get_profile as _get_build_profile,
+                                  profiles_for_file as _profiles_for_file)
 from .core import cph_checker
 from .Modules.ProcessManager import _LenientFormat
 from .Modules.build_artifact import (output_path_from_compile_cmd,
@@ -903,19 +906,44 @@ def _compile_program(file, time_limit=30, sess=None):
 
     src_dir = os.path.dirname(file)
     base = os.path.splitext(os.path.basename(file))[0]
-    template = entry.get('compile_cmd')
+    profile_name = _get_build_profile(file)
+    profile = (_profiles_for_file(file) or {}).get(profile_name)
+    template = None
+    using_profile = False
+    if isinstance(profile, str):
+        template, using_profile = profile, True
+    elif isinstance(profile, dict):
+        commands = profile.get('compile_cmds') or {}
+        preference = str(get_settings().get('compiler_preference', 'auto') or 'auto').lower()
+        if preference not in ('auto', 'gcc', 'clang', 'msvc'):
+            preference = 'auto'
+        order = ([preference] if preference != 'auto' else ['gcc', 'clang', 'msvc'])
+        order += [name for name in ('gcc', 'clang', 'msvc') if name not in order]
+        executables = {'gcc': ('g++', 'gcc'), 'clang': ('clang++', 'clang'),
+                       'msvc': ('cl',)}
+        for compiler in order:
+            candidate = commands.get(compiler)
+            if not candidate:
+                continue
+            available = any(shutil.which(exe) for exe in executables.get(compiler, ()))
+            if preference != 'auto' or available:
+                template, using_profile = candidate, True
+                break
+        if template is None:
+            template = profile.get('compile_cmd')
+            using_profile = template is not None
+    if not using_profile:
+        template = entry.get('compile_cmd')
     if not template:
         # interpreted language (python/java handled by its own run_cmd)
         return True, file, ''
 
     cmd = _format_cmd(template, file)
     cmd = _strip_local_define(cmd)
-    # The panel's Debug/Release switch has to be the last word here as well:
-    # stress used to build from the raw command, so a solution toggled to Debug
-    # was stress-tested without the sanitizer and the assertion flags. A
-    # counterexample then came out of a binary the user never actually runs, and
-    # the undefined behaviour that produced it stayed invisible in the panel.
-    cmd = _apply_build_mode(cmd, _build_mode(file))
+    # Named profiles are complete commands; only legacy entries use the
+    # separate Release/Debug transform.
+    if not using_profile:
+        cmd = _apply_build_mode(cmd, _build_mode(file))
     # Build into a scratch directory: the same .exe is the one the user
     # rebuilds by hand, and running it for thousands of rounds made that
     # rebuild fail with "Permission denied" until the run was over.
