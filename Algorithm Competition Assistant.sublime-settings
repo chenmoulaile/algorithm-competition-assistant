@@ -351,6 +351,9 @@
 	"stress_generator_file": "",
 	// 对拍发现反例时，自动把它保存成一个正式测试点
 	"stress_save_counterexample": true,
+	// 对拍发现 WA / RE 后自动尝试缩减反例；也可在 -stress 页手动重试。
+	"stress_auto_minimize": true,
+	"stress_minimize_time_limit_seconds": 20,
 	// 对拍反例写入 __tests 的大小上限（字节，按输入的 UTF-8 字节数计）。
 	// 大样例（如多组数据）整个存进 __tests 没法调试：超过上限的反例只在
 	// 对拍窗口里展示并提示原因，不写入测试点；上限内照旧保存（含 seed）。

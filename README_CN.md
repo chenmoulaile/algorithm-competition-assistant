@@ -289,8 +289,8 @@ problem reads/writes files`，两个文件名会按源码名预填（`add.cpp` �
 
 ### 对拍反例自动缩减
 
-对拍发现 WA / RE 后，在命令面板执行
-`Algorithm Competition Assistant: Minimize last stress counterexample`。
+对拍发现 WA / RE 后，默认会在后台自动尝试缩减反例；也可以在命令面板执行
+`Algorithm Competition Assistant: Minimize last stress counterexample` 手动重试。
 
 插件会在独立临时目录重新编译待测程序和标准程序，然后：
 1. 尝试按行删除输入块（Delta Debugging）；
@@ -298,7 +298,10 @@ problem reads/writes files`，两个文件名会按源码名预填（`add.cpp` �
 3. 每次修改后都重新运行程序，只有仍能复现原问题的候选输入才会保留；
 4. 将更小的反例保存到测试数据，并显示原始长度和缩减后长度。
 
-缩减过程可能需要运行程序很多次，特别是每次运行都很慢时。它只针对已保存的最后一个反例，且当前版本暂不对自定义 checker（SPJ）反例执行缩减；如果源代码或编译环境已经改变、原反例无法复现，插件会停止而不会覆盖原始样例。
+缩减过程在后台执行，不会阻塞编辑器。可通过 `stress_auto_minimize` 关闭自动缩减，
+用 `stress_minimize_max_attempts` 与 `stress_minimize_time_limit_seconds` 限制尝试次数和总耗时。
+当前版本暂不对自定义 checker（SPJ）反例执行缩减；如果源代码或编译环境已经改变、原反例无法复现，
+插件会停止而不会覆盖原始样例。
 
 尝试次数上限由 `stress_minimize_max_attempts` 控制（默认 320，最大 2000）；先分配约三分之二给按行缩减，剩余预算用于整数简化。超大反例在对拍页面中也只显示预览，完整输入仍保存在测试数据中。
 

@@ -374,7 +374,27 @@ class CphImportTestsCommand(sublime_plugin.TextCommand):
         for pattern in ['*.in', '*.in.txt']:
             in_files.extend(glob.glob(os.path.join(selected_path, pattern)))
 
+        # Also accept one-case cph-ng/OJ directories that use in.txt instead
+        # of numbered *.in files.
         if not in_files:
+            cphng_input = None
+            for name in ('in.txt', 'input.txt', 'stdin.txt'):
+                candidate = os.path.join(selected_path, name)
+                if _is_file_like(candidate):
+                    cphng_input = candidate
+                    break
+            if cphng_input:
+                outputs = self._find_output_for_input(cphng_input)
+                try:
+                    input_text = _read_text(cphng_input)
+                    answer = _read_text(outputs[0]).strip() if outputs else ''
+                    self._save_and_show([{
+                        'test': input_text,
+                        'correct_answers': [answer] if answer else []
+                    }], selected_path, append=True)
+                except Exception as e:
+                    sublime.error_message(t('import_failed', error=str(e)))
+                return
             sublime.error_message(t('no_test_files_in_dir'))
             return
 

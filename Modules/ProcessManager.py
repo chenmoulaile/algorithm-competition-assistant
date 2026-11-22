@@ -985,27 +985,26 @@ class ProcessManager(object):
 			# The pipe broke earlier in this run; stop retrying (and stop
 			# printing the same status message for every pasted line).
 			return
-		if isinstance(s, str):
-			s = s.encode('utf-8', 'replace')
 		try:
-			# bufsize=0 gives a raw pipe: one write() may accept only part of
-			# the data (POSIX raw writes are partial by nature), so everything
-			# past the first ~64 KB used to be dropped silently. Loop until the
-			# buffer is consumed; a 0 return is a defensive stop against a
-			# writer that would otherwise spin forever.
-			# memoryview slices avoid copying the remaining tail after every
-			# partial raw-pipe write. With a 100MB sample and 64KB writes, the
-			# old bytes slicing repeatedly copied almost the entire input and
-			# approached quadratic work.
-			view = memoryview(s)
-			offset = 0
+			# Encode large text samples in bounded chunks so a huge input does
+			# not allocate another full-size UTF-8 bytes object before writing.
 			chunk_size = 262144
-			while offset < len(view):
-				end = min(offset + chunk_size, len(view))
-				n = proc.stdin.write(view[offset:end])
-				if not n or n < 0:
+			if isinstance(s, str):
+				chunks = (s[i:i + chunk_size].encode('utf-8', 'replace')
+						  for i in range(0, len(s), chunk_size))
+			else:
+				chunks = (s,)
+			for chunk in chunks:
+				view = memoryview(chunk)
+				offset = 0
+				while offset < len(view):
+					end = min(offset + chunk_size, len(view))
+					n = proc.stdin.write(view[offset:end])
+					if not n or n < 0:
+						break
+					offset += n
+				if offset < len(view):
 					break
-				offset += n
 			proc.stdin.flush()
 		except (OSError, ValueError) as e:
 			# The program exited before reading everything (BrokenPipeError

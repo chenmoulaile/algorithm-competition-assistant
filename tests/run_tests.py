@@ -1821,6 +1821,32 @@ def main():
     finally:
         settings.get_tests_relative_dir = _real_rel_dir
 
+    # Single-case cph-ng directories are accepted by the folder importer.
+    _import_tmp = tempfile.mkdtemp(prefix='aca-cphng-folder-')
+    try:
+        with open(os.path.join(_import_tmp, 'in.txt'), 'w', encoding='utf-8') as _f:
+            _f.write('10 20\\n')
+        with open(os.path.join(_import_tmp, 'out.txt'), 'w', encoding='utf-8') as _f:
+            _f.write('30\\n')
+        class _ImportView(object):
+            def file_name(self):
+                return os.path.join(_import_tmp, 'main.cpp')
+            def run_command(self, *args, **kwargs):
+                pass
+            def window(self):
+                return None
+        _import_cmd = importer.CphImportTestsCommand(_ImportView())
+        _captured_import = []
+        _import_cmd._save_and_show = lambda tests, source, append=False: _captured_import.extend(tests)
+        _import_cmd._do_import_from_folder(_import_tmp, None)
+        check('folder importer accepts cph-ng in.txt/out.txt layout',
+              len(_captured_import) == 1
+              and _captured_import[0].get('test') == '10 20\\n'
+              and _captured_import[0].get('correct_answers') == ['30'],
+              repr(_captured_import))
+    finally:
+        shutil.rmtree(_import_tmp, ignore_errors=True)
+
     # Import must detect a UTF-16 BOM; otherwise the bytes decode as UTF-8
     # mojibake / fall through to gb18030 and the utf-16 branch is dead code.
     import tempfile
@@ -10094,10 +10120,10 @@ def main():
           'def _large_sample_preview(value):' in _large_src
           and 'large_sample_preview_chars' in _large_src
           and 'escape_html(_large_sample_preview(self.test_string))' in _large_src)
-    check('large stdin writes use memoryview chunks instead of repeated byte slicing',
-          'view = memoryview(s)' in _pm_large_src
-          and 'chunk_size = 262144' in _pm_large_src
-          and 'data = data[n:]' not in _pm_large_src)
+    check('large stdin strings are encoded and written in bounded chunks',
+          "s[i:i + chunk_size].encode('utf-8', 'replace')" in _pm_large_src
+          and 'view = memoryview(chunk)' in _pm_large_src
+          and 'chunk_size = 262144' in _pm_large_src)
 
     # Stress compilation and counterexample reduction must use the same
     # configured build profile as the normal Run command.
@@ -10120,6 +10146,17 @@ def main():
           'stress_minimize_max_attempts' in _stress_src
           and 'max_attempts=line_budget' in _stress_src
           and 'max_attempts=token_budget' in _stress_src)
+    check('stress WA and RE automatically launch the minimizer',
+          _stress_src.count('_launch_auto_minimizer(sess)') >= 2
+          and 'def _launch_auto_minimizer(sess):' in _stress_src)
+    check('automatic minimization has a bounded wall-time setting',
+          'stress_minimize_time_limit_seconds' in _stress_src
+          and 'stress_auto_minimize' in _stress_src)
+    _numeric_shrunk, _numeric_attempts = stress_round._shrink_integer_tokens(
+        'n=100\\n', lambda value: value == 'n=0\\n', 10)
+    check('stress numeric shrinking reduces integer tokens',
+          _numeric_shrunk == 'n=0\\n' and _numeric_attempts > 0,
+          repr((_numeric_shrunk, _numeric_attempts)))
     check('stress counterexample report previews are bounded',
           'def _stress_preview(value):' in _stress_src
           and "_stress_preview(inp)" in _stress_src)

@@ -1885,6 +1885,7 @@ def _on_stress_failed(round_count, inp, user_out, std_out, checker_message='',
     text += _save_counterexample(sess, inp, (std_out or '').strip())
     _append_stress(sess, text)
     _stop_stress(sess)
+    _launch_auto_minimizer(sess)
 
 
 def _on_stress_crash(round_count, inp, rc, user_out, user_err, sess):
@@ -1926,6 +1927,7 @@ def _on_stress_crash(round_count, inp, rc, user_out, user_err, sess):
     text += _save_counterexample(sess, inp, '', crash=True)
     _append_stress(sess, text)
     _stop_stress(sess)
+    _launch_auto_minimizer(sess)
 
 
 
@@ -2035,9 +2037,13 @@ def _minimize_counterexample(sess, state, say):
         work['current_seed'] = state.get('seed')
         timeout = max(0.1, float(sess.get('time_limit', 2) or 2))
         tolerance = get_settings().get('float_tolerance', 0) or 0
+        budget = max(1.0, float(get_settings().get('stress_minimize_time_limit_seconds', 20) or 20))
+        deadline = time.time() + budget
         cache = {}
 
         def still_fails(candidate):
+            if time.time() >= deadline:
+                return False
             cache_key = (len(candidate), hash(candidate))
             if cache_key in cache:
                 return cache[cache_key]
@@ -2104,6 +2110,34 @@ def _minimize_counterexample(sess, state, say):
         _finish_stress(work)
 
 
+
+def _launch_minimizer(sess, state, automatic=False):
+    if not sess or not state or sess.get('minimizing'):
+        return False
+    sess['minimizing'] = True
+
+    def say(message):
+        sublime.set_timeout(lambda m=message: _append_stress(sess, m), 0)
+
+    def worker():
+        try:
+            _minimize_counterexample(sess, dict(state), say)
+        finally:
+            sess['minimizing'] = False
+
+    label = 'Automatically minimizing' if automatic else 'Starting'
+    say('\\n[ACA] %s last counterexample...\\n' % label)
+    thread = threading.Thread(target=worker)
+    thread.daemon = True
+    thread.start()
+    return True
+
+
+def _launch_auto_minimizer(sess):
+    if get_settings().get('stress_auto_minimize', True):
+        _launch_minimizer(sess, sess.get('last_counterexample'), automatic=True)
+
+
 class CphStressMinimizeCommand(sublime_plugin.TextCommand):
     """Minimize the last saved stress counterexample."""
 
@@ -2117,14 +2151,7 @@ class CphStressMinimizeCommand(sublime_plugin.TextCommand):
             sublime.status_message(t('stress_minimize_stop_first'))
             return
 
-        def say(message):
-            sublime.set_timeout(lambda m=message: _append_stress(sess, m), 0)
-
-        say('\n[ACA] Starting counterexample minimization...\n')
-        worker = threading.Thread(target=_minimize_counterexample,
-                                  args=(sess, dict(state), say))
-        worker.daemon = True
-        worker.start()
+        _launch_minimizer(sess, state, automatic=False)
 
 
 class CphStressReplayCommand(sublime_plugin.TextCommand):
