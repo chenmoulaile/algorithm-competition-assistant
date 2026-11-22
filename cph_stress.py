@@ -2061,10 +2061,10 @@ class CphStressMinimizeCommand(sublime_plugin.TextCommand):
         sess = _sessions.get(self.view.id()) or _session_for_view(self.view)
         state = sess.get('last_counterexample') if sess else None
         if not state or not state.get('input'):
-            sublime.status_message('[Algorithm Competition Assistant] No counterexample to minimize')
+            sublime.status_message('[Algorithm Competition Assistant] ' + t('stress_no_counterexample'))
             return
         if sess.get('running'):
-            sublime.status_message('[Algorithm Competition Assistant] Stop the stress test before minimizing')
+            sublime.status_message('[Algorithm Competition Assistant] ' + t('stress_minimize_stop_first'))
             return
 
         def say(message):

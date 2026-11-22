@@ -113,17 +113,17 @@ class CphSelectBuildProfileCommand(sublime_plugin.TextCommand):
 			return
 		profiles = profiles_for_file(file_name)
 		if not profiles:
-			sublime.status_message('当前语言没有配置 build_profiles；请先在 run_settings 中添加配置')
+			sublime.status_message('[Algorithm Competition Assistant] ' + t('build_profiles_missing'))
 			return
 		names = list(profiles.keys())
 		current = get_profile(file_name)
-		items = [[name, '当前使用' if name == current else ''] for name in names]
+		items = [[name, t('build_profile_current') if name == current else ''] for name in names]
 
 		def choose(index):
 			if index < 0 or index >= len(names):
 				return
 			selected = set_profile(file_name, names[index])
-			sublime.status_message('[Algorithm Competition Assistant] 编译配置: ' + selected)
+			sublime.status_message('[Algorithm Competition Assistant] ' + t('build_profile_now', profile=selected))
 			target = view if _is_run_view(view) else _paired_run_view(view, file_name)
 			if target is not None:
 				target.run_command('cph_test_manager', {'action': 'refresh_status'})
@@ -133,7 +133,7 @@ class CphSelectBuildProfileCommand(sublime_plugin.TextCommand):
 			window.show_quick_panel(items, choose)
 
 	def is_enabled(self):
-		return bool(self.view.file_name()) or _is_run_view(self.view)
+		return bool(self.view.file_name())
 
 
 class CphToggleBuildModeCommand(sublime_plugin.TextCommand):
@@ -167,7 +167,7 @@ class CphToggleBuildModeCommand(sublime_plugin.TextCommand):
 		if 'Release' in profiles and 'Debug' in profiles:
 			mode = 'Debug' if get_profile(file_name) == 'Release' else 'Release'
 			set_profile(file_name, mode)
-			sublime.status_message('[Algorithm Competition Assistant] 编译配置: ' + mode)
+			sublime.status_message('[Algorithm Competition Assistant] ' + t('build_profile_now', profile=mode))
 		else:
 			mode = toggle_build_mode(file_name)
 			if mode == MODE_DEBUG:

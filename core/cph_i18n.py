@@ -303,6 +303,11 @@ STRINGS = {
         'zh': '还没有记录到反例（或该轮没有种子）',
         'en': 'no counterexample recorded yet (or it has no seed)',
     },
+    'stress_minimize_stop_first': {
+        'zh': '请先停止对拍，再缩减反例',
+        'en': 'stop the stress test before minimizing its counterexample',
+    },
+
     'stress_replay_same': {
         'zh': '重放结果一致：这轮的差异可能是环境/时序导致的',
         'en': 'replay matched: the earlier difference may have been timing',
@@ -574,6 +579,31 @@ STRINGS = {
         'zh': '编译模式：{mode} ｜ {detail}',
         'en': 'build mode: {mode} | {detail}',
     },
+    'build_profiles_missing': {
+        'zh': '当前语言未配置 build_profiles；请先在 run_settings 中添加配置',
+        'en': 'no build_profiles are configured for this language; add them to run_settings first',
+    },
+    'build_profile_now': {
+        'zh': '编译配置：{profile}',
+        'en': 'build profile: {profile}',
+    },
+    'build_profile_current': {
+        'zh': '当前使用',
+        'en': 'active',
+    },
+    'export_failed_none': {
+        'zh': '没有已判定的失败测试点可导出',
+        'en': 'there are no judged failed tests to export',
+    },
+    'export_failed_dir': {
+        'zh': '失败测试点导出目录',
+        'en': 'failed-test export directory',
+    },
+    'export_failed_done': {
+        'zh': '已导出 {count} 个失败测试点到 {dir}',
+        'en': 'exported {count} failed test(s) to {dir}',
+    },
+
     'build_mode_debug_detail': {
         'zh': 'debug（-O0 -g -fsanitize=undefined -fsanitize-trap=undefined '
               '-D_GLIBCXX_ASSERTIONS）：崩溃行号可点，未定义行为当场抓到',

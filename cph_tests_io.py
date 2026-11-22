@@ -193,13 +193,13 @@ class CphExportFailedTestsCommand(sublime_plugin.TextCommand):
 			if verdict and verdict not in ('AC', 'WT', 'CP', 'CPD', 'JG', 'JGD', 'CMP'):
 				failed.append((index, test, verdict))
 		if not failed:
-			sublime.status_message('没有已判定的失败测试点可导出')
+			sublime.status_message(t('export_failed_none'))
 			return
 		window = self.view.window()
 		if window is None:
 			return
 		default_dir = os.path.join(os.path.dirname(file_name), 'failed_tests')
-		window.show_input_panel('失败测试点导出目录:', default_dir,
+		window.show_input_panel(t('export_failed_dir') + ':', default_dir,
 								self._export, None, None)
 
 	def _export(self, target_dir):
@@ -239,7 +239,7 @@ class CphExportFailedTestsCommand(sublime_plugin.TextCommand):
 				manifest.append(entry)
 			with open(os.path.join(target_dir, 'manifest.json'), 'w', encoding='utf-8') as f:
 				json.dump(manifest, f, ensure_ascii=False, indent=2)
-			sublime.status_message('已导出 %d 个失败测试点到 %s' % (len(failed), target_dir))
+			sublime.status_message(t('export_failed_done', count=len(failed), dir=target_dir))
 		except Exception as e:
 			sublime.error_message(t('import_failed', error=str(e)))
 

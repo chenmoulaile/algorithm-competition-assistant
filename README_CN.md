@@ -275,6 +275,18 @@ problem reads/writes files`，两个文件名会按源码名预填（`add.cpp` �
 另外，`run_cmd` 里如果用相对路径调产物（`./a.out`），文件模式下会找不到——程序是在
 临时目录里启动的。默认设置用的是 `{source_file_dir}` 绝对路径，不受影响。
 
+### 导出失败测试点
+
+在命令面板执行 `Algorithm Competition Assistant: Export failed tests with diagnostics`，
+输入目标目录即可只导出已经判定为失败的测试点。导出目录中会包含：
+- `.in`：测试输入；
+- `.ans`：标准答案（如果有）；
+- `.actual`：程序最近一次实际输出；
+- `.stderr`：程序标准错误输出（如果有）；
+- `manifest.json`：测试点编号、判定、运行时间和内存信息。
+
+该命令不会导出尚未运行或仍在运行的测试点，也不会把 AC 测试点混入失败样例目录。
+
 ### 对拍反例自动缩减
 
 对拍发现 WA / RE 后，在命令面板执行
