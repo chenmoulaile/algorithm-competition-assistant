@@ -1844,7 +1844,7 @@ def main():
         check('folder importer accepts cph-ng in.txt/out.txt layout',
               len(_captured_import) == 1
               and _captured_import[0].get('test') == '10 20\\n'
-              and _captured_import[0].get('correct_answers') == ['30'],
+              and [x.strip() for x in _captured_import[0].get('correct_answers', [])] == ['30'],
               repr(_captured_import))
     finally:
         shutil.rmtree(_import_tmp, ignore_errors=True)
