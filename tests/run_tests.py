@@ -10087,6 +10087,18 @@ def main():
           'partially correct (checker verdict' in _readme_fix
           and '部分正确（checker 判定' in _readme_cn_fix)
 
+    # Large sample safety: full input is retained, but Minihtml previews are bounded
+    _large_src = _chk_src('test_manager.py')
+    _pm_large_src = _chk_src(os.path.join('Modules', 'ProcessManager.py'))
+    check('large samples use a bounded Minihtml preview',
+          'def _large_sample_preview(value):' in _large_src
+          and 'large_sample_preview_chars' in _large_src
+          and 'escape_html(_large_sample_preview(self.test_string))' in _large_src)
+    check('large stdin writes use memoryview chunks instead of repeated byte slicing',
+          'view = memoryview(s)' in _pm_large_src
+          and 'chunk_size = 262144' in _pm_large_src
+          and 'data = data[n:]' not in _pm_large_src)
+
     print('')
     print('%d checks, %d failures' % (CHECKS[0], len(FAILURES)))
     if FAILURES:

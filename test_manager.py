@@ -70,6 +70,27 @@ def clamp_output(current, chunk, limit):
 	return chunk[:room]
 
 
+
+def _large_sample_preview(value):
+	"""Bound Minihtml payloads while keeping the full sample for the process.
+
+	Very large test data belongs in the program's stdin, not in a giant
+	phantom/detail HTML string. The user can still copy the full input/output
+	from the existing copy commands or inspect the saved test file.
+	"""
+	if value is None:
+		return ''
+	text = str(value)
+	try:
+		limit = int(get_settings().get('large_sample_preview_chars', 65536) or 65536)
+	except Exception:
+		limit = 65536
+	if limit <= 0 or len(text) <= limit:
+		return text
+	omitted = len(text) - limit
+	return text[:limit] + '\n\n... [ACA preview truncated; %d more characters] ...' % omitted
+
+
 def post_to_ui(fn):
 	"""Run fn on the main thread.
 
@@ -982,18 +1003,18 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 						 .replace('\n', '<br>'))
 
 			# sample input section
-			input_text = escape_html(self.test_string)
+			input_text = escape_html(_large_sample_preview(self.test_string))
 			input_display = 'block' if input_text.strip() else 'none'
 
 			# Show a single answer section: the accepted correct answer if any,
 			# otherwise the expected output; hidden when neither exists.
 			if self.correct_answers:
 				expected_label = t('correct_answer')
-				expected = escape_html(_primary_answer(self))
+				expected = escape_html(_large_sample_preview(_primary_answer(self)))
 				expected_display = 'block'
 			elif self.expected_output:
 				expected_label = t('expected_output')
-				expected = escape_html(self.expected_output)
+				expected = escape_html(_large_sample_preview(self.expected_output))
 				expected_display = 'block'
 			else:
 				expected_label = t('expected_output')

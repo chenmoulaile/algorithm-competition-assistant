@@ -991,12 +991,19 @@ class ProcessManager(object):
 			# past the first ~64 KB used to be dropped silently. Loop until the
 			# buffer is consumed; a 0 return is a defensive stop against a
 			# writer that would otherwise spin forever.
-			data = s
-			while data:
-				n = proc.stdin.write(data)
+			# memoryview slices avoid copying the remaining tail after every
+			# partial raw-pipe write. With a 100MB sample and 64KB writes, the
+			# old bytes slicing repeatedly copied almost the entire input and
+			# approached quadratic work.
+			view = memoryview(s)
+			offset = 0
+			chunk_size = 262144
+			while offset < len(view):
+				end = min(offset + chunk_size, len(view))
+				n = proc.stdin.write(view[offset:end])
 				if not n or n < 0:
 					break
-				data = data[n:]
+				offset += n
 			proc.stdin.flush()
 		except (OSError, ValueError) as e:
 			# The program exited before reading everything (BrokenPipeError
