@@ -1,0 +1,34 @@
+Algorithm Competition Assistant 4.0.0
+======================================
+
+A major release: named build profiles, counterexample shrinking, regression exports,
+and safer judging, IO and process handling.
+
+New features:
+* Named build profiles (Release / Debug / ASan) selectable per source file via
+  "Select build profile"; switching profiles recompiles automatically.
+* Automatic GCC/Clang detection with a compiler_preference override; Run and stress
+  testing now share the same compiler choice.
+* "Export failed tests with diagnostics" exports judged failing cases with input,
+  expected/actual output, stderr and a manifest.
+* Stress counterexamples are minimized automatically in the background (line
+  deletion, integer shrinking, each candidate re-verified), with a manual command
+  to retry; the original counterexample is never overwritten.
+* Folder import also accepts single-case cph-ng layouts (in.txt + out.txt).
+* Large samples get bounded UI previews (large_sample_preview_chars, default 65536)
+  while the full input still reaches the program; stdin is written in chunks.
+
+Important fixes:
+* Default settings JSON made valid; Ctrl+Alt+G stays in sync with the named profiles.
+* Stress testing compiles with the same profile as Run; POSIX path casing and -Ofast
+  detection corrected.
+* Output truncated at max_output_bytes is judged OLE in both serial and parallel runs.
+* Unsafe file-IO names fall back to stdin; scratch dirs cleaned up even with no output.
+* Process groups are killed and reaped for stress, calibration and the watchdog.
+* Counterexample shrinking shrinks numbers correctly, preserves the original failure
+  mode, and bounds memory/time.
+* Imported paths are unquoted/normalized; folders given to the single-file importer
+  are routed to batch import.
+* Status messages of the new commands follow the interface language.
+
+Regression suite: 1187 checks, 0 failures.
