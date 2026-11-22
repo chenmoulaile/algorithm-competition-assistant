@@ -27,7 +27,8 @@
 	// 默认命令使用正斜杠（Windows / Linux / macOS 都可用，反斜杠同样有效）。
 	// 想改成自己的写法，把 run_settings 复制到 User 设置里覆盖即可。
 	"build_profile": "Release",
-	"compiler_preference": "auto", // auto / gcc / clang
+	// auto / gcc / clang
+	"compiler_preference": "auto",
 	"run_settings": [
 		{
 			"name": "C++",

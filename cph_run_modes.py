@@ -163,13 +163,19 @@ class CphToggleBuildModeCommand(sublime_plugin.TextCommand):
 		if not file_name:
 			sublime.status_message('[Algorithm Competition Assistant] ' + t('save_file_first'))
 			return
-		mode = toggle_build_mode(file_name)
-		if mode == MODE_DEBUG:
-			detail = t('build_mode_debug_detail')
+		profiles = profiles_for_file(file_name)
+		if 'Release' in profiles and 'Debug' in profiles:
+			mode = 'Debug' if get_profile(file_name) == 'Release' else 'Release'
+			set_profile(file_name, mode)
+			sublime.status_message('[Algorithm Competition Assistant] 编译配置: ' + mode)
 		else:
-			detail = t('build_mode_release_detail')
-		sublime.status_message('[Algorithm Competition Assistant] '
-							   + t('build_mode_now', mode=mode, detail=detail))
+			mode = toggle_build_mode(file_name)
+			if mode == MODE_DEBUG:
+				detail = t('build_mode_debug_detail')
+			else:
+				detail = t('build_mode_release_detail')
+			sublime.status_message('[Algorithm Competition Assistant] '
+								   + t('build_mode_now', mode=mode, detail=detail))
 
 		# The compile cache key includes the command, so the next run
 		# recompiles automatically; just refresh the panel's status label.
