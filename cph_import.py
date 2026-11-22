@@ -532,7 +532,7 @@ class CphImportTestsFileCommand(sublime_plugin.TextCommand):
             # The file picker command is also reachable from older menus and
             # key bindings.  If a folder is supplied, do the useful thing and
             # route it through the batch importer instead of trying open().
-            self._do_import_from_folder(file_path, self.view.window())
+            CphImportTestsCommand(self.view)._do_import_from_folder(file_path, self.view.window())
             return
 
         candidates = []
