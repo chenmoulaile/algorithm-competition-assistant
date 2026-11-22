@@ -9839,8 +9839,11 @@ def main():
           'copy.deepcopy(_cache)' in _stats_src
           and '_schedule_flush_unlocked()' in _stats_src,
           'a concurrent record_run corrupted the json dump')
-    check('calibrate cleans up and kills a runaway bench',
-          'run.kill()' in _cal_src and 'time.monotonic()' in _cal_src)
+    check('calibrate bounds compile time and kills process trees',
+          'def _kill_process_tree(proc):' in _cal_src
+          and 'communicate(timeout=30)' in _cal_src
+          and 'time.monotonic()' in _cal_src
+          and 'start_new_session=(os.name != \'nt\')' in _cal_src)
 
     # compile frees a still-running exe before rebuilding.
     check('compile kills the tracked process holding the output exe',
