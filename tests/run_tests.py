@@ -1826,9 +1826,9 @@ def main():
     _import_tmp = _tempfile_for_import.mkdtemp(prefix='aca-cphng-folder-')
     try:
         with open(os.path.join(_import_tmp, 'in.txt'), 'w', encoding='utf-8') as _f:
-            _f.write('10 20\\n')
+            _f.write('10 20')
         with open(os.path.join(_import_tmp, 'out.txt'), 'w', encoding='utf-8') as _f:
-            _f.write('30\\n')
+            _f.write('30')
         class _ImportView(object):
             def file_name(self):
                 return os.path.join(_import_tmp, 'main.cpp')
@@ -1843,7 +1843,7 @@ def main():
         _import_cmd._do_import_from_folder(_import_tmp, None)
         check('folder importer accepts cph-ng in.txt/out.txt layout',
               len(_captured_import) == 1
-              and _captured_import[0].get('test') == '10 20\\n'
+              and _captured_import[0].get('test') == '10 20'
               and [x.strip() for x in _captured_import[0].get('correct_answers', [])] == ['30'],
               repr(_captured_import))
     finally:
