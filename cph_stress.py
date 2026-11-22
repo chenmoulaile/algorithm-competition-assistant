@@ -1857,15 +1857,16 @@ def _on_stress_failed(round_count, inp, user_out, std_out, checker_message='',
         text += '[Algorithm Competition Assistant] ' + t('stress_checker_message',
                                        message=checker_message[:500]) + '\n\n'
     text += '[' + t('stress_input') + ']\n'
-    text += inp + '\n'
+    text += _stress_preview(inp) + '\n'
     text += '\n[' + t('stress_user_output') + ']\n'
-    text += user_out + '\n'
+    text += _stress_preview(user_out) + '\n'
     text += '\n[' + t('stress_std_output') + ']\n'
-    text += std_out + '\n'
+    text += _stress_preview(std_out) + '\n'
     text += '\n[' + t('stress_diff') + ']\n'
-    user_lines = user_out.splitlines()
-    std_lines = std_out.splitlines()
-    max_lines = max(len(user_lines), len(std_lines))
+    # Avoid constructing an enormous line-by-line diff in the stress page.
+    user_lines = _stress_preview(user_out).splitlines()
+    std_lines = _stress_preview(std_out).splitlines()
+    max_lines = min(max(len(user_lines), len(std_lines)), 2000)
     for i in range(max_lines):
         u = user_lines[i] if i < len(user_lines) else ''
         s = std_lines[i] if i < len(std_lines) else ''
@@ -2048,18 +2049,16 @@ def _minimize_counterexample(sess, state, say):
                 cache[cache_key] = result
                 return result
             if tle_u or rc_u != 0:
-                rc_s, out_s, err_s, tle_s = _run_program(
-                    std_argv, candidate, cwd=os.path.dirname(std_file) or None,
-                    time_limit=timeout, sess=work)
-                result = not tle_s and rc_s == 0
-                cache[cache_key] = result
-                return result
+                # The original was a wrong answer, not a crash/timeout. Do
+                # not accept a different failure mode as a valid reduction.
+                cache[cache_key] = False
+                return False
             rc_s, out_s, err_s, tle_s = _run_program(
                 std_argv, candidate, cwd=os.path.dirname(std_file) or None,
                 time_limit=timeout, sess=work)
             result = (not tle_s and rc_s == 0 and
                       not outputs_equal(out_u, out_s, tolerance))
-            cache[candidate] = result
+            cache[cache_key] = result
             return result
 
         if not still_fails(original):
