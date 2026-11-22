@@ -16,6 +16,7 @@ import sublime_plugin
 import os
 import re
 import glob
+import ntpath
 
 from .core.cph_settings import (save_tests, load_all_tests, notify_io_error,
 								tests_lock)
@@ -26,6 +27,27 @@ from .core.cph_i18n import t
 def _strip_input_suffix(stem):
     """"1.in" -> "1" so "1.out.txt" pairs correctly with "1.in.txt"."""
     return re.sub(r'(?i)\.in$', '', stem)
+
+
+def _normalize_import_path(path):
+    """Normalize paths pasted from Explorer or entered with surrounding quotes.
+
+    Explorer's Copy as path includes quotes for paths containing spaces.  The
+    old import panel treated those quote characters as part of the filename,
+    which made os.path.exists/isdir fail and eventually surfaced WinError 22.
+    ntpath.normpath also collapses repeated Windows separators without changing
+    POSIX paths on non-Windows hosts.
+    """
+    value = str(path or '').strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+        value = value[1:-1].strip()
+    if not value:
+        return ''
+    if os.name == 'nt':
+        value = ntpath.normpath(value)
+    else:
+        value = os.path.normpath(value)
+    return value
 
 
 def _is_dir(path):
@@ -55,6 +77,7 @@ def _is_file_like(path):
 
 
 def _read_text(file_path):
+    file_path = _normalize_import_path(file_path)
     """Read test data tolerating non-UTF-8 encodings.
 
     Chinese OJ data is often GB2312/GBK; strict UTF-8 decoding used to
@@ -244,6 +267,7 @@ class CphImportTestsCommand(sublime_plugin.TextCommand):
         )
 
     def _do_import_single(self, file_path):
+        file_path = _normalize_import_path(file_path)
         if not file_path:
             return
         # Windows reports "Permission denied" for a directory handed to
@@ -324,6 +348,7 @@ class CphImportTestsCommand(sublime_plugin.TextCommand):
 
     def _do_import_from_folder(self, selected_path, window):
         """Import all .in/.out pairs from a folder; merges (dedup) with existing tests."""
+        selected_path = _normalize_import_path(selected_path)
         if not selected_path:
             return
         # A data FILE pasted here used to reach open() and surface as
@@ -494,6 +519,7 @@ class CphPickImportFileCommand(sublime_plugin.TextCommand):
 
 class CphImportTestsFileCommand(sublime_plugin.TextCommand):
     def run(self, edit, file_path=None):
+        file_path = _normalize_import_path(file_path)
         if not file_path:
             return
 
@@ -503,7 +529,10 @@ class CphImportTestsFileCommand(sublime_plugin.TextCommand):
             return
 
         if _is_dir(file_path):
-            sublime.error_message(t('path_is_directory', path=file_path))
+            # The file picker command is also reachable from older menus and
+            # key bindings.  If a folder is supplied, do the useful thing and
+            # route it through the batch importer instead of trying open().
+            self._do_import_from_folder(file_path, self.view.window())
             return
 
         candidates = []

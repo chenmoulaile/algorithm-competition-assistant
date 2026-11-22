@@ -91,6 +91,18 @@ def main():
     check('_is_file_like rejects a missing path',
           imp._is_file_like(os.path.join(SAMPLE_DIR, 'nope.in')) is False)
 
+
+    # 4. Explorer-style quoted paths are normalized before any filesystem
+    #    predicate or open() call. This is the reported Windows failure mode.
+    quoted_file = '"' + probe + '"'
+    quoted_dir = '"' + SAMPLE_DIR + '"'
+    check('quoted file paths are unwrapped', imp._normalize_import_path(quoted_file) == probe,
+          repr(imp._normalize_import_path(quoted_file)))
+    check('quoted folder paths are unwrapped', imp._normalize_import_path(quoted_dir) == SAMPLE_DIR,
+          repr(imp._normalize_import_path(quoted_dir)))
+    check('normalization is idempotent',
+          imp._normalize_import_path(imp._normalize_import_path(probe)) == probe)
+
     failures = 0
     for label, ok, detail in checks:
         if ok:
