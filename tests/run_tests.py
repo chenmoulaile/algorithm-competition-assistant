@@ -1822,7 +1822,8 @@ def main():
         settings.get_tests_relative_dir = _real_rel_dir
 
     # Single-case cph-ng directories are accepted by the folder importer.
-    _import_tmp = tempfile.mkdtemp(prefix='aca-cphng-folder-')
+    _tempfile_for_import = __import__('tempfile')
+    _import_tmp = _tempfile_for_import.mkdtemp(prefix='aca-cphng-folder-')
     try:
         with open(os.path.join(_import_tmp, 'in.txt'), 'w', encoding='utf-8') as _f:
             _f.write('10 20\\n')
