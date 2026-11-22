@@ -13,13 +13,16 @@ import threading
 import time
 import codecs
 import locale
+import shutil
 
 from .memprobe import MemorySampler, bytes_to_mb, sample_memory_bytes
 from .build_artifact import output_path_from_compile_cmd, resolve_artifact, retarget_command, names_match
 from ..core.cph_i18n import t
 from ..core.cph_settings import get_settings, is_safe_io_filename
 from ..core import cph_state
-from ..core.cph_build_mode import get_mode as _build_mode, transform as _apply_build_mode
+from ..core.cph_build_mode import (get_mode as _build_mode, transform as _apply_build_mode,
+                                   get_profile as _get_build_profile,
+                                   profiles_for_file as _profiles_for_file)
 from ..core.cph_std_ladder import apply as _std_apply, escalate as _std_escalate
 from ..core.cph_gdb_trace import (find_gdb as _find_gdb, find_crash as _find_crash,
                                    replay as _replay_under_gdb,
@@ -349,13 +352,37 @@ class ProcessManager(object):
 		file_ext = path.splitext(self.file)[1][1:]
 		for x in opt:
 			if file_ext in x['extensions']:
-				if x['compile_cmd'] is None:
+				profile_name = _get_build_profile(self.file)
+				profile = (_profiles_for_file(self.file) or {}).get(profile_name)
+				profile_cmd = None
+				if isinstance(profile, str):
+					profile_cmd = profile
+				elif isinstance(profile, dict):
+					commands = profile.get('compile_cmds') or {}
+					if commands:
+						preference = str(get_settings().get('compiler_preference', 'auto')).lower()
+						order = ([preference] if preference != 'auto' else
+								 ['gcc', 'clang', 'msvc'])
+						order += [name for name in ('gcc', 'clang', 'msvc') if name not in order]
+						for compiler in order:
+							candidate = commands.get(compiler)
+							if not candidate:
+								continue
+							exe = {'gcc': 'g++', 'clang': 'clang++', 'msvc': 'cl'}.get(compiler, '')
+							if preference != 'auto' or not exe or shutil.which(exe):
+								profile_cmd = candidate
+								break
+					if profile_cmd is None:
+						profile_cmd = profile.get('compile_cmd')
+				using_profile = profile_cmd is not None
+				selected_cmd = profile_cmd if using_profile else x.get('compile_cmd')
+				if selected_cmd is None:
 					return None
-				cmd = self.format_command(self._expand_optional(x['compile_cmd'], x))
-				# Debug / Release switch (see core/cph_build_mode). Applied
-				# here so every consumer - the run itself, the compile cache
-				# fingerprint and doctor - sees the same command.
-				cmd = _apply_build_mode(cmd, _build_mode(self.file))
+				cmd = self.format_command(self._expand_optional(selected_cmd, x))
+				# Named profiles are complete compiler configurations. The
+				# legacy Release/Debug transform only applies to the base command.
+				if not using_profile:
+					cmd = _apply_build_mode(cmd, _build_mode(self.file))
 				# -std ladder (see core/cph_std_ladder): the command carries the
 				# standard this file has proven it needs, which is usually the
 				# cheap one. Also resolved here on purpose: the compile cache

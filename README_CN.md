@@ -183,6 +183,36 @@ C++20 / 23——编译命令写什么标准，就用什么标准编。
 多文件编译用 `extra_sources`（glob）和 `include_dirs`，在编译命令里用
 `{extra_sources}` / `{include_dirs}` 占位。
 
+### 多套编译配置与编译器自动选择
+
+C++ 默认提供 `Release`、`Debug`、`ASan` 三套配置。打开命令面板，执行
+`Algorithm Competition Assistant: Select build profile`，即可切换当前源文件的编译配置。
+选择结果按源文件记忆；编译缓存会把最终编译命令纳入指纹，切换配置后会自动重新编译。
+
+默认配置在 GCC 和 Clang 都可用时优先选择 GCC；如果找不到 GCC，则自动选择 Clang。
+可在 User Settings 中设置 `compiler_preference` 为 `"gcc"` 或 `"clang"` 强制指定。
+当前自动适配覆盖 GCC / Clang 的命令语法；MSVC 的 `cl.exe` 参数和产物规则不同，
+请先为 MSVC 单独写一套自定义 `compile_cmd`，不要直接把 GCC 命令交给 MSVC。
+
+自定义配置写在对应语言的 `run_settings` 项中，例如：
+
+```json
+"build_profiles": {
+  "Release": {
+    "compile_cmds": {
+      "gcc": "g++ \"{source_file}\" -std=c++17 -O2 -o \"{file_name}.exe\"",
+      "clang": "clang++ \"{source_file}\" -std=c++17 -O2 -o \"{file_name}.exe\""
+    }
+  },
+  "Fast local": {
+    "compile_cmd": "g++ \"{source_file}\" -std=c++20 -O3 -march=native -o \"{file_name}.exe\""
+  }
+}
+```
+
+每个配置可以是单条 `compile_cmd`，也可以用 `compile_cmds` 按编译器分别指定命令。
+当前 profile 选择命令不会再叠加旧的 Debug / Release 自动改写，命令中的编译参数完全由配置本身负责。
+
 ## 详情页
 
 `详情` 打开的是一个真实的编辑器标签页，文字可以选中、复制。里面有：

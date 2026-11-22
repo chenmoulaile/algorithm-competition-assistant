@@ -26,6 +26,8 @@
 	//       顺序写错会导致编译失败！
 	// 默认命令使用正斜杠（Windows / Linux / macOS 都可用，反斜杠同样有效）。
 	// 想改成自己的写法，把 run_settings 复制到 User 设置里覆盖即可。
+	"build_profile": "Release",
+	"compiler_preference": "auto", // auto / gcc / clang
 	"run_settings": [
 		{
 			"name": "C++",
@@ -36,6 +38,27 @@
 			// -std 用 c++17：实测比 c++23 每次编译快约 1.2 秒
 			//   （3.4s vs 4.7s，含 <bits/stdc++.h>），也是多数 OJ 的口径。
 			"compile_cmd": "g++ \"{source_file}\" {extra_sources} {include_dirs} -std=c++17 -O2 -o \"{file_name}.exe\"",
+			// 命名编译配置。GCC / Clang 会按 PATH 自动选择；可继续添加自定义配置。
+			"build_profiles": {
+				"Release": {
+					"compile_cmds": {
+						"gcc": "g++ \"{source_file}\" {extra_sources} {include_dirs} -std=c++17 -O2 -o \"{file_name}.exe\"",
+						"clang": "clang++ \"{source_file}\" {extra_sources} {include_dirs} -std=c++17 -O2 -o \"{file_name}.exe\""
+					}
+				},
+				"Debug": {
+					"compile_cmds": {
+						"gcc": "g++ \"{source_file}\" {extra_sources} {include_dirs} -std=c++17 -O0 -g -fsanitize=undefined -fsanitize-trap=undefined -fno-omit-frame-pointer -D_GLIBCXX_ASSERTIONS -o \"{file_name}.exe\"",
+						"clang": "clang++ \"{source_file}\" {extra_sources} {include_dirs} -std=c++17 -O0 -g -fsanitize=undefined -fno-omit-frame-pointer -D_GLIBCXX_ASSERTIONS -o \"{file_name}.exe\""
+					}
+				},
+				"ASan": {
+					"compile_cmds": {
+						"gcc": "g++ \"{source_file}\" {extra_sources} {include_dirs} -std=c++17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -o \"{file_name}.exe\"",
+						"clang": "clang++ \"{source_file}\" {extra_sources} {include_dirs} -std=c++17 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -o \"{file_name}.exe\""
+					}
+				}
+			},
 			// 运行命令（编译产物在源代码目录下）
 			"run_cmd": "\"{source_file_dir}/{file_name}.exe\" {args}",
 			// 保存后自动格式化的命令（需开启 auto_format_on_save）。{source_file}

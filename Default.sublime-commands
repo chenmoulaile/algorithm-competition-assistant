@@ -166,6 +166,10 @@
 		"command": "cph_toggle_build_mode"
 	},
 	{
+		"caption": "Algorithm Competition Assistant: Select build profile",
+		"command": "cph_select_build_profile"
+	},
+	{
 		"caption": "Algorithm Competition Assistant: Run all tests in parallel",
 		"command": "cph_run_parallel"
 	},

@@ -10,7 +10,8 @@ import os
 import sublime
 import sublime_plugin
 
-from .core.cph_build_mode import MODE_DEBUG, MODE_RELEASE, get_mode, toggle as toggle_build_mode
+from .core.cph_build_mode import (MODE_DEBUG, MODE_RELEASE, get_mode, toggle as toggle_build_mode,
+                                  profiles_for_file, get_profile, set_profile)
 from .core.cph_i18n import t
 
 #: Palette captions are Python strings (a menu caption is static JSON and can
@@ -98,6 +99,41 @@ class CphRunCleanTestsCommand(_RunModeMixin, sublime_plugin.TextCommand):
 	the re-dispatch and no longer overwritten by the restored session."""
 
 	flags = {'clr_tests': True}
+
+
+
+class CphSelectBuildProfileCommand(sublime_plugin.TextCommand):
+	"""Select one named compiler configuration for the current source file."""
+
+	def run(self, edit):
+		view = self.view
+		file_name = view.file_name()
+		if not file_name:
+			sublime.status_message('[Algorithm Competition Assistant] ' + t('save_file_first'))
+			return
+		profiles = profiles_for_file(file_name)
+		if not profiles:
+			sublime.status_message('当前语言没有配置 build_profiles；请先在 run_settings 中添加配置')
+			return
+		names = list(profiles.keys())
+		current = get_profile(file_name)
+		items = [[name, '当前使用' if name == current else ''] for name in names]
+
+		def choose(index):
+			if index < 0 or index >= len(names):
+				return
+			selected = set_profile(file_name, names[index])
+			sublime.status_message('[Algorithm Competition Assistant] 编译配置: ' + selected)
+			target = view if _is_run_view(view) else _paired_run_view(view, file_name)
+			if target is not None:
+				target.run_command('cph_test_manager', {'action': 'refresh_status'})
+
+		window = view.window()
+		if window is not None:
+			window.show_quick_panel(items, choose)
+
+	def is_enabled(self):
+		return bool(self.view.file_name()) or _is_run_view(self.view)
 
 
 class CphToggleBuildModeCommand(sublime_plugin.TextCommand):

@@ -179,6 +179,48 @@ def transform(cmd, mode):
 	out = out.rstrip() + ' ' + _FRAME_POINTER_FLAG + ' ' + _ASSERTIONS
 	return _tidy(out)
 
+
+# Named compile profiles are selected per source file. The definitions live in
+# each language's run_settings entry so C++ and C can have different commands.
+_profiles = {}
+
+
+def profiles_for_file(file):
+	"""Return the named build profiles configured for this source extension."""
+	if not file:
+		return {}
+	try:
+		ext = os.path.splitext(file)[1][1:].lower()
+		for entry in get_settings().get('run_settings', []) or []:
+			if ext in [str(x).lower() for x in entry.get('extensions', [])]:
+				value = entry.get('build_profiles') or {}
+				return value if isinstance(value, dict) else {}
+	except Exception:
+		pass
+	return {}
+
+
+def get_profile(file):
+	"""Selected named compile profile for a source file."""
+	if file:
+		stored = _profiles.get(_norm(file))
+		if stored:
+			return stored
+	try:
+		return get_settings().get('build_profile', 'Release') or 'Release'
+	except Exception:
+		return 'Release'
+
+
+def set_profile(file, profile):
+	"""Select a configured profile for one source file."""
+	available = profiles_for_file(file)
+	if profile not in available:
+		return get_profile(file)
+	_profiles[_norm(file)] = profile
+	return profile
+
+
 def label(file):
 	"""Short status-bar label, or '' in the default (release) mode."""
 	return 'DEBUG' if get_mode(file) == MODE_DEBUG else ''

@@ -62,6 +62,10 @@
 							{
 								"caption": "Debug / Release build mode (Ctrl+Alt+G)",
 								"command": "cph_toggle_build_mode"
+							},
+							{
+								"caption": "Select build profile (Release / Debug / ASan / custom)",
+								"command": "cph_select_build_profile"
 							}
 						]
 					},
