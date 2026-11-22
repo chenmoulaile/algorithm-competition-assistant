@@ -1836,7 +1836,8 @@ def main():
                 pass
             def window(self):
                 return None
-        _import_cmd = importer.CphImportTestsCommand(_ImportView())
+        _importer_for_test = importlib.import_module(pkg + '.cph_import')
+        _import_cmd = _importer_for_test.CphImportTestsCommand(_ImportView())
         _captured_import = []
         _import_cmd._save_and_show = lambda tests, source, append=False: _captured_import.extend(tests)
         _import_cmd._do_import_from_folder(_import_tmp, None)
