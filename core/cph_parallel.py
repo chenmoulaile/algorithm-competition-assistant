@@ -22,7 +22,8 @@ import time
 import sublime
 
 from .cph_verdict import (get_verdict, get_verdict_for_answers,
-                          find_crash_location, looks_like_crash)
+                          find_crash_location, looks_like_crash,
+                          apply_output_limit)
 from .cph_gdb_trace import names_source as _names_source
 
 #: Extra allowance on top of the time limit before we kill a run. It covers
@@ -299,6 +300,9 @@ def _run_one(make_manager, input_text, expected, time_limit_ms, memory_limit_mb,
                 memory_used_mb=memory,
                 float_tolerance=float_tolerance,
             )
+
+        result['verdict'] = apply_output_limit(
+            result.get('verdict'), result.get('capped', False))
 
         if judge is not None and not cancelled \
                 and result['verdict']['name'] in ('AC', 'WA', 'PE'):

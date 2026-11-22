@@ -6332,6 +6332,70 @@ def main():
           and verdict.get_verdict_by_code(124, 10, 2000, 256, '', '', 'x\n')['name'] == 'TLE'
           and verdict.get_verdict_by_code(1, 10, 2000, 256, '', '', 'x\n')['name'] == 'RE')
 
+    _ole = verdict.apply_output_limit(verdict.get_verdict('accepted'), True)
+    _tle_after_cap = verdict.apply_output_limit(
+        verdict.get_verdict('time_limit_exceed'), True)
+    _sk_after_cap = verdict.apply_output_limit(
+        verdict.get_verdict('skipped'), True)
+    check('truncated output cannot be reported as AC',
+          _ole['name'] == 'OLE'
+          and _tle_after_cap['name'] == 'TLE'
+          and _sk_after_cap['name'] == 'SK',
+          repr((_ole, _tle_after_cap, _sk_after_cap)))
+
+    _settings_hardening = importlib.import_module(pkg + '.core.cph_settings')
+    check('file-IO filenames reject traversal and alternate data streams',
+          all(_settings_hardening.is_safe_io_filename(name)
+              for name in ('add.in', 'add.out', 'my file.in', '样例.out'))
+          and not any(_settings_hardening.is_safe_io_filename(name)
+                      for name in ('../outside', '..', '/tmp/out',
+                                   r'C:\\temp\\out', 'file.txt:stream',
+                                   'folder/out', 'folder\\out', '')),
+          'unsafe file names must never be joined to the run sandbox')
+
+    _build_mode_hardening = importlib.import_module(pkg + '.core.cph_build_mode')
+    _debug_ofast = _build_mode_hardening.transform(
+        'g++ -Ofast main.cpp', _build_mode_hardening.MODE_DEBUG)
+    check('Debug build mode removes -Ofast',
+          '-Ofast' not in _debug_ofast, _debug_ofast)
+    if os.name != 'nt':
+        _a_path = '/tmp/cph-case/A.cpp'
+        _b_path = '/tmp/cph-case/a.cpp'
+        _build_mode_hardening.set_mode(
+            _a_path, _build_mode_hardening.MODE_DEBUG)
+        _build_mode_hardening.set_mode(
+            _b_path, _build_mode_hardening.MODE_RELEASE)
+        _case_distinct = (
+            _build_mode_hardening.get_mode(_a_path)
+            == _build_mode_hardening.MODE_DEBUG
+            and _build_mode_hardening.get_mode(_b_path)
+            == _build_mode_hardening.MODE_RELEASE)
+        _build_mode_hardening._modes.pop(
+            _build_mode_hardening._norm(_a_path), None)
+        _build_mode_hardening._modes.pop(
+            _build_mode_hardening._norm(_b_path), None)
+        check('POSIX build modes preserve path case', _case_distinct)
+
+    _stress_hardening = open(os.path.join(ROOT, 'cph_stress.py'),
+                             encoding='utf-8').read()
+    _cal_hardening = open(os.path.join(ROOT, 'core', 'cph_calibrate.py'),
+                          encoding='utf-8').read()
+    _pm_hardening = open(os.path.join(ROOT, 'Modules', 'ProcessManager.py'),
+                         encoding='utf-8').read()
+    check('stress timeout uses a monotonic clock and process groups',
+          'time.monotonic() + timeout' in _stress_hardening
+          and 'os.killpg(pid, signal.SIGKILL)' in _stress_hardening
+          and 'start_new_session=(os.name != \'nt\')' in _stress_hardening)
+    check('calibration compilation has a timeout and tree cleanup',
+          'communicate(timeout=30)' in _cal_hardening
+          and 'def _kill_process_tree(proc):' in _cal_hardening
+          and 'start_new_session=(os.name != \'nt\')' in _cal_hardening)
+    check('file-IO output directories are always cleaned',
+          'finally:\n\t\t\t# Clean up even when the program failed' in _pm_hardening)
+    check('process termination escalates after the group leader exits',
+          'os.killpg(pgid, signal.SIGKILL)' in _pm_hardening
+          and 'deadline = time.monotonic() + 0.6' in _pm_hardening)
+
     # --- more findings from the channel reviewer ---
     # 5. messages.json keys must be "install" or a full semantic version;
     #    "2.0" (two components) was rejected as an invalid version.
@@ -9775,8 +9839,11 @@ def main():
           'copy.deepcopy(_cache)' in _stats_src
           and '_schedule_flush_unlocked()' in _stats_src,
           'a concurrent record_run corrupted the json dump')
-    check('calibrate cleans up and kills a runaway bench',
-          'run.kill()' in _cal_src and 'time.monotonic()' in _cal_src)
+    check('calibrate bounds compile time and kills process trees',
+          'def _kill_process_tree(proc):' in _cal_src
+          and 'communicate(timeout=30)' in _cal_src
+          and 'time.monotonic()' in _cal_src
+          and 'start_new_session=(os.name != \'nt\')' in _cal_src)
 
     # compile frees a still-running exe before rebuilding.
     check('compile kills the tracked process holding the output exe',

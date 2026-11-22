@@ -39,6 +39,7 @@ from .core.cph_resources import read_resource
 from .Highlight.test_interface import get_test_styles
 from .core.cph_verdict import (get_verdict, get_verdict_for_answers,
 							   get_verdict_by_name, build_line_diff,
+							   apply_output_limit,
 							   outputs_equal, find_crash_location,
 							   looks_like_crash)
 from .core.cph_gdb_trace import names_source as _names_source_impl
@@ -3356,6 +3357,8 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 					regard_pe_as_ac=bool(get_settings().get('regard_pe_as_ac', False)),
 					float_tolerance=float_tolerance
 				)
+				verdict = apply_output_limit(
+					verdict, getattr(pm, 'output_capped', False))
 				test.set_verdict(verdict)
 				# The answer matches what the program printed -> the sample
 				# is accepted, so collapse it exactly like an automatic AC
@@ -3882,6 +3885,14 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				memory_used_mb=memory_used_mb,
 				float_tolerance=float_tolerance
 			)
+
+		verdict = apply_output_limit(verdict, getattr(pm, 'output_capped', False))
+		if getattr(pm, 'output_capped', False):
+			notice = t_message('output_truncated_warn')
+			old_message = getattr(self.tester.tests[test_id], 'message', '') or ''
+			if notice not in old_message:
+				self.tester.tests[test_id].message = (
+					old_message + '\n' + notice if old_message else notice)
 
 		if memory_used_mb:
 			self.tester.tests[test_id].set_memory(memory_used_mb)

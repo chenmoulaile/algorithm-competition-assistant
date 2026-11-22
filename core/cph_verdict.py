@@ -125,6 +125,17 @@ def get_verdict(name):
     return VERDICTS.get(name, VERDICTS['unknown_error'])
 
 
+def apply_output_limit(verdict, output_capped):
+    """Turn output-based verdicts into OLE when captured bytes were truncated.
+
+    Execution failures and manual stops remain the more informative result,
+    but a partial prefix must never be allowed to pass as the full answer.
+    """
+    if output_capped and verdict and verdict.get('name') in ('AC', 'WA', 'PE', 'PC'):
+        return get_verdict('output_limit_exceed')
+    return verdict
+
+
 def get_verdict_by_name(name):
     """Return the verdict dict for a short name (e.g. 'WA'), or None."""
     if not name:

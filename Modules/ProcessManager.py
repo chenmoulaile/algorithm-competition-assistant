@@ -17,7 +17,7 @@ import locale
 from .memprobe import MemorySampler, bytes_to_mb, sample_memory_bytes
 from .build_artifact import output_path_from_compile_cmd, resolve_artifact, retarget_command, names_match
 from ..core.cph_i18n import t
-from ..core.cph_settings import get_settings
+from ..core.cph_settings import get_settings, is_safe_io_filename
 from ..core import cph_state
 from ..core.cph_build_mode import get_mode as _build_mode, transform as _apply_build_mode
 from ..core.cph_std_ladder import apply as _std_apply, escalate as _std_escalate
@@ -675,9 +675,17 @@ class ProcessManager(object):
 		pipe, so the sample has to exist as a file the program will find.
 		"""
 		mode = (spec or {}).get('mode') or 'stdin'
+		input_value = (spec or {}).get('input') or ''
+		output_value = (spec or {}).get('output') or ''
+		input_name = input_value.strip() if isinstance(input_value, str) else ''
+		output_name = output_value.strip() if isinstance(output_value, str) else ''
+		if mode == 'files' and (not is_safe_io_filename(input_name or 'data.in')
+							 or not is_safe_io_filename(output_name or 'data.out')):
+			print('[Algorithm Competition Assistant] unsafe file-IO filename; using stdin mode')
+			mode, input_name, output_name = 'stdin', '', ''
 		self.io_spec = {'mode': mode if mode in ('stdin', 'files') else 'stdin',
-						'input': (spec or {}).get('input') or '',
-						'output': (spec or {}).get('output') or ''}
+						'input': input_name,
+						'output': output_name}
 		if input_text is not None:
 			self.io_input_text = input_text
 
@@ -699,10 +707,18 @@ class ProcessManager(object):
 		"""
 		if not self.is_io_files():
 			return None
+		input_name = self.io_spec.get('input') or 'data.in'
+		output_name = self.io_spec.get('output') or 'data.out'
+		if (not is_safe_io_filename(input_name)
+				or not is_safe_io_filename(output_name)):
+			print('[Algorithm Competition Assistant] unsafe file-IO filename; refusing file-IO run')
+			self.io_spec = {'mode': 'stdin', 'input': '', 'output': ''}
+			return None
+		self.io_spec['input'] = input_name
+		self.io_spec['output'] = output_name
 		root = tempfile.mkdtemp(prefix='cph-io-')
 		cph_state.register_temp_dir(root)
 		self.io_dir = root
-		input_name = self.io_spec.get('input') or 'data.in'
 		# An empty file is written on purpose: a judge always hands the program a
 		# file, so freopen must not fail just because this test point is empty.
 		try:
@@ -739,7 +755,7 @@ class ProcessManager(object):
 			return ('', False)
 		output_name = self.io_spec.get('output') or ''
 		root = getattr(self, 'io_dir', None)
-		if not output_name or not root:
+		if not output_name or not root or not is_safe_io_filename(output_name):
 			return ('', False)
 		target = os.path.join(root, output_name)
 		try:
@@ -777,13 +793,13 @@ class ProcessManager(object):
 		"""
 		if not self.is_io_files():
 			return (self.read(), '')
-		text, existed = self.io_output()
-		if existed:
-			# The answer is in hand and the program is gone: the scratch
-			# directory has nothing left to give, and a parallel batch makes one
-			# manager per test case, so leaving them behind would litter the temp
-			# root one hundred directories deep.
+		try:
+			text, existed = self.io_output()
+		finally:
+			# Clean up even when the program failed to create its output file.
+			# Otherwise every missing-output test point leaked one cph-io-* dir.
 			self.release_io_dir()
+		if existed:
 			return (text, '')
 		# The name is quoted back because the usual cause is a disagreement
 		# between the statement and the code: freopen missing, or ".out" written
@@ -1245,24 +1261,33 @@ class ProcessManager(object):
 					pgid = os.getpgid(pid)
 				except Exception:
 					pgid = None
-			for sig, grace in ((signal.SIGTERM, 0.6), (signal.SIGKILL, 0.0)):
+			if pgid:
 				try:
-					if pgid:
-						os.killpg(pgid, sig)
-					else:
-						proc.kill()
+					os.killpg(pgid, signal.SIGTERM)
 				except Exception:
+					pgid = None
+			if pgid:
+				# The session leader may exit while a child in the same process
+				# group ignores SIGTERM. Wait on the group, not proc.poll(), then
+				# escalate while that group still exists.
+				deadline = time.monotonic() + 0.6
+				while time.monotonic() < deadline:
 					try:
-						proc.kill()
+						os.killpg(pgid, 0)
+					except OSError:
+						pgid = None
+						break
+					time.sleep(0.05)
+				if pgid:
+					try:
+						os.killpg(pgid, signal.SIGKILL)
 					except Exception:
 						pass
-				if grace:
-					waited = 0.0
-					while proc.poll() is None and waited < grace:
-						time.sleep(0.05)
-						waited += 0.05
-					if proc.poll() is not None:
-						break
+			else:
+				try:
+					proc.kill()
+				except Exception:
+					pass
 
 		# The process is being killed: clear the running marker right here
 		# so a follow-up run_file() never trips over the stale flag even
