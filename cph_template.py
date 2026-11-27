@@ -7,7 +7,7 @@ FastOlympicCoding 抄来时留下的绑定，本插件从未定义该命令，�
 现在改为独立的 `cph_insert_template` 命令 + 安全快捷键。
 
 查找顺序：
-1. `algorithms_base` 目录下的 `<关键字>.cpp/.cc/.py/.txt`（FOC 兼容用法）
+1. `algorithms_base` 目录下的 `<关键字>.cpp/.cc/.cxx/.txt`（FOC 兼容用法）
 2. 设置 `templates` 字典：{ "关键字": "片段内容" }
 3. 内置常用片段
 
@@ -90,7 +90,7 @@ class CphInsertTemplateCommand(sublime_plugin.TextCommand):
 		# 1. algorithms_base directory (FastOlympicCoding compatible)
 		base = settings.get('algorithms_base')
 		if base:
-			for ext in ('.cpp', '.cc', '.cxx', '.py', '.txt'):
+			for ext in ('.cpp', '.cc', '.cxx', '.txt'):
 				candidate = path.join(base, word + ext)
 				try:
 					if path.exists(candidate):

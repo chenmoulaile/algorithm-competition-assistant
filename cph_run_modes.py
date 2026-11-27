@@ -14,7 +14,7 @@ from .core.cph_build_mode import (MODE_DEBUG, MODE_RELEASE, get_mode, toggle as 
                                   profiles_for_file, get_profile, set_profile)
 from .core.cph_i18n import t
 
-#: Palette captions are Python strings (a menu caption is static JSON and can
+#: Palette captions are strings (a menu caption is static JSON and can
 #: never follow the `language` setting), so they all start with the package
 #: name. Same constant as cph_options.py - root modules may not import each
 #: other, so it is repeated deliberately.

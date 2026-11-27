@@ -89,8 +89,13 @@ def init_settings(_settings):
 def is_run_supported_ext(ext):
 	_run_settings = get_settings().get('run_settings', None)
 	if _run_settings is not None:
+		ext = str(ext or '').lower().lstrip('.')
 		for option in _run_settings:
-			if ext in option['extensions']:
+			# A hand-edited settings file is normal; a missing or malformed
+			# `extensions` key must not take the whole run panel down.
+			if not isinstance(option, dict):
+				continue
+			if ext in (option.get('extensions') or []):
 				return True
 	return False
 

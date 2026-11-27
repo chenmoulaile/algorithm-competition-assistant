@@ -20,6 +20,7 @@ from .build_artifact import output_path_from_compile_cmd, resolve_artifact, reta
 from ..core.cph_i18n import t
 from ..core.cph_settings import get_settings, is_safe_io_filename
 from ..core import cph_state
+from ..core.cph_text import truncate_utf8, utf8_len
 from ..core.cph_build_mode import (get_mode as _build_mode, transform as _apply_build_mode,
                                    get_profile as _get_build_profile,
                                    profiles_for_file as _profiles_for_file)
@@ -176,7 +177,11 @@ class ProcessManager(object):
 		if run_settings:
 			file_ext = path.splitext(self.file)[1][1:]
 			for x in run_settings:
-				if file_ext in x['extensions']:
+				# A hand-edited settings file is normal; a missing
+				# `extensions` key must not take the whole run panel down.
+				if not isinstance(x, dict):
+					continue
+				if file_ext in (x.get('extensions') or []):
 					self.time_limit_ms = x.get('time_limit_ms')
 					self.memory_limit_mb = x.get('memory_limit_mb')
 					break
@@ -280,7 +285,9 @@ class ProcessManager(object):
 			return None
 		file_ext = path.splitext(self.file)[1][1:]
 		for x in opt:
-			if file_ext in x['extensions']:
+			if not isinstance(x, dict):
+				continue
+			if file_ext in (x.get('extensions') or []):
 				return x
 		return None
 
@@ -349,9 +356,13 @@ class ProcessManager(object):
 
 	def get_compile_cmd(self):
 		opt = self.run_settings
+		if not isinstance(opt, list):
+			return -1
 		file_ext = path.splitext(self.file)[1][1:]
 		for x in opt:
-			if file_ext in x['extensions']:
+			if not isinstance(x, dict):
+				continue
+			if file_ext in (x.get('extensions') or []):
 				profile_name = _get_build_profile(self.file)
 				profile = (_profiles_for_file(self.file) or {}).get(profile_name)
 				profile_cmd = None
@@ -483,24 +494,40 @@ class ProcessManager(object):
 		if not gdb:
 			return None
 		try:
-			log_path = path.join(tempfile.gettempdir(),
-								 'cph-gdb-%d.log' % os.getpid())
-			_out, log_text = _replay_under_gdb(
-				gdb, program, log_path,
-				stdin_bytes=stdin_bytes, timeout=timeout,
-				cwd=path.split(self.file)[0])
-			return _find_crash(log_text, source_file or self.file)
+			# One log per replay. A fixed name keyed only by the plugin PID
+			# collided when parallel judging replayed several crashes at once:
+			# each replay deletes the file first, so workers erased each
+			# other's backtrace and reported wrong or missing crash lines.
+			fd, log_path = tempfile.mkstemp(prefix='cph-gdb-%d-' % os.getpid(),
+											suffix='.log')
+			os.close(fd)
+			try:
+				_out, log_text = _replay_under_gdb(
+					gdb, program, log_path,
+					stdin_bytes=stdin_bytes, timeout=timeout,
+					cwd=path.split(self.file)[0])
+				return _find_crash(log_text, source_file or self.file)
+			finally:
+				try:
+					os.remove(log_path)
+				except OSError:
+					pass
 		except Exception:
 			return None
 
 	def get_run_cmd(self, args):
 		opt = self.run_settings
+		if not isinstance(opt, list):
+			return -1
 		file_ext = path.splitext(self.file)[1][1:]
 		for x in opt:
-			if file_ext in x['extensions']:
-				if x['run_cmd'] is None:
+			if not isinstance(x, dict):
+				continue
+			if file_ext in (x.get('extensions') or []):
+				run_cmd = x.get('run_cmd')
+				if run_cmd is None:
 					return None
-				cmd = self.format_command(x['run_cmd'], args=args)
+				cmd = self.format_command(run_cmd, args=args)
 				# The compiler does not always write the name we asked for
 				# (non-ASCII -o names go through the ANSI codepage on
 				# Windows), so point the command at the file that is really
@@ -535,14 +562,20 @@ class ProcessManager(object):
 
 	def _untrack_live(self):
 		for key in list(getattr(self, '_live_keys', ()) or ()):
-			try:
-				cph_state.unregister_live(key)
-			except Exception:
-				pass
-			try:
-				self._live_keys.discard(key)
-			except Exception:
-				pass
+			self._untrack_key(key)
+
+	def _untrack_key(self, key):
+		"""Remove one registration (compile processes finish and must not pile up)."""
+		if not key:
+			return
+		try:
+			cph_state.unregister_live(key)
+		except Exception:
+			pass
+		try:
+			self._live_keys.discard(key)
+		except Exception:
+			pass
 
 	def _kill_tree(self, p):
 		"""Kill a shell-spawned child *and* whatever that shell started.
@@ -607,20 +640,25 @@ class ProcessManager(object):
 			preexec_fn=preexec_fn
 		)
 		# A compile the user walked away from is still a live g++ holding the
-		# output file open (see _track_live).
-		self._track_live(p, 'compile')
-		# Timeout so a hanging compiler doesn't freeze the plugin forever
+		# output file open (see _track_live). The registration is removed
+		# again below: a compile that finished normally is not a live child,
+		# and keeping it grew `_live_keys` for the whole session.
+		key = self._track_live(p, 'compile')
 		try:
-			compile_result = _decode_output(p.communicate(timeout=30)[0])
-		except subprocess.TimeoutExpired:
-			self._kill_tree(p)
-			return (1, '[Algorithm Competition Assistant] compile timed out after 30s\n(cmd: %s)' % cmd)
-		unknown = sorted(getattr(self, 'unknown_placeholders', ()) or ())
-		if unknown:
-			# A typo like {file_nmae} silently becomes '' and the user just
-			# sees a weird command; say which name was ignored.
-			compile_result = ('[Algorithm Competition Assistant] ignored unknown placeholder(s): %s\n' % ', '.join(unknown)) + compile_result
-		return (p.returncode, compile_result)
+			# Timeout so a hanging compiler doesn't freeze the plugin forever
+			try:
+				compile_result = _decode_output(p.communicate(timeout=30)[0])
+			except subprocess.TimeoutExpired:
+				self._kill_tree(p)
+				return (1, '[Algorithm Competition Assistant] compile timed out after 30s\n(cmd: %s)' % cmd)
+			unknown = sorted(getattr(self, 'unknown_placeholders', ()) or ())
+			if unknown:
+				# A typo like {file_nmae} silently becomes '' and the user just
+				# sees a weird command; say which name was ignored.
+				compile_result = ('[Algorithm Competition Assistant] ignored unknown placeholder(s): %s\n' % ', '.join(unknown)) + compile_result
+			return (p.returncode, compile_result)
+		finally:
+			self._untrack_key(key)
 
 	def compile(self, wait_close=True):
 		cmd = self.get_compile_cmd()
@@ -900,18 +938,26 @@ class ProcessManager(object):
 		self._read_eof = False
 		self.stdin_closed = False
 
-		self.process = subprocess.Popen(
-			cmd,
-			shell=use_shell,
-			stdin=PIPE,
-			stdout=PIPE,
-			stderr=stderr_target,
-			bufsize=0,
-			cwd=run_cwd,
-			startupinfo=startupinfo,
-			preexec_fn=preexec_fn,
-			creationflags=creationflags
-		)
+		try:
+			self.process = subprocess.Popen(
+				cmd,
+				shell=use_shell,
+				stdin=PIPE,
+				stdout=PIPE,
+				stderr=stderr_target,
+				bufsize=0,
+				cwd=run_cwd,
+				startupinfo=startupinfo,
+				preexec_fn=preexec_fn,
+				creationflags=creationflags
+			)
+		except Exception:
+			# A bad run_cmd / a deleted artifact used to leave is_run=True,
+			# the scratch input directory and the stderr temp file behind.
+			self.is_run = False
+			self.release_io_dir()
+			self.close_stderr()
+			raise
 
 		# The program exists from this instant: everything before it (our own
 		# command formatting, Popen itself) is plugin overhead and is excluded
@@ -1132,18 +1178,18 @@ class ProcessManager(object):
 		if not text:
 			return text
 		if self.output_limit <= 0:
-			self.output_taken += len(text)
+			self.output_taken += utf8_len(text)
 			return text
 		room = self.output_limit - self.output_taken
 		if room <= 0:
 			# Past the cap: consume, return nothing.
 			self.output_capped = True
 			return ''
-		if len(text) > room:
+		if utf8_len(text) > room:
 			self.output_capped = True
 			self.output_taken = self.output_limit
-			return text[:room]
-		self.output_taken += len(text)
+			return truncate_utf8(text, room)
+		self.output_taken += utf8_len(text)
 		return text
 
 	def read(self, bfsize=None):

@@ -167,12 +167,8 @@ _CRASH_PATTERNS = (
     # (e.g. MSYS2 mingw gcc: "cannot find -lubsan").
     re.compile(r'([A-Za-z0-9_./\\:+-]+?\.(?:c|cc|cpp|cxx|h|hpp)):(\d+):'
                r'[^\n]*\bAssertion\b'),
-    # Python traceback:  File "main.py", line 12
-    re.compile(r'File "([^"]+)", line (\d+)'),
-    # Java stack trace:  at Main.main(Main.java:12)
-    re.compile(r'\(([A-Za-z0-9_./\\$-]+\.java):(\d+)\)'),
     # gdb / backtrace:  ... at main.cpp:12
-    re.compile(r'\bat\s+([A-Za-z0-9_./\\-]+\.(?:c|cc|cpp|cxx|py|java)):(\d+)'),
+    re.compile(r'\bat\s+([A-Za-z0-9_./\\-]+\.(?:c|cc|cpp|cxx)):(\d+)'),
     # any compiler-style diagnostic:  main.cpp:12:5
     re.compile(r'([A-Za-z0-9_./\\-]+\.(?:c|cc|cpp|cxx)):(\d+):\d+'),
 )
@@ -182,8 +178,8 @@ def find_crash_location(text, source_file=None):
     """Best-effort (file, line) for where a crashed program died, or None.
 
     A plain segfault carries no line number, so this only reports what the
-    program's own output gives us: a Python traceback, a Java stack trace,
-    gcc/clang -fsanitize diagnostics or a gdb backtrace. A location matching
+    program's own output gives us: gcc/clang -fsanitize diagnostics or a gdb
+    backtrace. A location matching
     the source file being tested wins over the first unrelated one.
 
     This parses TEXT. When there is no text to parse - the trap form of ubsan
@@ -205,8 +201,8 @@ def find_crash_location(text, source_file=None):
     # Scan EVERY pattern for a hit in the file under test before falling back
     # to the first match found. Returning a fallback at the end of the first
     # pattern that matched (the old behaviour) let a libstdc++ header name in
-    # a sanitizer line beat the user's own frame named later in a Python
-    # traceback - the exact case the caller's gdb replay is meant to avoid.
+    # a sanitizer line beat the user's own frame named later in the output
+    # - the exact case the caller's gdb replay is meant to avoid.
     # A source-file match is always the actionable one, regardless of which
     # pattern reported it.
     for pattern in _CRASH_PATTERNS:
@@ -309,7 +305,7 @@ def get_verdict_by_code(rtcode, runtime, time_limit_ms, memory_limit_mb,
     # the output comparison, not after: otherwise a program that printed the
     # right answer first and crashed after the last write scored AC on a
     # sanitizer report. ignore_error=True can suppress stderr, never this.
-    if stdout is not None and stdout is not expected_output and looks_like_crash(stdout):
+    if stdout is not None and stdout != expected_output and looks_like_crash(stdout):
         return get_verdict('runtime_error')
 
     if not expected_output or not expected_output.strip():
@@ -441,12 +437,6 @@ _POSIX_SIGNAL_BASE = 128
 _POSIX_SIGNAL_MAX = 192
 
 _CRASH_TEXT = (
-    # Python
-    re.compile(r'Traceback \(most recent call last\)'),
-    re.compile(r'\b(?:IndexError|KeyError|ValueError|ZeroDivisionError|'
-               r'RecursionError|MemoryError|NameError|TypeError|'
-               r'AttributeError|OverflowError|ArithmeticError|AssertionError|'
-               r'RuntimeError|StopIteration|UnboundLocalError)\b'),
     # C/C++ runtimes and tools
     re.compile(r'\bterminate called after throwing\b'),
     re.compile(r'\bstd::(?:bad_alloc|bad_cast|out_of_range|length_error|'
@@ -458,10 +448,6 @@ _CRASH_TEXT = (
     re.compile(r'\b(?:Segmentation fault|Bus error|Floating point exception|'
                r'core dumped|stack smashing)\b'),
     re.compile(r'\bstack overflow\b', re.I),
-    # Java / JVM
-    re.compile(r'Exception in thread "'),
-    re.compile(r'\bjava\.lang\.[A-Za-z]*(?:Exception|Error)\b'),
-    re.compile(r'\b(?:StackOverflowError|OutOfMemoryError|NullPointerException)\b'),
 )
 
 

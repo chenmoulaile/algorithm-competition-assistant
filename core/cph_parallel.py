@@ -218,16 +218,22 @@ def _run_one(make_manager, input_text, expected, time_limit_ms, memory_limit_mb,
         if drain_th is not None:
             # The drain thread and the last bytes written before the process
             # died race each other; after the join, one final drain picks up
-            # whatever landed in the pipe in between.
+            # whatever landed in the pipe in between. Only do that final read
+            # when the thread is really gone: a grandchild that inherited
+            # stdout can keep it alive, and two readers on one pipe corrupt
+            # the output.
             drain_th.join(timeout=2)
-            try:
-                while True:
-                    part = manager.read(_OUT_CHUNK)
-                    if not part:
-                        break
-                    chunks.append(part)
-            except Exception:
-                pass
+            if drain_th.is_alive():
+                drain_th.join(timeout=1)
+            if not drain_th.is_alive():
+                try:
+                    while True:
+                        part = manager.read(_OUT_CHUNK)
+                        if not part:
+                            break
+                        chunks.append(part)
+                except Exception:
+                    pass
 
         # Measure the runtime the moment the process is gone - before
         # read()/get_stderr()/finish_memory_sampling(), which can take a

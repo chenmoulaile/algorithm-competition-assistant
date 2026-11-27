@@ -97,68 +97,6 @@
 			"interactor": "",
 			"interactor_compile_cmd": "g++ -O2 -std=c++17 -I \"{interactor_dir}\" \"{interactor}\" -o \"{interactor}.exe\"",
 			"interactor_time_limit_ms": 20000
-		},
-		{
-			"name": "Python",
-			"extensions": ["py"],
-			// Python 无需编译，置为 null
-			"compile_cmd": null,
-			"run_cmd": "python \"{source_file}\"",
-			"time_limit_ms": 5000,
-			"memory_limit_mb": 256
-		},
-		{
-			"name": "Java",
-			"extensions": ["java"],
-			"compile_cmd": "javac -J-Dfile.encoding=utf8 -d \"{source_file_dir}\" \"{source_file}\"",
-			"run_cmd": "java -classpath \"{source_file_dir}\" \"{file_name}\"",
-			"time_limit_ms": 5000,
-			"memory_limit_mb": 256
-		},
-		{
-			"name": "C",
-			"extensions": ["c"],
-			"compile_cmd": "gcc \"{source_file}\" {extra_sources} {include_dirs} -std=c17 -O2 -o \"{file_name}.exe\"",
-			"run_cmd": "\"{source_file_dir}/{file_name}.exe\" {args}",
-			"format_cmd": "clang-format -i {source_file}",
-			"time_limit_ms": 2000,
-			"memory_limit_mb": 256,
-			"extra_sources": [],
-			"include_dirs": []
-		},
-		{
-			"name": "Rust",
-			"extensions": ["rs"],
-			"compile_cmd": "rustc -O \"{source_file}\" -o \"{file_name}.exe\"",
-			"run_cmd": "\"{source_file_dir}/{file_name}.exe\" {args}",
-			"time_limit_ms": 2000,
-			"memory_limit_mb": 256
-		},
-		{
-			"name": "Go",
-			"extensions": ["go"],
-			// go build 会在当前目录生成可执行文件，-o 指定名字即可
-			"compile_cmd": "go build -o \"{file_name}.exe\" \"{source_file}\"",
-			"run_cmd": "\"{source_file_dir}/{file_name}.exe\" {args}",
-			"time_limit_ms": 2000,
-			"memory_limit_mb": 256
-		},
-		{
-			"name": "Pascal",
-			"extensions": ["pas", "pp"],
-			"compile_cmd": "fpc -O2 -o\"{file_name}.exe\" \"{source_file}\"",
-			"run_cmd": "\"{source_file_dir}/{file_name}.exe\" {args}",
-			"time_limit_ms": 2000,
-			"memory_limit_mb": 256
-		},
-		{
-			"name": "JavaScript (Node.js)",
-			"extensions": ["js", "mjs", "cjs"],
-			// Node 直接跑源码，无需编译
-			"compile_cmd": null,
-			"run_cmd": "node \"{source_file}\"",
-			"time_limit_ms": 5000,
-			"memory_limit_mb": 256
 		}
 	],
 
@@ -362,7 +300,7 @@
 
 	// ================= 模板片段 (Ctrl+Alt+T) =================
 	// 光标停在关键字后按 Ctrl+Alt+T 展开。查找顺序：
-	//   1. algorithms_base 目录下的 <关键字>.cpp / .cc / .py / .txt
+	//   1. algorithms_base 目录下的 <关键字>.cpp / .cc / .cxx / .txt
 	//   2. 下面的 templates 字典
 	//   3. 内置片段（fastio / main / bf / debug / testlib）
 	"algorithms_base": null,

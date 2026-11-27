@@ -69,6 +69,35 @@ AUTO_RUN_DEBOUNCE_SECONDS = 2.0
 #: one burst is treated as a re-grab the second time - acceptable: the client
 #: normally posts a problem once.
 _seen_problems_by_file = {}
+_seen_lock = threading.Lock()
+_log_lock = threading.Lock()
+
+#: Built on first listen, not at import: http.server pulls in socket,
+#: http.client and email.parser, which must stay off the cold start.
+_SERVER_CLASS = None
+
+
+def _server_class():
+    global _SERVER_CLASS
+    if _SERVER_CLASS is not None:
+        return _SERVER_CLASS
+    from http.server import HTTPServer
+    from socketserver import ThreadingMixIn
+
+    class _CompanionServer(ThreadingMixIn, HTTPServer):
+        """Threaded loopback server.
+
+        A contest list page sends a burst of POSTs (AtCoder: seven). The plain
+        HTTPServer handles one at a time, and each handler waits up to 10 s for
+        the main thread to resolve its target, so one slow resolve used to
+        queue the whole burst behind it. `daemon_threads` keeps Sublime exit
+        from waiting on an idle keep-alive connection.
+        """
+
+        daemon_threads = True
+
+    _SERVER_CLASS = _CompanionServer
+    return _SERVER_CLASS
 
 
 def _should_run(file_name):
@@ -125,9 +154,11 @@ def _debug_log(message):
         if not os.path.isdir(directory):
             os.makedirs(directory)
         stamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        with open(os.path.join(directory, DEBUG_LOG_NAME), 'a',
-                  encoding='utf-8', newline='\n') as handle:
-            handle.write('%s %s\n' % (stamp, message))
+        # Handler threads log concurrently now that the server is threaded.
+        with _log_lock:
+            with open(os.path.join(directory, DEBUG_LOG_NAME), 'a',
+                      encoding='utf-8', newline='\n') as handle:
+                handle.write('%s %s\n' % (stamp, message))
     except Exception as e:
         print('[Algorithm Competition Assistant] companion log not written: %s' % e)
 
@@ -403,12 +434,16 @@ def build_handler():
             # Without a usable name AND url there is no reliable identity:
             # treat every such POST as a different problem (merge only).
             meaningful = bool(identity[0] or identity[1])
-            seen = _seen_problems_by_file.get(file_name)
-            same_problem = meaningful and seen is not None and identity in seen
             try:
                 # Read+write as one critical section: the run panel's async
-                # save may be writing the same file at this instant.
+                # save may be writing the same file at this instant, and two
+                # handler threads may be processing the same burst. The seen
+                # check and the record must be atomic, otherwise both threads
+                # merge and the second re-grab never clears old samples.
                 with tests_lock():
+                    with _seen_lock:
+                        seen = _seen_problems_by_file.get(file_name)
+                    same_problem = meaningful and seen is not None and identity in seen
                     if _target_mode() == _TARGET_CURRENT and same_problem and incoming:
                         # 同一题重抓：先清空旧样例，只写刚抓到的这一批。
                         saved, _total = replace_tests(file_name, incoming)
@@ -417,6 +452,12 @@ def build_handler():
                         # 首次写入 / 不同题（列表页 burst）/ new_file：合并保留旧样例。
                         merged, conflicts = _merge_with_stored(file_name, incoming)
                         saved = save_tests(file_name, merged)
+                    if saved and meaningful and _target_mode() == _TARGET_CURRENT:
+                        # Record regardless of which branch wrote the samples: a
+                        # burst's A/B/C must all be remembered so re-grabbing any
+                        # of them later is recognized. Empty identities are skipped.
+                        with _seen_lock:
+                            _seen_problems_by_file.setdefault(file_name, set()).add(identity)
             except Exception as e:
                 print(t('error_handling_post', error=str(e)))
                 return
@@ -432,11 +473,6 @@ def build_handler():
                         sublime.status_message(t('import_save_failed'))
                 sublime.set_timeout(_report_io_error, 0)
                 return
-            if saved and meaningful and _target_mode() == _TARGET_CURRENT:
-                # Record regardless of which branch wrote the samples: a
-                # burst's A/B/C must all be remembered so re-grabbing any of
-                # them later is recognized. Empty identities are skipped.
-                _seen_problems_by_file.setdefault(file_name, set()).add(identity)
             remember_limits(file_name, time_limit_ms, memory_limit_mb)
             print('[Algorithm Competition Assistant] %s' % t('new_test_file_path', path=file_name))
 
@@ -480,12 +516,6 @@ def _sanitize_name(name):
     cleaned = re.sub(r'[\\/:*?"<>|\r\n\t]+', ' ', name or '').strip()
     cleaned = re.sub(r'\s+', ' ', cleaned)
     return cleaned[:80].rstrip('. ')
-
-
-#: Extensions whose comments start with '#'. The created file is opened
-#: straight into an editor, so a marker the language does not know would be a
-#: syntax error on the first line.
-_HASH_COMMENTS = ('py', 'rb', 'sh', 'pl', 'r', 'jl')
 
 
 def _flat(value):
@@ -536,7 +566,8 @@ def _statement_header(problem_name, url, time_limit_ms, memory_limit_mb, ext):
         return _custom_header(template, problem_name, url,
                               time_limit_ms, memory_limit_mb)
 
-    mark = '#' if ext in _HASH_COMMENTS else '//'
+    # C++ only: a freshly created problem file always uses //.
+    mark = '//'
     lines = []
     if _flat(problem_name):
         lines.append('%s %s' % (mark, t('header_problem', value=_flat(problem_name))))
@@ -781,12 +812,11 @@ def _start_listener(view=None, quiet=False, target=None):
         try:
             port = int(sublime.load_settings(settings_file)
                        .get('companion_port', 12345) or 12345)
-            from http.server import HTTPServer
             # Bind the loopback address, not the name: HTTPServer is IPv4, so
             # "localhost" is a resolution lottery - a host whose resolver puts
             # ::1 first would leave the listener on an address no browser can
             # reach, and the doctor's probe would then call the port free.
-            server = HTTPServer(('127.0.0.1', port), build_handler())
+            server = _server_class()(('127.0.0.1', port), build_handler())
         except Exception as e:
             # A failure is not routine output. With quiet=True (the startup
             # auto-listen) this used to go to the console only, so Sublime came
@@ -825,6 +855,8 @@ def _stop_listener():
         _listener['target'] = None
         _listener['dir'] = None
         _listener['last_run'] = None
+        with _seen_lock:
+            _seen_problems_by_file.clear()
     threading.Thread(target=server.shutdown, daemon=True).start()
     try:
         server.server_close()
@@ -893,6 +925,12 @@ def plugin_unloaded():
             _listener['server'] = None
             _listener['thread'] = None
             _listener['port'] = None
+            _listener['view_id'] = None
+            _listener['target'] = None
+            _listener['dir'] = None
+            _listener['last_run'] = None
+        with _seen_lock:
+            _seen_problems_by_file.clear()
     except Exception:
         return
     if server is not None:

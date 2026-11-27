@@ -1,0 +1,31 @@
+Algorithm Competition Assistant 5.0.0
+======================================
+
+A focused release: C++ only, plus correctness and concurrency fixes.
+
+Breaking changes:
+* The shipped run_settings now contains C++ only. Python, C, Java, Rust, Go,
+  Pascal and JavaScript entries were removed.
+* Crash-location parsing and doctor probes now target C/C++ only.
+* Template lookup no longer searches .py files.
+
+Important fixes:
+* Stress testing no longer fabricates an executable for commands without -o;
+  interpreted/custom entries run through run_cmd.
+* Parallel gdb replay uses a unique log per call, so concurrent crashes no
+  longer overwrite each other's backtraces.
+* Importing 1.in.txt now finds 1.out.txt in the file picker.
+* max_output_bytes is enforced in UTF-8 bytes in serial and pipe paths,
+  without splitting a multi-byte character.
+* Compile processes are untracked when they finish; cph-minimize- and cph-io-
+  scratch directories are swept at startup; failed file-IO spawns release
+  their scratch directory.
+* Malformed run_settings entries no longer raise KeyError/TypeError.
+* Auto-run waits for the formatter to finish; the formatter has a timeout.
+* The parallel final drain no longer races the reader thread.
+* Minimizer output uses real newlines, a monotonic deadline, a collision-safe
+  cache, and is blocked from mixing with a new stress run.
+* Companion uses a threaded server, serializes seen-problem updates, and
+  clears stale target state on stop/unload.
+
+Regression tests: 1184 checks, 0 failures.

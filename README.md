@@ -53,8 +53,8 @@ reports whether the loaded copy is a folder or a zip.
 
 ## Quick start
 
-1. Open a source file. The default settings cover C++, C, Python, Java, Rust, Go, Pascal and
-   JavaScript. The compiler has to be on `PATH`.
+1. Open a C++ source file. The default settings cover C++ only. The compiler has to be on
+   `PATH`.
 2. Press `Ctrl+Alt+B`. Each test gets a card in the panel on the right.
 3. Click `detail` for input, expected, actual, stderr and the diff. Click `edit` to open the
    input and answer tabs; saving the answer rejudges the test.
@@ -112,9 +112,9 @@ verdict.
 
 ### Runtime errors
 
-When the program crashes, the output is searched for a position first: a Python traceback, a
-Java stack or a sanitizer diagnostic gives `file:line`, shown on the card and in the status
-bar, and the link jumps to the source. A bare C++ segfault carries no line, so the plugin
+When the program crashes, the output is searched for a position first: a sanitizer diagnostic
+or a gdb backtrace gives `file:line`, shown on the card and in the status bar, and the link
+jumps to the source. A bare C++ segfault carries no line, so the plugin
 replays the crash under gdb and looks for your frame in the backtrace. The default Release
 build already carries `-g`, so that backtrace locates the line even in Release; `Ctrl+Alt+G`
 (Debug) is for turning otherwise non-crashing undefined behaviour into `RE`, not for getting
@@ -414,7 +414,7 @@ Text printed by a checker itself is never touched.
   (tested). The code itself still keeps **Python 3.3 as its compatibility floor**: no
   f-strings, no `subprocess.run`, no `Popen(encoding=...)` — `tests/check_py33.py` enforces
   this.
-- Tests: `python tests/run_tests.py`, currently 1187 checks, 0 failures, using a fake
+- Tests: `python tests/run_tests.py`, currently 1184 checks, 0 failures, using a fake
   `sublime` module and no third-party packages.
 - CI runs Linux (3.9 and 3.12), Windows and macOS.
 - Bump `VERSION` in `plugin_init.py`. A release adds a `messages/<version>.txt` file, the

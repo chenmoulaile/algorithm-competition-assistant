@@ -32,7 +32,7 @@ def _settings():
 
 # The palette names come from description() rather than a "caption" in
 # Default.sublime-commands, for the same reason the build-mode entry does: only
-# a Python string can follow the `language` setting.
+# a string can follow the `language` setting.
 PREFIX = 'Algorithm Competition Assistant: '
 
 

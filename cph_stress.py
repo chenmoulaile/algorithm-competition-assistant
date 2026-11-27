@@ -89,6 +89,20 @@ def _running_for(user_file):
     return None
 
 
+def _minimizing_for(user_file):
+    """The session currently minimizing a counterexample for this file, or None.
+
+    A minimizer is not a stress loop, but it writes to the same stress page
+    and the same tests file. Starting a new run while it works mixed the two
+    outputs and let the old worker's `minimizing` flag stay on a dead session.
+    """
+    key = os.path.normcase(user_file or '')
+    for sess in _sessions.values():
+        if sess.get('minimizing') and os.path.normcase(sess.get('user_file') or '') == key:
+            return sess
+    return None
+
+
 def _running_sessions():
     return [s for s in _sessions.values() if s['running']]
 
@@ -114,8 +128,7 @@ _STD_HINTS = ('std', 'brute', 'bf', 'baoli', 'sol', 'standard', 'correct',
 _GEN_HINTS = ('gen', 'data', 'maker', 'make', 'rand', 'random', 'generator',
               'shuju', '生成', '数据')
 
-_FALLBACK_EXTS = ('cpp', 'cc', 'cxx', 'c', 'py', 'java', 'js', 'mjs', 'pas',
-                  'go', 'rs')
+_FALLBACK_EXTS = ('cpp', 'cc', 'cxx')
 
 
 def _source_extensions():
@@ -269,7 +282,7 @@ $dlg = New-Object System.Windows.Forms.OpenFileDialog
 if ($dir) {{ $dlg.InitialDirectory = $dir }}
 $dlg.Title = $title
 $dlg.CheckFileExists = $true
-$dlg.Filter = 'Source files (*.cpp;*.cc;*.cxx;*.c;*.py;*.java;*.js)|*.cpp;*.cc;*.cxx;*.c;*.py;*.java;*.js|All files (*.*)|*.*'
+$dlg.Filter = 'Source files (*.cpp;*.cc;*.cxx)|*.cpp;*.cc;*.cxx|All files (*.*)|*.*'
 $owner = New-Object System.Windows.Forms.Form
 $owner.TopMost = $true
 $owner.WindowState = 'Minimized'
@@ -593,6 +606,9 @@ def _start_flow(view, choose=False):
     # files are free to start their own run next to it.
     if _running_for(user_file):
         sublime.status_message('Algorithm Competition Assistant: ' + t('stress_already_running'))
+        return
+    if _minimizing_for(user_file):
+        sublime.status_message('Algorithm Competition Assistant: ' + t('stress_minimize_stop_first'))
         return
 
     window = view.window()
@@ -935,7 +951,7 @@ def _compile_program(file, time_limit=30, sess=None):
     if not using_profile:
         template = entry.get('compile_cmd')
     if not template:
-        # interpreted language (python/java handled by its own run_cmd)
+        # no compile_cmd: the run command is the entry point
         return True, file, ''
 
     cmd = _format_cmd(template, file)
@@ -952,12 +968,16 @@ def _compile_program(file, time_limit=30, sess=None):
     if out_dir:
         cmd, exe_path = isolate_output(cmd, out_dir)
     if not exe_path:
+        # No -o in the command: a custom entry with no compile artifact.
+        # There is no artifact to verify or execute; the run
+        # command is the entry point (see _program_command). Treating
+        # the fallback as an executable made such entries fail with
+        # "produced no Main.exe" (Windows) or try to run a .class (POSIX).
+        if output_path_from_compile_cmd(cmd) is None:
+            return True, file, ''
         exe_path = output_path_from_compile_cmd(cmd)
-        if exe_path and not os.path.isabs(exe_path):
+        if not os.path.isabs(exe_path):
             exe_path = os.path.join(src_dir, exe_path)
-    if not exe_path:
-        exe_path = os.path.join(
-            src_dir, base + ('.exe' if sublime.platform() == 'windows' else ''))
     artifact_dir = os.path.dirname(exe_path) or src_dir
 
     started_at = time.time()
@@ -1288,7 +1308,7 @@ def _run_program(program, input_data, cwd=None, time_limit=2.0, env=None,
     if not argv:
         return (-1, '', 'no run command configured', False)
     if cwd is None:
-        # A bare launcher name ("python" out of a run_cmd) has an empty
+        # A bare launcher name out of a run_cmd has an empty
         # dirname, and Popen(cwd='') raises WinError 123 on Windows; None
         # lets the child inherit the host directory instead.
         cwd = os.path.dirname(program if isinstance(program, str) else argv[0]) or None
@@ -1328,7 +1348,7 @@ def _program_command(exe, source_file):
     """argv for one stress program, or None to go through run_cmd.
 
     Compiled languages run the binary that was just built; interpreted ones
-    (Python) have no binary and keep using their run command.
+    (an interpreted entry) have no binary and keep using their run command.
     """
     if exe and os.path.normcase(exe) != os.path.normcase(source_file):
         return [exe]
@@ -2038,33 +2058,36 @@ def _minimize_counterexample(sess, state, say):
         timeout = max(0.1, float(sess.get('time_limit', 2) or 2))
         tolerance = get_settings().get('float_tolerance', 0) or 0
         budget = max(1.0, float(get_settings().get('stress_minimize_time_limit_seconds', 20) or 20))
-        deadline = time.time() + budget
+        deadline = time.monotonic() + budget
         cache = {}
 
         def still_fails(candidate):
-            if time.time() >= deadline:
+            if time.monotonic() >= deadline:
                 return False
             cache_key = (len(candidate), hash(candidate))
-            if cache_key in cache:
-                return cache[cache_key]
+            cached = cache.get(cache_key)
+            # Hash collisions are theoretically possible; compare the input
+            # itself so a collision can never accept the wrong reduction.
+            if cached is not None and cached[0] == candidate:
+                return cached[1]
             rc_u, out_u, err_u, tle_u = _run_program(
                 user_argv, candidate, cwd=os.path.dirname(user_file) or None,
                 time_limit=timeout, sess=work)
             if original_crash:
                 result = bool(tle_u or rc_u != 0 or looks_like_crash(err_u) or looks_like_crash(out_u))
-                cache[cache_key] = result
+                cache[cache_key] = (candidate, result)
                 return result
             if tle_u or rc_u != 0:
                 # The original was a wrong answer, not a crash/timeout. Do
                 # not accept a different failure mode as a valid reduction.
-                cache[cache_key] = False
+                cache[cache_key] = (candidate, False)
                 return False
             rc_s, out_s, err_s, tle_s = _run_program(
                 std_argv, candidate, cwd=os.path.dirname(std_file) or None,
                 time_limit=timeout, sess=work)
             result = (not tle_s and rc_s == 0 and
                       not outputs_equal(out_u, out_s, tolerance))
-            cache[cache_key] = result
+            cache[cache_key] = (candidate, result)
             return result
 
         if not still_fails(original):
@@ -2126,7 +2149,7 @@ def _launch_minimizer(sess, state, automatic=False):
             sess['minimizing'] = False
 
     label = 'Automatically minimizing' if automatic else 'Starting'
-    say('\\n[ACA] %s last counterexample...\\n' % label)
+    say('\n[ACA] %s last counterexample...\n' % label)
     thread = threading.Thread(target=worker)
     thread.daemon = True
     thread.start()

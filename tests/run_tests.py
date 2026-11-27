@@ -640,17 +640,11 @@ def main():
             stderr='', stdout='', expected_output='1')['name']
         check('%s is a runtime error' % label, got == 'RE', got)
 
-    py_tb = ('Traceback (most recent call last):\n'
-             '  File "/tmp/main.py", line 12, in <module>\n'
-             '    print(1 / 0)\nZeroDivisionError: division by zero\n')
-    check('python traceback is located',
-          verdict.find_crash_location(py_tb, '/tmp/main.py') == ('/tmp/main.py', 12),
-          repr(verdict.find_crash_location(py_tb, '/tmp/main.py')))
-    java_tb = ('Exception in thread "main" java.lang.ArithmeticException: / by zero\n'
-               '\tat Main.main(Main.java:5)\n')
-    check('java stack trace is located',
-          verdict.find_crash_location(java_tb, 'Main.java') == ('Main.java', 5),
-          repr(verdict.find_crash_location(java_tb, 'Main.java')))
+    gdb_bt = ('#0  main () at /tmp/main.cpp:12\n'
+              '#1  main () at /tmp/main.cpp:20\n')
+    check('gdb backtrace is located',
+          verdict.find_crash_location(gdb_bt, '/tmp/main.cpp') == ('/tmp/main.cpp', 12),
+          repr(verdict.find_crash_location(gdb_bt, '/tmp/main.cpp')))
     san = "main.cpp:7:5: runtime error: load of null pointer of type 'int'\n"
     check('sanitizer diagnostic is located',
           verdict.find_crash_location(san, 'main.cpp') == ('main.cpp', 7),
@@ -664,12 +658,10 @@ def main():
     # function promises the user's own file wins; returning the first
     # pattern's fallback pointed the RE chip at stl_vector.h instead.
     _mixed_crash = ('bits/stl_vector.h:1263:5: runtime error: index out of bounds\n'
-                    'Traceback (most recent call last):\n'
-                    '  File "D:/p/main.cpp", line 12, in <module>\n'
-                    '    print(1 / 0)\n')
+                    'main.cpp:12:5: runtime error: load of null pointer\n')
     check('a source-file match wins over an earlier system-header fallback',
           verdict.find_crash_location(_mixed_crash, 'D:/p/main.cpp')
-          == ('D:/p/main.cpp', 12),
+          == ('main.cpp', 12),
           repr(verdict.find_crash_location(_mixed_crash, 'D:/p/main.cpp')))
 
     print('== Tester: the multi-sample chain crash ==')
@@ -5088,7 +5080,6 @@ def main():
           and not verdict.is_crash_exit_code(1) and not verdict.is_crash_exit_code(None))
     check('crash signatures are recognised, debug output is not',
           verdict.looks_like_crash('terminate called after throwing an instance of std::bad_alloc')
-          and verdict.looks_like_crash('Traceback (most recent call last):')
           and verdict.looks_like_crash('AddressSanitizer: SEGV on unknown address')
           and not verdict.looks_like_crash('debug: i=3 fa=1\n'))
     check('a crash exit code beats the time limit',
@@ -6054,16 +6045,9 @@ def main():
               'auto_create_file', 'stats_days', 'contest_duration_minutes',
               'subtasks', 'build_mode', 'parallel_workers',
               'auto_std_switch', 'std_floor')))
-    check('the extra default languages ship',
-          [e['name'] for e in shipped.get('run_settings', [])][-4:]
-          == ['Rust', 'Go', 'Pascal', 'JavaScript (Node.js)'],
+    check('only the C++ language ships',
+          [e['name'] for e in shipped.get('run_settings', [])] == ['C++'],
           str([e['name'] for e in shipped.get('run_settings', [])]))
-    node_entry = [e for e in shipped.get('run_settings', [])
-                  if 'js' in (e.get('extensions') or [])]
-    check('the Node.js entry runs the source directly',
-          len(node_entry) == 1 and node_entry[0].get('compile_cmd') is None
-          and 'node' in (node_entry[0].get('run_cmd') or ''),
-          str(node_entry))
     check('the C++ entry documents the checker and the interactor',
           'checker' in shipped['run_settings'][0]
           and 'interactor' in shipped['run_settings'][0])
@@ -6900,8 +6884,8 @@ def main():
 
         _put('kw.cpp', 'cpp 正文\n')
         _put('both.cc', 'cc body\n')
-        _put('both.py', 'py body\n')
-        _put('chain.py', 'py wins\n')
+        _put('both.cpp', 'cpp body\n')
+        _put('chain.cc', 'cc wins\n')
         _put('chain.txt', 'txt loses\n')
         _put('only.cxx', 'cxx body\n')
         _put('notes.txt', 'txt body\n')
@@ -6914,10 +6898,10 @@ def main():
                 _TemplateView('', [Region(0, 0)]))
             check('_lookup finds the .cpp file (utf-8, trailing newline stripped)',
                   probe._lookup('kw') == 'cpp 正文', repr(probe._lookup('kw')))
-            check('_lookup prefers .cc over .py',
-                  probe._lookup('both') == 'cc body', repr(probe._lookup('both')))
-            check('_lookup prefers .py over .txt',
-                  probe._lookup('chain') == 'py wins', repr(probe._lookup('chain')))
+            check('_lookup prefers .cpp over .cc',
+                  probe._lookup('both') == 'cpp body', repr(probe._lookup('both')))
+            check('_lookup prefers .cc over .txt',
+                  probe._lookup('chain') == 'cc wins', repr(probe._lookup('chain')))
             check('_lookup finds a .cxx file',
                   probe._lookup('only') == 'cxx body', repr(probe._lookup('only')))
             check('_lookup falls through to .txt',
@@ -7951,10 +7935,10 @@ def main():
                                     'run_cmd': 'x'}, 'C++')
     check('a compiler that is not on PATH is reported, not raised',
           isinstance(line, str) and line.startswith('    '), repr(line))
-    line = doctor_cmd._probe_entry({'name': 'Python', 'extensions': ['py'],
+    line = doctor_cmd._probe_entry({'name': 'C++', 'extensions': ['cpp'],
                                     'compile_cmd': None,
-                                    'run_cmd': 'python {source_file}'}, 'Python')
-    check('an interpreted language still gets a probe line',
+                                    'run_cmd': '{file_name}.exe'}, 'C++')
+    check('an entry without a compile command still gets a probe line',
           isinstance(line, str) and line.startswith('    '), repr(line))
 
     class _ExplodingEntry(dict):
@@ -8484,9 +8468,10 @@ def main():
     check('looks_like_crash: the scan stays flat as the output grows',
           _four_mb_ms < _one_mb_ms * 3.0 + 15.0,
           '1 MB %.1f ms, 4 MB %.1f ms' % (_one_mb_ms, _four_mb_ms))
-    check('looks_like_crash: a traceback at the head is still detected',
-          verdict_mod.looks_like_crash(
-              'Traceback (most recent call last)' + chr(10) + clean[:70000]))
+    check('looks_like_crash: a crash signature at the head is still detected',
+           verdict_mod.looks_like_crash(
+               'terminate called after throwing an instance of std::bad_alloc'
+               + chr(10) + clean[:70000]))
     check('looks_like_crash: a segfault at the tail is still detected',
           verdict_mod.looks_like_crash(clean[:70000] + chr(10) + 'Segmentation fault'))
     check('looks_like_crash: mid-stream sanitizer text alone no longer flags',
@@ -10162,6 +10147,128 @@ def main():
     check('stress counterexample report previews are bounded',
           'def _stress_preview(value):' in _stress_src
           and "_stress_preview(inp)" in _stress_src)
+
+    # ---- audit 2026-11-27: regression fixes ----
+    # UTF-8 byte accounting (max_output_bytes is documented in bytes).
+    text_mod = importlib.import_module(pkg + '.core.cph_text')
+    check('utf8 cap counts bytes, not characters',
+          text_mod.utf8_len(u'\u4e2d') == 3
+          and text_mod.utf8_len('abc') == 3)
+    check('utf8 truncation never splits a character',
+          text_mod.truncate_utf8(u'\u4e2d\u4e2d', 4) == u'\u4e2d'
+          and text_mod.truncate_utf8('abc', 2) == 'ab')
+    check('clamp_output applies the byte cap',
+          tm.clamp_output(0, u'\u4e2d\u4e2d', 4) == u'\u4e2d'
+          and tm.clamp_output(3, 'x', 3) == ''
+          and tm.clamp_output(0, 'abc', 0) == 'abc')
+
+    # A missing `extensions` key is a hand-edit, not a crash.
+    _old_rs = settings_mod.get_settings().get('run_settings')
+    settings_mod.init_settings(dict(settings_mod.get_settings(), run_settings=[
+        {'name': 'Broken'}, {'name': 'Python', 'extensions': ['py']}, None]))
+    try:
+        _ext_ok = (settings_mod.is_run_supported_ext('py')
+                   and not settings_mod.is_run_supported_ext('cpp'))
+        _bad_mgr = pm_mod.ProcessManager(os.path.join(ROOT, 'audit.cpp'),
+                                         'source.cpp',
+                                         run_settings=[{'name': 'Broken'}, None])
+        _cmd_ok = (_bad_mgr.get_compile_cmd() == -1
+                   and _bad_mgr.get_run_cmd('') == -1)
+        check('malformed run_settings entries do not raise',
+              _ext_ok and _cmd_ok)
+    finally:
+        settings_mod.init_settings(dict(settings_mod.get_settings(),
+                                        run_settings=_old_rs))
+
+    # `1.in.txt` + `1.out.txt` must pair in the file picker too.
+    _audit_dir = tempfile.mkdtemp(prefix='cph-audit-')
+    try:
+        _audit_in = os.path.join(_audit_dir, '1.in.txt')
+        _audit_out = os.path.join(_audit_dir, '1.out.txt')
+        with open(_audit_in, 'w', encoding='utf-8') as _h:
+            _h.write('1\n')
+        with open(_audit_out, 'w', encoding='utf-8') as _h:
+            _h.write('1\n')
+        _audit_c = importer._answer_candidates(_audit_in)
+        check('the .in.txt picker finds the .out.txt answer',
+              bool(_audit_c)
+              and os.path.normcase(_audit_c[0]) == os.path.normcase(_audit_out),
+              repr(_audit_c))
+    finally:
+        shutil.rmtree(_audit_dir, ignore_errors=True)
+
+    # B-1 behaviour: javac has no -o, so stress must use run_cmd, not a
+    # fabricated Main.exe / Main.class artifact.
+    _audit_java_dir = tempfile.mkdtemp(prefix='cph-audit-java-')
+    _java_entry = {'name': 'Java', 'extensions': ['java'],
+                   'compile_cmd': 'javac "{source_file}" -d "{source_file_dir}"',
+                   'run_cmd': 'java -classpath "{source_file_dir}" Main'}
+    _saved_load = stress_round.sublime.load_settings
+    stress_round.sublime.load_settings = \
+        lambda _name: {'run_settings': [_java_entry]}
+    try:
+        _java_file = os.path.join(_audit_java_dir, 'Main.java')
+        with open(_java_file, 'w', encoding='utf-8') as _h:
+            _h.write('public class Main { public static void main(String[] a) {} }\n')
+        _saved_capture = stress_round._popen_capture
+        stress_round._popen_capture = lambda *a, **k: (0, '', '')
+        try:
+            _java_ok, _java_exe, _java_why = stress_round._compile_program(
+                _java_file, sess={'build_root': None})
+        finally:
+            stress_round._popen_capture = _saved_capture
+        check('Java stress compiles without -o and runs through run_cmd',
+              _java_ok and _java_exe == _java_file, repr((_java_ok, _java_exe, _java_why)))
+    finally:
+        stress_round.sublime.load_settings = _saved_load
+        shutil.rmtree(_audit_java_dir, ignore_errors=True)
+
+    # ProcessManager: unique gdb log, compile untrack, file-IO cleanup.
+    _pm_src = _chk_src('Modules/ProcessManager.py')
+    check('gdb replay uses a unique log per call',
+          "mkstemp(prefix='cph-gdb-" in _pm_src
+          and 'cph-gdb-%d.log' not in _pm_src)
+    check('a finished compile is untracked',
+          'self._untrack_key(key)' in _pm_src
+          and 'finally:' in _pm_src)
+    check('a failed file-IO spawn releases its scratch dir',
+          'self.release_io_dir()' in _pm_src
+          and 'self.close_stderr()' in _pm_src)
+    check('the crash check compares content, not identity',
+          'is not expected_output' not in verdict_src)
+
+    # Stress: interpreted compile, real newline, minimizer isolation.
+    check('a compile without -o is interpreted, not a missing exe',
+          'output_path_from_compile_cmd(cmd) is None:' in _stress_src
+          and 'return True, file' in _stress_src)
+    check('the minimizer banner uses a real newline',
+          r"say('\\n[ACA]" not in _stress_src)
+    check('the minimizer uses a monotonic deadline and a collision-safe cache',
+          'time.monotonic()' in _stress_src
+          and 'cached[0] == candidate' in _stress_src)
+    check('a new stress run is blocked while minimizing',
+          'def _minimizing_for' in _stress_src
+          and '_minimizing_for(user_file)' in _stress_src)
+    check('minimize/io scratch dirs are swept at startup',
+          'cph-minimize-' in state_mod.SCRATCH_PREFIXES
+          and 'cph-io-' in state_mod.SCRATCH_PREFIXES)
+
+    # Auto-run waits for the formatter; parallel drain has one reader.
+    _auto_src = _chk_src('cph_auto.py')
+    check('auto-run is chained after the formatter',
+          'on_done=start_run' in _auto_src and 'timeout=60' in _auto_src)
+    check('the parallel final drain never races the reader',
+          'drain_th.is_alive()' in _chk_src('core/cph_parallel.py'))
+
+    # Companion: threaded server, created lazily.
+    _comp_src = _chk_src('cph_companion.py')
+    check('the companion server is threaded and lazy',
+          'ThreadingMixIn' in _comp_src and '_server_class()' in _comp_src)
+
+    # Tester no longer shares a mutable default list.
+    _tester_init = inspect.signature(tm.CphTestManagerCommand.Tester.__init__)
+    check('Tester has no mutable default tests list',
+          _tester_init.parameters['tests'].default is None)
 
     print('')
     print('%d checks, %d failures' % (CHECKS[0], len(FAILURES)))

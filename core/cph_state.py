@@ -84,7 +84,8 @@ _temp_dirs = set()
 # 每个"在源码目录之外编译程序"的功能都会开一个临时目录；启动时按这些前缀清理
 # 上一次会话留下的残骸。加新功能时同步加到这里，否则它的目录永远不会被清掉。
 SCRATCH_PREFIXES = ('cph-stress-', 'cph-calibrate-', 'cph-checker-',
-					'cph-interactor-', 'cph-doctor-')
+					'cph-interactor-', 'cph-doctor-', 'cph-minimize-',
+					'cph-io-')
 
 # 一次跑几十轮的调试里，登记表不应该无限增长。超过这个数就把已经结束的丢掉。
 _LIVE_CAP = 64

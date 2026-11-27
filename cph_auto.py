@@ -5,7 +5,7 @@
 - ``auto_run_on_save``：保存支持的源文件后自动跑一次测试。带防抖，连续保存
   只在最后一次之后触发；正在跑的时候不会打断。
 - ``auto_format_on_save``：保存后按语言的 ``format_cmd`` 格式化（clang-format /
-  black / rustfmt ...），文件真的变了才 revert 视图。
+  clang-format ...），文件真的变了才 revert 视图。
 
 用 ``on_post_save_async``：它不在主线程里跑重活，但里面所有触碰视图的操作都
 回到 ``sublime.set_timeout``，遵守 ST 的线程约定。
@@ -95,6 +95,8 @@ def _start_run(view, settings, file_name):
 		if window is None:
 			return
 		run_view = _run_view_of(window, file_name)
+		if run_view is not None and run_view.settings().get('process_status') == 'RUNNING':
+			return
 		try:
 			if run_view is not None:
 				run_view.run_command('cph_test_manager', {
@@ -112,10 +114,18 @@ def _start_run(view, settings, file_name):
 	sublime.set_timeout(fire, int(_debounce_seconds(settings) * 1000))
 
 
-def _format_file(view, entry, file_name):
-	"""Run the language's format_cmd and reload the buffer when it changed."""
+def _format_file(view, entry, file_name, on_done=None):
+	"""Run the language's format_cmd and reload the buffer when it changed.
+
+	`on_done` (main thread) runs after the formatter has finished, successfully
+	or not. Auto-run uses it so a slow clang-format cannot race the run: the
+	latter used to start after a fixed debounce while the formatter was still
+	rewriting the file.
+	"""
 	cmd = (entry.get('format_cmd') or '').strip()
 	if not cmd:
+		if on_done:
+			sublime.set_timeout(on_done, 0)
 		return
 	expanded = (cmd.replace('{source_file}', '"%s"' % file_name)
 				.replace('{source_file_dir}', '"%s"' % os.path.dirname(file_name))
@@ -130,9 +140,32 @@ def _format_file(view, entry, file_name):
 
 	def worker():
 		try:
-			subprocess.Popen(expanded, shell=True,
-							 cwd=os.path.dirname(file_name) or None,
-							 startupinfo=_hidden_startupinfo()).wait()
+			proc = subprocess.Popen(expanded, shell=True,
+									cwd=os.path.dirname(file_name) or None,
+									startupinfo=_hidden_startupinfo())
+			try:
+				proc.wait(timeout=60)
+			except subprocess.TimeoutExpired:
+				try:
+					proc.kill()
+				except Exception:
+					pass
+				sublime.status_message('[Algorithm Competition Assistant] ' + t(
+					'format_failed', reason='timeout'))
+				return
+			after = ''
+			try:
+				with open(file_name, 'rb') as handle:
+					after = handle.read()
+			except Exception:
+				return
+			if after != before:
+				def reload_view():
+					if view.is_valid():
+						# The buffer is clean (we just saved), so reverting only
+						# picks up the formatter's changes.
+						view.run_command('revert')
+				sublime.set_timeout(reload_view, 0)
 		except Exception as e:
 			print('[Algorithm Competition Assistant] format failed: %s' % e)
 			# auto_format_on_save is opt-in, so an empty format_cmd or a
@@ -140,22 +173,11 @@ def _format_file(view, entry, file_name):
 			# quietly deciding not to format.
 			sublime.status_message('[Algorithm Competition Assistant] ' + t(
 				'format_failed', reason=str(e)[:160]))
-			return
-		after = ''
-		try:
-			with open(file_name, 'rb') as handle:
-				after = handle.read()
-		except Exception:
-			return
-		if after == before:
-			return
-
-		def reload_view():
-			if view.is_valid():
-				# The buffer is clean (we just saved), so reverting only
-				# picks up the formatter's changes.
-				view.run_command('revert')
-		sublime.set_timeout(reload_view, 0)
+		finally:
+			# Also reached on the early returns above: auto-run must not be
+			# cancelled by a formatter that failed or timed out.
+			if on_done:
+				sublime.set_timeout(on_done, 0)
 
 	thread = threading.Thread(target=worker)
 	thread.daemon = True
@@ -181,9 +203,7 @@ class CphAutoSaveListener(sublime_plugin.EventListener):
 		if entry is None:
 			return
 
-		if auto_format:
-			_format_file(view, entry, file_name)
-		if auto_run:
+		def start_run():
 			# Never interrupt a run that is already in progress.
 			if view.settings().get('cph_run_view'):
 				return
@@ -192,3 +212,13 @@ class CphAutoSaveListener(sublime_plugin.EventListener):
 			if run_view is not None and run_view.settings().get('process_status') == 'RUNNING':
 				return
 			_start_run(view, settings, file_name)
+
+		if auto_format:
+			# Chain the run after the formatter has finished: a fixed debounce
+			# could fire while clang-format was still rewriting the file.
+			if auto_run:
+				_format_file(view, entry, file_name, on_done=start_run)
+			else:
+				_format_file(view, entry, file_name)
+		elif auto_run:
+			start_run()

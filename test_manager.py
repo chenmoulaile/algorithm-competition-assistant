@@ -36,6 +36,7 @@ from .core.cph_interactive import (config as interactor_config,
 								   executable as interactor_executable,
 								   run_case as interactive_run_case)
 from .core.cph_resources import read_resource
+from .core.cph_text import truncate_utf8, utf8_len
 from .Highlight.test_interface import get_test_styles
 from .core.cph_verdict import (get_verdict, get_verdict_for_answers,
 							   get_verdict_by_name, build_line_diff,
@@ -57,17 +58,19 @@ _OUT_CHUNK = 65536
 def clamp_output(current, chunk, limit):
 	"""Return the part of chunk that still fits, so current stays <= limit.
 
-	limit <= 0 means unlimited. current is the text already collected (or its
-	length, when the caller keeps the text as an unbuilt list of parts), so
-	the rule is applied before the append instead of only after it.
+	limit <= 0 means unlimited. current is the UTF-8 byte count already
+	collected (or the text itself, when the caller keeps the text as an
+	unbuilt list of parts), so the rule is applied before the append instead
+	of only after it. Counting bytes matters: max_output_bytes is documented
+	in bytes, and one Chinese character is three of them.
 	"""
 	if limit <= 0:
 		return chunk
-	size = current if isinstance(current, int) else len(current)
+	size = current if isinstance(current, int) else utf8_len(current)
 	room = limit - size
 	if room <= 0:
 		return ''
-	return chunk[:room]
+	return truncate_utf8(chunk, room)
 
 
 
@@ -1078,11 +1081,13 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 	class Tester(object):
 		def __init__(self, process_manager, \
 			on_insert, on_out, on_stop, on_status_change, \
-			sync_out=False, tests=[], epoch=None, run_failed=False):
+			sync_out=False, tests=None, epoch=None, run_failed=False):
 			super(CphTestManagerCommand.Tester, self).__init__()
 			self.process_manager = process_manager
 			self.sync_out = sync_out
-			self.tests = tests
+			# A mutable default would be shared by every Tester that omitted
+			# the argument; set_tests()/next_test() mutate this list in place.
+			self.tests = tests if tests is not None else []
 			self.test_iter = 0
 			self.running_test = None
 			self.running_new = None
@@ -1282,7 +1287,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				kept = clamp_output(self._prog_out_total[n], s, limit)
 				if kept:
 					self._prog_out_parts[n].append(kept)
-					self._prog_out_total[n] += len(kept)
+					self._prog_out_total[n] += utf8_len(kept)
 			if kept:
 				self.post_out(kept)
 			if len(kept) < len(s) and not self.output_truncated:
@@ -1298,7 +1303,7 @@ class CphTestManagerCommand(sublime_plugin.TextCommand):
 				marker = '\n' + t('output_truncated_warn') + '\n'
 				with self._out_lock:
 					self._prog_out_parts[n].append(marker)
-					self._prog_out_total[n] += len(marker)
+					self._prog_out_total[n] += utf8_len(marker)
 				self.tests[n].message = t_message('output_truncated_warn')
 				self.post_out(marker)
 				print('[Algorithm Competition Assistant] %s' % t('output_truncated_warn'))

@@ -40,36 +40,22 @@ KNOWN_PLACEHOLDERS = {'file', 'source_file', 'source_file_dir', 'file_name',
                       'args', 'extra_sources', 'include_dirs',
                       'checker', 'checker_dir', 'interactor', 'interactor_dir'}
 
-#: No leading word boundary: `go version go1.22.5 ...` glues the number to the
+#: No leading word boundary: a version banner can glue the number to the
 #: tool name, and requiring one made it read the tail ("22.5") of the version.
 _VERSION_RE = re.compile(r'(\d+\.\d+(?:\.\d+)?)')
 
-#: How each toolchain actually prints its version. `go` takes a bare
-#: `go version`, `fpc` wants `-iV`, and the JDK spelled it `-version` before 9.
-#: Trying the wrong spelling and reporting FAIL would call a working compiler
-#: broken, so the shipped tools are listed; the generic `--version` / `-version`
-#: fallback still covers a user-supplied path.
-_VERSION_ARGS = {
-	'go': ('version',),
-	'fpc': ('-iV',),
-	'javac': ('-version',),
-	'java': ('-version',),
-}
+#: C++ only: g++/clang++ both answer --version, so the generic fallback is
+#: enough. A user-supplied compiler path still gets the same probe.
+_VERSION_ARGS = {}
 
-#: Trivial programs the build probe compiles and runs with the user's own
-#: commands. Only languages whose hello world needs no naming convention or
-#: extra files are probed - a probe template that is wrong for the toolchain
-#: would report a false FAIL, which is worse than not checking at all. Those
-#: still get the version probe. {cpp} also tests <bits/stdc++.h>, which is what
-#: competitive code actually writes and what a bare clang install lacks.
+#: Trivial C++ program the build probe compiles and runs with the user's own
+#: command. {cpp} also tests <bits/stdc++.h>, which is what competitive code
+#: actually writes and what a bare clang install lacks.
 _BUILD_PROBES = {
 	'cpp': ('main.cpp',
 			'#include <bits/stdc++.h>\nusing namespace std;\n'
 			'int main(){ios::sync_with_stdio(0);cin.tie(0);'
 			'cout<<"hi"<<endl;return 0;}\n', 'hi', 'iostream'),
-	'c': ('main.c',
-		  '#include <stdio.h>\nint main(void){puts("hi");return 0;}\n',
-		  'hi', 'stdio.h'),
 }
 
 

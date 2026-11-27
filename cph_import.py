@@ -124,6 +124,31 @@ def _read_text(file_path):
 from .core.cph_target import visible as context_menu_visible
 
 
+def _answer_candidates(file_path):
+    """Answer files that belong to `file_path`, in preference order.
+
+    Handles the three layouts the importer supports: `1.in` + `1.out`,
+    `1.in.txt` + `1.out.txt`, and a generic `out.txt` next to the input.
+    Kept as a pure function so the file-picker command and the tests share
+    one definition of "where is the answer".
+    """
+    candidates = []
+    base, ext = os.path.splitext(file_path)
+    # For `1.in.txt` the stem is `1.in`; also try the suffix stripped
+    # (`1.out.txt`), which the folder importer already handled.
+    for stem in (base, _strip_input_suffix(base)):
+        for new_ext in ('.out', '.ans', '.out.txt', '.ans.txt'):
+            candidate = stem + new_ext
+            if candidate not in candidates and _is_file_like(candidate):
+                candidates.append(candidate)
+    if ext in ('.in', '.txt') and 'in' in os.path.basename(file_path).lower():
+        for new_name in ('out.txt', 'output.txt', 'stdout.txt', 'ans.txt'):
+            candidate = os.path.join(os.path.dirname(file_path), new_name)
+            if candidate not in candidates and _is_file_like(candidate):
+                candidates.append(candidate)
+    return candidates
+
+
 class CphImportTestsCommand(sublime_plugin.TextCommand):
     def is_visible(self, event=None, **kwargs):
         """Context menu: only offered where this package applies.
@@ -564,17 +589,7 @@ class CphImportTestsFileCommand(sublime_plugin.TextCommand):
             CphImportTestsCommand(self.view)._do_import_from_folder(file_path, self.view.window())
             return
 
-        candidates = []
-        base, ext = os.path.splitext(file_path)
-        for new_ext in ['.out', '.ans']:
-            p = base + new_ext
-            if _is_file_like(p):
-                candidates.append(p)
-        if ext in ('.in', '.in.txt', '.txt') and 'in' in os.path.basename(file_path).lower():
-            for new_name in ['out.txt', 'output.txt', 'stdout.txt', 'ans.txt']:
-                p = os.path.join(os.path.dirname(file_path), new_name)
-                if _is_file_like(p):
-                    candidates.append(p)
+        candidates = _answer_candidates(file_path)
 
         try:
             inp = _read_text(file_path)

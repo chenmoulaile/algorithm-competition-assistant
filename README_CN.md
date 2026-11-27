@@ -90,8 +90,7 @@ Windows 用户也可以直接从资源管理器复制文件夹路径粘贴。路
 
 ## 上手
 
-1. 打开源码文件。默认配置覆盖 C++、C、Python、Java、Rust、Go、Pascal、JavaScript，
-   编译器要在 `PATH` 上。
+1. 打开 C++ 源码文件。默认配置只覆盖 C++，编译器要在 `PATH` 上。
 2. `Ctrl+Alt+B` 运行。右侧面板每个测试点一张卡片，卡片上是 verdict、用时、内存。
 3. 点 `详情` 看完整内容。点 `编辑` 打开输入和标准答案两个标签页，在答案页保存后会
    自动重判。
@@ -145,7 +144,7 @@ Windows 用户也可以直接从资源管理器复制文件夹路径粘贴。路
 
 ### 运行错误定位
 
-程序崩溃时，插件先在输出里找位置：Python 回溯、Java 栈、`-fsanitize` 的诊断都能解析出
+程序崩溃时，插件先在输出里找位置：`-fsanitize` 的诊断或 gdb 回溯都能解析出
 `文件:行`，卡片和状态栏都会显示，点一下跳到源码。定位到行时，运行面板对应的卡片上会
 直接出现一个红色的 `↗ 文件:行` 小标签，点它就能跳到那一行，不用先打开详情。
 
@@ -504,7 +503,7 @@ TLE 原因）可以仍然用中文：设 `"message_language": "zh"`（默认 `"a
   默认禁用；本插件实测在 3.14 宿主上加载运行正常。代码本身仍以 **Python 3.3 为兼容性
   下限**，不能用 f-string、`subprocess.run`、`Popen(encoding=…)` 这些新版本的东西，
   `tests/check_py33.py` 会拦。
-- 回归测试：`python tests/run_tests.py`，当前 1187 项，0 失败。测试用假的 `sublime`
+- 回归测试：`python tests/run_tests.py`，当前 1184 项，0 失败。测试用假的 `sublime`
   模块，不需要装 Sublime。
 - CI 跑 Linux（3.9 / 3.12）、Windows、macOS。
 - 版本号在 `plugin_init.py`。发版要往 `messages.json` 加对应键、放
